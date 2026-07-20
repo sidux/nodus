@@ -4,6 +4,39 @@ import 'package:nodus/nodus.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('combineLatest2 projects updates and releases both sources', () async {
+    var firstCancelled = false;
+    var secondCancelled = false;
+    final first = StreamController<int>(
+      sync: true,
+      onCancel: () => firstCancelled = true,
+    );
+    final second = StreamController<String>(
+      sync: true,
+      onCancel: () => secondCancelled = true,
+    );
+    addTearDown(first.close);
+    addTearDown(second.close);
+
+    final values = <String>[];
+    final subscription = combineLatest2(
+      first.stream,
+      second.stream,
+      (number, text) => '$number:$text',
+    ).listen(values.add);
+
+    first.add(1);
+    expect(values, isEmpty);
+    second.add('a');
+    first.add(2);
+    second.add('b');
+
+    expect(values, ['1:a', '2:a', '2:b']);
+    await subscription.cancel();
+    expect(firstCancelled, isTrue);
+    expect(secondCancelled, isTrue);
+  });
+
   test('states replays the snapshot before later transitions', () async {
     final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
       open: (accountId) async => _TestEntityGraph(accountId),

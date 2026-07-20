@@ -3,6 +3,62 @@ part of '../nodus.dart';
 typedef OpenAccountEntityGraph<G, A> = Future<G> Function(LocalId<A> accountId);
 typedef CloseAccountEntityGraph<G> = Future<void> Function(G entityGraph);
 
+/// Projects the latest values from two independently changing streams.
+///
+/// The result starts after both sources have emitted, keeps exactly one
+/// subscription to each source, forwards errors, and releases both
+/// subscriptions when its consumer cancels. This is the small composition
+/// primitive needed when one domain projection depends on two generated
+/// query snapshots; it does not introduce another state owner.
+Stream<R> combineLatest2<A, B, R>(
+  Stream<A> first,
+  Stream<B> second,
+  R Function(A first, B second) project,
+) => Stream.multi((controller) {
+  A? firstValue;
+  B? secondValue;
+  var hasFirst = false;
+  var hasSecond = false;
+  var completedSources = 0;
+
+  void emit() {
+    if (!hasFirst || !hasSecond) return;
+    try {
+      controller.addSync(project(firstValue as A, secondValue as B));
+    } on Object catch (error, stackTrace) {
+      controller.addErrorSync(error, stackTrace);
+    }
+  }
+
+  void completeSource() {
+    completedSources++;
+    if (completedSources == 2) controller.closeSync();
+  }
+
+  final firstSubscription = first.listen(
+    (value) {
+      firstValue = value;
+      hasFirst = true;
+      emit();
+    },
+    onError: controller.addErrorSync,
+    onDone: completeSource,
+  );
+  final secondSubscription = second.listen(
+    (value) {
+      secondValue = value;
+      hasSecond = true;
+      emit();
+    },
+    onError: controller.addErrorSync,
+    onDone: completeSource,
+  );
+  controller.onCancel = () async {
+    await firstSubscription.cancel();
+    await secondSubscription.cancel();
+  };
+});
+
 sealed class AccountEntityGraphSessionState<G, A> {
   const AccountEntityGraphSessionState();
 
