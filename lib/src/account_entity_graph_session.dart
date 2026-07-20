@@ -51,6 +51,14 @@ final class AccountEntityGraphFailure<G, A>
   final StackTrace stackTrace;
 }
 
+final class _ReadyEntityGraphLease<G, A> {
+  _ReadyEntityGraphLease({required this.accountId, required this.entityGraph});
+
+  final LocalId<A> accountId;
+  final G entityGraph;
+  bool active = true;
+}
+
 /// Serializes account-scoped entity-graph ownership across auth transitions.
 ///
 /// An entity graph opened for a superseded account is closed before a newer
@@ -65,6 +73,7 @@ final class AccountEntityGraphSession<G, A> {
 
   final OpenAccountEntityGraph<G, A> _open;
   final CloseAccountEntityGraph<G> _close;
+  final Object _readyZoneKey = Object();
   final StreamController<AccountEntityGraphSessionState<G, A>> _changes =
       StreamController.broadcast(sync: true);
 
@@ -172,6 +181,12 @@ final class AccountEntityGraphSession<G, A> {
   Future<R> withReadyEntityGraph<R>(
     FutureOr<R> Function(LocalId<A> accountId, G entityGraph) action,
   ) {
+    final inherited = Zone.current[_readyZoneKey];
+    if (inherited is _ReadyEntityGraphLease<G, A> && inherited.active) {
+      return Future.sync(
+        () => action(inherited.accountId, inherited.entityGraph),
+      );
+    }
     if (_disposing || _disposed) {
       throw StateError('The account entity-graph session is disposed.');
     }
@@ -180,7 +195,19 @@ final class AccountEntityGraphSession<G, A> {
       if (current is! AccountEntityGraphReady<G, A>) {
         throw StateError('The account entity-graph session is not ready.');
       }
-      return action(current.accountId, current.entityGraph);
+      final lease = _ReadyEntityGraphLease<G, A>(
+        accountId: current.accountId,
+        entityGraph: current.entityGraph,
+      );
+      try {
+        return await runZoned(
+          () =>
+              Future.sync(() => action(current.accountId, current.entityGraph)),
+          zoneValues: {_readyZoneKey: lease},
+        );
+      } finally {
+        lease.active = false;
+      }
     });
   }
 

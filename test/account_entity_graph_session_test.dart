@@ -150,6 +150,27 @@ void main() {
     ]);
   });
 
+  test('ready work can reenter the same session without deadlocking', () async {
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (accountId) async => _TestEntityGraph(accountId),
+      close: (_) async {},
+    );
+    addTearDown(session.dispose);
+    await session.switchAccount(_firstId);
+
+    final nestedAccountId = await session
+        .withReadyEntityGraph((outerId, outerGraph) {
+          return session.withReadyEntityGraph((innerId, innerGraph) {
+            expect(innerId, outerId);
+            expect(innerGraph, same(outerGraph));
+            return innerId;
+          });
+        })
+        .timeout(const Duration(seconds: 1));
+
+    expect(nestedAccountId, _firstId);
+  });
+
   test('ready work rejects signed-out sessions', () async {
     final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
       open: (accountId) async => _TestEntityGraph(accountId),
