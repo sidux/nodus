@@ -26,7 +26,7 @@ void main() {
         containsAll([
           'Define the domain once',
           'Inspect generated infrastructure',
-          'Submit the hackathon demo',
+          'Publish the release demo',
           'Explore custom sync connectors',
         ]),
       );
@@ -40,7 +40,7 @@ void main() {
       );
       expect(
         tasks
-            .singleWhere((task) => task.title == 'Submit the hackathon demo')
+            .singleWhere((task) => task.title == 'Publish the release demo')
             .status,
         TaskStatus.done,
       );

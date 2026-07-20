@@ -4,7 +4,7 @@
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://github.com/sidux/nodus/blob/main/LICENSE)
 [![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-02569B?logo=flutter)](https://flutter.dev)
 
-![Nodus: one graph becomes every application layer](assets/build-week/nodus-devpost-thumbnail.png)
+![Nodus: one graph becomes every application layer](assets/nodus-overview.png)
 
 > Flutter made multiplatform UI simpler. Nodus takes the next step.
 
@@ -260,25 +260,23 @@ generates and tests managed factories for inferred custom targets. Supabase is
 the only production-ready remote provisioning target in `0.1.0`; the extension
 contract is ready, but those additional adapters are not bundled yet.
 
-## OpenAI Build Week
+## AI-assisted engineering
 
-Nodus was created during OpenAI Build Week as a standalone, runnable developer
-tool. It drew on pre-event experiments in Pacely's `model_first` package, but
-that predecessor was not Nodus. During the event, those ideas were reworked into
-the canonical graph definition, typed multi-target sync resolution, durable
-drafts and actions, ordered relationship semantics, generated routes and test
-harnesses, native persistence inference, the public CLI, documentation, CI, and
-the executable Tasks reference app.
+Codex with GPT-5.6 collaborated throughout Nodus development. It accelerated
+repository-wide tracing across compiler, runtime, generated-code, schema, and
+test boundaries; implementation of scoped changes; review of diffs; and the
+repeated generation, formatting, analysis, documentation, and
+production-behavior test loops.
 
-Codex with GPT-5.6 was used as an engineering partner to inspect the repository,
-challenge architectural inconsistencies, implement bounded changes, run the
-compiler and test feedback loops, and prepare this submission. It did not
-replace the architecture contract:
-[`doc/Architecture.md`](https://github.com/sidux/nodus/blob/main/doc/Architecture.md)
-remained the authority, and every change was judged by generated output, static
-analysis, and production-behavior tests. The exact baseline, change inventory,
-and reproducible verification record are in
-[BUILD_WEEK.md](https://github.com/sidux/nodus/blob/main/BUILD_WEEK.md).
+I retained the key product, engineering, and design decisions: one canonical
+graph, explicit domain intent, fatal ambiguity, local-first mutation semantics,
+and a transport-neutral backend boundary. Codex challenged inconsistencies and
+helped execute those decisions, but it did not replace the architecture
+contract. [`doc/Architecture.md`](https://github.com/sidux/nodus/blob/main/doc/Architecture.md)
+remained authoritative, and no AI-produced change bypassed generated-output,
+static-analysis, or production-behavior gates. The supporting evidence and the
+limits of the claim are documented in
+[`doc/ai-assisted-development.md`](https://github.com/sidux/nodus/blob/main/doc/ai-assisted-development.md).
 
 ## Run the reference app
 
@@ -318,7 +316,6 @@ example/tasks/       Executable Flutter reference application
 doc/Architecture.md  Normative entity-first architecture contract
 doc/Architecture.puml Architecture atlas
 doc/ai-assisted-development.md Evidence behind the AI-assisted development claim
-BUILD_WEEK.md       Event provenance, Codex workflow, and verification record
 ```
 
 Generated files are reviewed artifacts but are never edited manually. A schema

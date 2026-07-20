@@ -58,7 +58,7 @@ Future<void> seedTasksDemo(TasksExampleEntityGraph entityGraph) async {
 
   final launch = await entityGraph.taskProjects.create(title: 'Nodus launch');
   final followUp = await entityGraph.taskProjects.create(
-    title: 'After the hackathon',
+    title: 'After the first release',
   );
   final now = entityGraph.nowUtc();
 
@@ -83,16 +83,16 @@ Future<void> seedTasksDemo(TasksExampleEntityGraph entityGraph) async {
       );
   await generated.start();
 
-  final submission = await launch
+  final releaseDemo = await launch
       .tasks(entityGraph)
       .create(
-        title: 'Submit the hackathon demo',
+        title: 'Publish the release demo',
         description:
             'Typed actions update the stable entity immediately and commit the '
             'local projection with its sync intent atomically.',
         dueAt: now.add(const Duration(days: 4)),
       );
-  await submission.complete();
+  await releaseDemo.complete();
 
   final archived = await followUp
       .tasks(entityGraph)

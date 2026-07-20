@@ -118,7 +118,7 @@ test doubles, and toward explicit domain decisions with executable feedback.
 
 ## What still needs measurement
 
-A post-event evaluation should compare equivalent Flutter features built with
+A controlled evaluation should compare equivalent Flutter features built with
 and without Nodus and record completion time, human edits, generated diff size,
 cross-layer defects, security-policy defects, and test pass rate. Until that
 experiment exists, statements about Nodus improving speed or quality are a
