@@ -74,7 +74,7 @@ Nodus discovers the package, creates `nodus.lock`, and emits one public
 ```dart
 final task = await entityGraph.tasks.create(title: 'Ship Nodus');
 
-final draft = task.beginEdit()..title.value = 'Publish Nodus';
+final draft = task.beginEdit()..title = 'Publish Nodus';
 await draft.save();
 await task.complete();
 

@@ -111,6 +111,11 @@ abstract class Task
   @Persisted(defaultValue: TaskStatus.todo)
   abstract final TaskStatus status;
 
+  @Persisted(maxLength: 1000)
+  abstract final String? description;
+
+  bool get isCompleted => status == TaskStatus.done;
+
   @Action()
   Future<void> edit({required String title});
 
@@ -131,7 +136,7 @@ public `lib/nodus.g.dart` facade:
 ```dart
 final task = await entityGraph.tasks.create(title: 'Ship Nodus');
 
-final draft = task.beginEdit()..title.value = 'Publish Nodus';
+final draft = task.beginEdit()..title = 'Publish Nodus';
 await draft.save(); // Local state and durable sync intent are now committed.
 await task.complete();
 
@@ -140,6 +145,112 @@ final openTasks = TaskList.all(
   where: TaskFields.status.equals(TaskStatus.todo),
 );
 ```
+
+## Add custom code without rebuilding Nodus
+
+Nodus generates mechanics; application code still owns product decisions,
+presentation, and irreducible integrations. Put custom code at the narrowest
+boundary that owns its meaning:
+
+| Need | Put the custom code here | Do not add |
+| --- | --- | --- |
+| A computed value or single-entity decision | A pure getter or method on the handwritten entity | A view model or service that copies entity fields |
+| Business vocabulary for a selection | A pure function returning generated predicates or ordering | A repository that executes or caches the query |
+| A normal create, edit, transition, relationship, or lifecycle change | The generated entity, draft, set, or list API | CRUD services, command handlers, or DTO mapping |
+| Ephemeral widget interaction | Local widget state or Flutter Hooks | Application-wide state for focus, forms, or animation |
+| Account lifecycle or a real external capability | Constructor/inherited-scope injection and, when stateful, a narrow MobX owner | A container that republishes Nodus entities or query state |
+| An online-only API, device, payment, or file operation | A typed stateless `Client` or `Gateway`, called from an entity-named operation | A `Repository`, service locator, entity cache, or direct remote entity write |
+| Another synchronization backend | A `SyncConnector` and the smallest generated adapter capability | Feature-selected adapters or handwritten entity routing |
+
+The `isCompleted` getter in the declaration above is ordinary handwritten Dart.
+The generated record inherits it, so callers use it on the same stable,
+MobX-observable `Task` identity:
+
+```dart
+if (!task.isCompleted) {
+  await task.complete();
+}
+```
+
+A reusable selection adds business vocabulary while Nodus continues to own the
+query, paging, observation, and cache lease:
+
+```dart
+EntityPredicate<Task> openTaskPredicate() =>
+    TaskFields.status.equals(TaskStatus.todo);
+
+final openTasks = TaskList.all(
+  entityGraph,
+  where: openTaskPredicate(),
+);
+```
+
+For irreducible online work, keep the returned boundary value minimal and
+commit any resulting entity change through the generated API. For example, an
+application-layer file can attach one explicitly named integration to the
+entity receiver:
+
+```dart
+import 'package:my_app/nodus.g.dart';
+
+abstract interface class TaskSummaryClient {
+  Future<String> summarize(String text);
+}
+
+extension TaskSummarization on Task {
+  Future<void> summarizeWith(TaskSummaryClient client) async {
+    final source = description;
+    if (source == null || source.trim().isEmpty) return;
+
+    final summary = await client.summarize(source);
+    final draft = beginEdit()..description = summary;
+    await draft.save();
+  }
+}
+```
+
+That exception can produce this feature shape:
+
+```text
+features/tasks/
+  domain/task.dart                              # Entity + pure decisions
+  application/task_summarization.dart           # Narrow external workflow
+  infrastructure/http_task_summary_client.dart  # Protocol adapter
+  presentation/...                              # Observes Task directly
+```
+
+The `application/` directory is not mandatory. Ordinary entity operations need
+none of it; it exists here only because an external request must be coordinated.
+There is still no task repository, CRUD service, DTO copy, query-state provider,
+or synchronization facade.
+
+Inject the `TaskSummaryClient` implementation at the application boundary; its
+HTTP adapter belongs in infrastructure. It must not load, cache, serialize, or
+synchronize `Task` itself. The network request is online-only, while
+`draft.save()` retains Nodus's local durability and synchronization semantics.
+If progress, retry, cancellation, audit, or offline execution is product state,
+model that work as a declared entity-owned process or projection instead of
+hiding it in a service.
+
+For custom transport code, the generated graph remains the composition root:
+
+```dart
+final graph = await ApplicationEntityGraph.openRestApi(
+  accountId: accountId,
+  connector: (context) => RestApiAdapter(
+    client: restApiClient,
+    definition: context.definition,
+  ),
+);
+```
+
+The adapter translates Nodus push/pull contracts only. The generated target
+definition supplies entity descriptors and routing, so the adapter never
+declares application entities or chooses their destination. See
+[Custom connectors](doc/capabilities.md#custom-connectors) for the complete
+adapter contract and the
+[artifact decision rules](doc/Architecture.md#2-artifact-decision-rules) when
+deciding whether custom code should exist at all.
 
 ## One declaration, several schemas
 
