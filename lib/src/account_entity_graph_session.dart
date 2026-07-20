@@ -10,7 +10,7 @@ typedef CloseAccountEntityGraph<G> = Future<void> Function(G entityGraph);
 /// subscriptions when its consumer cancels. This is the small composition
 /// primitive needed when one domain projection depends on two generated
 /// query snapshots; it does not introduce another state owner.
-Stream<R> combineLatestTwo<A, B, R>(
+Stream<R> combineLatest2<A, B, R>(
   Stream<A> first,
   Stream<B> second,
   R Function(A first, B second) project,

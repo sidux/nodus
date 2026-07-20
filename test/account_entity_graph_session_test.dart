@@ -4,7 +4,7 @@ import 'package:nodus/nodus.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('combineLatestTwo projects updates and releases both sources', () async {
+  test('combineLatest2 projects updates and releases both sources', () async {
     var firstCancelled = false;
     var secondCancelled = false;
     final first = StreamController<int>(
@@ -19,7 +19,7 @@ void main() {
     addTearDown(second.close);
 
     final values = <String>[];
-    final subscription = combineLatestTwo(
+    final subscription = combineLatest2(
       first.stream,
       second.stream,
       (number, text) => '$number:$text',
