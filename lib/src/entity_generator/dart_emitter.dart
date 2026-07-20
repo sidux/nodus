@@ -1102,7 +1102,7 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
           ? 'EntityDraftField<${entry.value}>.value(null)'
           : 'EntityDraftField<${entry.value}>.unset()';
       final suffix = index == entries.length - 1 ? ';' : ',';
-      buffer.writeln('        ${entry.key} = $initializer$suffix');
+      buffer.writeln('        _${entry.key}Field = $initializer$suffix');
     }
   }
   if (edit != null || transfer != null) {
@@ -1117,7 +1117,7 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
       final entry = entries[index];
       final suffix = index == entries.length - 1 ? ';' : ',';
       buffer.writeln(
-        '        ${entry.key} = EntityDraftField<${entry.value}>.value('
+        '        _${entry.key}Field = EntityDraftField<${entry.value}>.value('
         'entity.${entry.key})$suffix',
       );
     }
@@ -1133,7 +1133,19 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     ..writeln('  ${spec.className}? get entity => _entity;')
     ..writeln('  @override bool get isConsumed => _consumed;');
   for (final entry in fields.entries) {
-    buffer.writeln('  final EntityDraftField<${entry.value}> ${entry.key};');
+    buffer
+      ..writeln('  final EntityDraftField<${entry.value}> _${entry.key}Field;')
+      ..writeln(
+        '  EntityDraftField<${entry.value}> get ${entry.key}Field => '
+        '_${entry.key}Field;',
+      )
+      ..writeln(
+        '  ${entry.value} get ${entry.key} => _${entry.key}Field.value;',
+      )
+      ..writeln(
+        '  set ${entry.key}(${entry.value} value) => '
+        '_${entry.key}Field.value = value;',
+      );
   }
   buffer
     ..writeln()
@@ -1157,7 +1169,7 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
       ..writeln('      final created = await _set!.create(');
     for (final field in spec.createParameters) {
       buffer.writeln(
-        "        ${field.name}: ${field.name}.requireValue(entityType: '${spec.className}', field: '${field.name}'),",
+        "        ${field.name}: _${field.name}Field.requireValue(entityType: '${spec.className}', field: '${field.name}'),",
       );
     }
     buffer
@@ -1185,9 +1197,7 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
   }
   if (transfer case final action?) {
     final changed = action.parameters
-        .map(
-          (parameter) => '${parameter.name}.value != current.${parameter.name}',
-        )
+        .map((parameter) => '${parameter.name} != current.${parameter.name}')
         .join(' || ');
     buffer.writeln('      if ($changed) {');
     _emitDraftActionInvocation(buffer, spec, action, indent: '        ');
@@ -1210,11 +1220,11 @@ void _emitDraftActionInvocation(
 }) {
   final positional = action.parameters
       .where((parameter) => !parameter.named)
-      .map((parameter) => '${parameter.name}.value')
+      .map((parameter) => parameter.name)
       .join(', ');
   final named = action.parameters
       .where((parameter) => parameter.named)
-      .map((parameter) => '${parameter.name}: ${parameter.name}.value')
+      .map((parameter) => '${parameter.name}: ${parameter.name}')
       .join(', ');
   final arguments = [
     if (positional.isNotEmpty) positional,

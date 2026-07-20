@@ -605,7 +605,7 @@ final class TaskProjectMutationDraft
   TaskProjectMutationDraft.create(this._set)
     : _entity = null,
       _baseRevision = null,
-      title = EntityDraftField<String>.unset();
+      _titleField = EntityDraftField<String>.unset();
 
   final TaskProjectSet? _set;
   final TaskProject? _entity;
@@ -616,7 +616,10 @@ final class TaskProjectMutationDraft
   TaskProject? get entity => _entity;
   @override
   bool get isConsumed => _consumed;
-  final EntityDraftField<String> title;
+  final EntityDraftField<String> _titleField;
+  EntityDraftField<String> get titleField => _titleField;
+  String get title => _titleField.value;
+  set title(String value) => _titleField.value = value;
 
   @override
   void discard() => _consumed = true;
@@ -634,7 +637,10 @@ final class TaskProjectMutationDraft
     final current = _entity;
     if (current == null) {
       final created = await _set!.create(
-        title: title.requireValue(entityType: 'TaskProject', field: 'title'),
+        title: _titleField.requireValue(
+          entityType: 'TaskProject',
+          field: 'title',
+        ),
       );
       _consumed = true;
       return created;

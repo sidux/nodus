@@ -83,18 +83,18 @@ final class _TaskEditorForm extends HookWidget {
       keys: [entityGraph, existing],
     );
     final title = useEntityDraftTextField(
-      draft.title,
+      draft.titleField,
       normalize: (value) => value.trim(),
     );
     final description = useEntityDraftNullableTextField(
-      draft.description,
+      draft.descriptionField,
       normalize: _trimmedOrNull,
     );
     final titleFocus = useFocusNode();
     final saveAction = useEntityAction();
-    final projectId = useEntityDraftValue(draft.projectId);
-    final priority = useEntityDraftValue(draft.priority);
-    final dueAt = useEntityDraftValue(draft.dueAt);
+    final projectId = useEntityDraftValue(draft.projectIdField);
+    final priority = useEntityDraftValue(draft.priorityField);
+    final dueAt = useEntityDraftValue(draft.dueAtField);
     final selectedProjectId = projectId.value;
     final projects = useObservedEntityList(
       () => TaskProjectList.all(

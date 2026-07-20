@@ -61,19 +61,19 @@ void main() {
       final project = await graph.taskProjects.create(title: 'Draft target');
 
       final createDraft = graph.tasks.beginCreate()
-        ..title.value = 'Created from one draft'
-        ..description.value = null
-        ..priority.value = TaskPriority.normal
-        ..dueAt.value = null
-        ..projectId.value = null;
+        ..title = 'Created from one draft'
+        ..description = null
+        ..priority = TaskPriority.normal
+        ..dueAt = null
+        ..projectId = null;
       final task = await createDraft.save();
 
       final editDraft = task.beginEdit()
-        ..title.value = 'Edited from one draft'
-        ..description.value = 'One save owns both actions.'
-        ..priority.value = TaskPriority.high
-        ..dueAt.value = DateTime.utc(2026, 9, 1)
-        ..projectId.value = project.id;
+        ..title = 'Edited from one draft'
+        ..description = 'One save owns both actions.'
+        ..priority = TaskPriority.high
+        ..dueAt = DateTime.utc(2026, 9, 1)
+        ..projectId = project.id;
       final saved = await editDraft.save();
 
       expect(saved, same(task));

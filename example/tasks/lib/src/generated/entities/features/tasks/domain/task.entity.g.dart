@@ -1383,22 +1383,24 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
   TaskMutationDraft.create(this._set)
     : _entity = null,
       _baseRevision = null,
-      projectId = EntityDraftField<LocalId<TaskProject>?>.value(null),
-      title = EntityDraftField<String>.unset(),
-      description = EntityDraftField<String?>.value(null),
-      priority = EntityDraftField<TaskPriority>.value(TaskPriority.normal),
-      dueAt = EntityDraftField<DateTime?>.value(null);
+      _projectIdField = EntityDraftField<LocalId<TaskProject>?>.value(null),
+      _titleField = EntityDraftField<String>.unset(),
+      _descriptionField = EntityDraftField<String?>.value(null),
+      _priorityField = EntityDraftField<TaskPriority>.value(
+        TaskPriority.normal,
+      ),
+      _dueAtField = EntityDraftField<DateTime?>.value(null);
   TaskMutationDraft.edit(Task entity)
     : _set = null,
       _entity = entity,
       _baseRevision = entity.generatedAccess.generatedLocalRevision,
-      projectId = EntityDraftField<LocalId<TaskProject>?>.value(
+      _projectIdField = EntityDraftField<LocalId<TaskProject>?>.value(
         entity.projectId,
       ),
-      title = EntityDraftField<String>.value(entity.title),
-      description = EntityDraftField<String?>.value(entity.description),
-      priority = EntityDraftField<TaskPriority>.value(entity.priority),
-      dueAt = EntityDraftField<DateTime?>.value(entity.dueAt);
+      _titleField = EntityDraftField<String>.value(entity.title),
+      _descriptionField = EntityDraftField<String?>.value(entity.description),
+      _priorityField = EntityDraftField<TaskPriority>.value(entity.priority),
+      _dueAtField = EntityDraftField<DateTime?>.value(entity.dueAt);
 
   final TaskSet? _set;
   final Task? _entity;
@@ -1409,11 +1411,26 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
   Task? get entity => _entity;
   @override
   bool get isConsumed => _consumed;
-  final EntityDraftField<LocalId<TaskProject>?> projectId;
-  final EntityDraftField<String> title;
-  final EntityDraftField<String?> description;
-  final EntityDraftField<TaskPriority> priority;
-  final EntityDraftField<DateTime?> dueAt;
+  final EntityDraftField<LocalId<TaskProject>?> _projectIdField;
+  EntityDraftField<LocalId<TaskProject>?> get projectIdField => _projectIdField;
+  LocalId<TaskProject>? get projectId => _projectIdField.value;
+  set projectId(LocalId<TaskProject>? value) => _projectIdField.value = value;
+  final EntityDraftField<String> _titleField;
+  EntityDraftField<String> get titleField => _titleField;
+  String get title => _titleField.value;
+  set title(String value) => _titleField.value = value;
+  final EntityDraftField<String?> _descriptionField;
+  EntityDraftField<String?> get descriptionField => _descriptionField;
+  String? get description => _descriptionField.value;
+  set description(String? value) => _descriptionField.value = value;
+  final EntityDraftField<TaskPriority> _priorityField;
+  EntityDraftField<TaskPriority> get priorityField => _priorityField;
+  TaskPriority get priority => _priorityField.value;
+  set priority(TaskPriority value) => _priorityField.value = value;
+  final EntityDraftField<DateTime?> _dueAtField;
+  EntityDraftField<DateTime?> get dueAtField => _dueAtField;
+  DateTime? get dueAt => _dueAtField.value;
+  set dueAt(DateTime? value) => _dueAtField.value = value;
 
   @override
   void discard() => _consumed = true;
@@ -1431,17 +1448,20 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
     final current = _entity;
     if (current == null) {
       final created = await _set!.create(
-        projectId: projectId.requireValue(
+        projectId: _projectIdField.requireValue(
           entityType: 'Task',
           field: 'projectId',
         ),
-        title: title.requireValue(entityType: 'Task', field: 'title'),
-        description: description.requireValue(
+        title: _titleField.requireValue(entityType: 'Task', field: 'title'),
+        description: _descriptionField.requireValue(
           entityType: 'Task',
           field: 'description',
         ),
-        priority: priority.requireValue(entityType: 'Task', field: 'priority'),
-        dueAt: dueAt.requireValue(entityType: 'Task', field: 'dueAt'),
+        priority: _priorityField.requireValue(
+          entityType: 'Task',
+          field: 'priority',
+        ),
+        dueAt: _dueAtField.requireValue(entityType: 'Task', field: 'dueAt'),
       );
       _consumed = true;
       return created;
@@ -1449,13 +1469,13 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
     current.generatedAccess.validateGeneratedDraft(_baseRevision!);
     await current.generatedAccess.runGeneratedTransaction(() async {
       await current.edit(
-        title: title.value,
-        description: description.value,
-        priority: priority.value,
-        dueAt: dueAt.value,
+        title: title,
+        description: description,
+        priority: priority,
+        dueAt: dueAt,
       );
-      if (projectId.value != current.projectId) {
-        await current.moveToProject(projectId: projectId.value);
+      if (projectId != current.projectId) {
+        await current.moveToProject(projectId: projectId);
       }
     });
     _consumed = true;

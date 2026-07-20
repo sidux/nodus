@@ -518,8 +518,10 @@ void main() {
       ),
     );
     expect(output, contains('final class WorkItemMutationDraft'));
-    expect(output, contains('final EntityDraftField<String> statement;'));
-    expect(output, contains('final EntityDraftField<int> sortOrder;'));
+    expect(output, contains('final EntityDraftField<String> _statementField;'));
+    expect(output, contains('String get statement => _statementField.value;'));
+    expect(output, contains('set statement(String value)'));
+    expect(output, contains('final EntityDraftField<int> _sortOrderField;'));
     expect(output, contains('Future<WorkItem> save() async'));
     expect(
       output,
@@ -528,8 +530,8 @@ void main() {
       ),
     );
     expect(output, contains('await current.edit('));
-    expect(output, contains('statement: statement.value,'));
-    expect(output, contains('sortOrder: sortOrder.value,'));
+    expect(output, contains('statement: statement,'));
+    expect(output, contains('sortOrder: sortOrder'));
     expect(output, contains('EntityDraftFailureReason.consumed'));
     expect(output, contains('principals: const [RlsPrincipal.owner],'));
     expect(
