@@ -8,7 +8,7 @@ ordering, archiving, and soft deletion.
 Run it without external credentials:
 
 ```sh
-git clone git@github.com:sidux/nodus.git
+git clone https://github.com/sidux/nodus.git
 cd nodus/example/tasks
 flutter pub get
 flutter run --dart-define=ALLOW_IN_MEMORY_DEMO=true

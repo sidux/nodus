@@ -80,7 +80,7 @@ Until then, use the Git repository:
 dependencies:
   nodus:
     git:
-      url: git@github.com:sidux/nodus.git
+      url: https://github.com/sidux/nodus.git
       ref: main
 ```
 
