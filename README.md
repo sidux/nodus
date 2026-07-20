@@ -4,7 +4,13 @@
 [![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://github.com/sidux/nodus/blob/main/LICENSE)
 [![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-02569B?logo=flutter)](https://flutter.dev)
 
+![Nodus: one graph becomes every application layer](assets/build-week/nodus-devpost-thumbnail.png)
+
 > One graph. Every layer.
+
+**Vibe coding needs rails.** Nodus turns a small, typed statement of product
+intent into deterministic application infrastructure that both people and
+coding agents can inspect, regenerate, and test.
 
 Nodus is a local-first Flutter application compiler. You declare a typed domain
 model once; Nodus generates the account-scoped entity graph, reactive
@@ -52,6 +58,13 @@ representation. Emitters consume resolved facts; they do not reinterpret
 annotations independently. At runtime, one stable MobX identity represents an
 entity while Drift owns accepted state, optimistic projection, pending
 operations, conflicts, cursors, and retryable work.
+
+That is also the AI-assisted development boundary: the agent edits concise
+domain intent; the compiler expands it consistently across every layer; stale
+output, invalid inference, schema drift, type errors, and behavioral regressions
+fail executable gates. This does not make generated code automatically correct.
+It makes more of the system derivable, reviewable, and falsifiable. See the
+[evidence and claim boundaries](https://github.com/sidux/nodus/blob/main/doc/ai-assisted-development.md).
 
 ## Quick start
 
@@ -212,6 +225,52 @@ with a companion
 [`doc/Architecture.puml`](https://github.com/sidux/nodus/blob/main/doc/Architecture.puml)
 atlas.
 
+## Supabase today, other backends by contract
+
+Supabase is the first built-in remote target because it can provision a complete
+PostgreSQL schema, RLS policies, grants, push functions, change history, and
+receipts. It is an implementation, not the architecture boundary.
+
+The runtime sync contract is transport-neutral:
+
+- entities resolve to nominal `SyncTargetId` values and typed target
+  descriptors in the canonical graph;
+- generated graphs accept `openWithConnectors(...)` and construct custom
+  connectors from `SyncConnectorContext`;
+- queues, cursors, workers, signals, operation IDs, codecs, and conflict policy
+  are partitioned by target rather than by Supabase;
+- adapters implement directional push/pull capabilities and translate the
+  generic Nodus protocol to their transport;
+- a schema-capable target may add its own provisioning emitter without changing
+  entity declarations or the runtime protocol.
+
+Adding Firebase, a REST service, SQLite-to-SQLite replication, or another
+backend therefore means implementing an adapter (and, when needed, a
+provisioning emitter), not forking the application architecture. Nodus already
+generates and tests managed factories for inferred custom targets. Supabase is
+the only production-ready remote provisioning target in `0.1.0`; the extension
+contract is ready, but those additional adapters are not bundled yet.
+
+## OpenAI Build Week
+
+Nodus existed before Build Week as an experimental model-first layer inside the
+Pacely application. During the event it was meaningfully extended into a
+standalone, runnable developer tool. The Build Week work added or completed the
+canonical graph definition, typed multi-target sync resolution, durable drafts
+and actions, ordered relationship semantics, generated routes and test
+harnesses, native persistence inference, the public CLI, documentation, CI, and
+the executable Tasks reference app.
+
+Codex with GPT-5.6 was used as an engineering partner to inspect the repository,
+challenge architectural inconsistencies, implement bounded changes, run the
+compiler and test feedback loops, and prepare this submission. It did not
+replace the architecture contract:
+[`doc/Architecture.md`](https://github.com/sidux/nodus/blob/main/doc/Architecture.md)
+remained the authority, and every change was judged by generated output, static
+analysis, and production-behavior tests. The exact baseline, change inventory,
+and reproducible verification record are in
+[BUILD_WEEK.md](https://github.com/sidux/nodus/blob/main/BUILD_WEEK.md).
+
 ## Run the reference app
 
 The Tasks app exercises production Nodus behavior end to end: offline creation
@@ -249,6 +308,8 @@ test/                Compiler, runtime, route, and adapter contract tests
 example/tasks/       Executable Flutter reference application
 doc/Architecture.md  Normative entity-first architecture contract
 doc/Architecture.puml Architecture atlas
+doc/ai-assisted-development.md Evidence behind the AI-assisted development claim
+BUILD_WEEK.md       Event provenance, Codex workflow, and verification record
 ```
 
 Generated files are reviewed artifacts but are never edited manually. A schema
