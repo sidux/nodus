@@ -253,11 +253,11 @@ contract is ready, but those additional adapters are not bundled yet.
 
 ## OpenAI Build Week
 
-Nodus existed before Build Week as an experimental model-first layer inside the
-Pacely application. During the event it was meaningfully extended into a
-standalone, runnable developer tool. The Build Week work added or completed the
-canonical graph definition, typed multi-target sync resolution, durable drafts
-and actions, ordered relationship semantics, generated routes and test
+Nodus was created during OpenAI Build Week as a standalone, runnable developer
+tool. It drew on pre-event experiments in Pacely's `model_first` package, but
+that predecessor was not Nodus. During the event, those ideas were reworked into
+the canonical graph definition, typed multi-target sync resolution, durable
+drafts and actions, ordered relationship semantics, generated routes and test
 harnesses, native persistence inference, the public CLI, documentation, CI, and
 the executable Tasks reference app.
 

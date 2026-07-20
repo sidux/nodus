@@ -69,11 +69,12 @@ them, infer safe facts, validate ambiguity and graph invariants, freeze one
 from reinterpreting annotations. If a choice is genuinely domain-specific,
 generation stops and asks for the smallest typed override.
 
-During Build Week, Codex with GPT-5.6 worked inside the real repository: reading
-the architecture contract, tracing changes across compiler/runtime/generated
-boundaries, implementing scoped changes, reviewing diffs, and running generation,
-formatting, analysis, documentation validation, publish validation, and 342
-package-plus-example tests.
+Nodus was created during Build Week, informed by earlier experiments in Pacely's
+`model_first` package. Codex with GPT-5.6 worked inside the real repository:
+reading the architecture contract, tracing changes across
+compiler/runtime/generated boundaries, implementing scoped changes, reviewing
+diffs, and running generation, formatting, analysis, documentation validation,
+publish validation, and 342 package-plus-example tests.
 
 ### Why this is good architecture for vibe coding
 
@@ -108,8 +109,8 @@ acknowledgement, remote changes, and rebase happen independently.
 
 ### Accomplishments
 
-- Extracted an experimental in-app layer into a standalone documented package,
-  CLI, CI project, and executable reference application.
+- Created Nodus as a standalone documented package, CLI, CI project, and
+  executable reference application during Build Week.
 - Built a canonical graph that drives Dart, Drift, sync, PostgreSQL/RLS, routes,
   migrations, and tests.
 - Kept the core backend-neutral while shipping a complete Supabase target.

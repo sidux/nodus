@@ -1,15 +1,15 @@
 # OpenAI Build Week record
 
-This file separates Nodus's pre-event lineage from the work completed for OpenAI
-Build Week. It exists so judges can evaluate the submitted delta without treating
-the project as a one-week greenfield prototype.
+This file records how Nodus was created during OpenAI Build Week while
+disclosing the pre-event Pacely experiments that informed it. It exists so
+judges can distinguish Nodus itself from that earlier exploratory work.
 
-## Baseline before the event
+## Pre-event lineage (not Nodus)
 
 Before July 13, 2026 at 09:00 Pacific, Pacely contained an experimental package
-named `model_first`. It had already established the entity-first direction and
-some generated persistence, synchronization, and tombstone behavior. The last
-pre-window baseline commit used for this record is:
+named `model_first`. It had explored the entity-first direction and some
+generated persistence, synchronization, and tombstone behavior, but it was not
+Nodus. The last pre-window Pacely baseline commit used for this record is:
 
 ```text
 2ac77eca02f59ee03a7542430e3988b5e2bae4ea
@@ -17,16 +17,18 @@ feat(model-first): generate reversible tombstones
 2026-07-13T17:21:23+02:00
 ```
 
-The package was not yet this standalone Nodus repository, its current public
-API, documentation set, CI project, or runnable submission artifact.
+Nodus began during the Build Week submission period, when those experiments
+were reworked into the standalone framework, public API, repository,
+documentation, CI project, and runnable submission presented here.
 
-## Meaningful extension during Build Week
+## Nodus creation during Build Week
 
-From the event start through extraction, 79 Pacely commits touched the evolving
-`packages/model_first` / `packages/nodus` boundary. The core pre-extraction diff
-from `2ac77eca` to `e7c7cb5e` changed 37 package files with 22,787 insertions and
-2,060 deletions. Those numbers include tests and generated/compiler work and are
-provided as provenance, not as a quality metric.
+From the event start through Nodus's standalone launch, 79 Pacely commits
+touched the transition from `packages/model_first` experiments to the new
+`packages/nodus` boundary. The core pre-launch diff from `2ac77eca` to
+`e7c7cb5e` changed 37 package files with 22,787 insertions and 2,060 deletions.
+Those numbers include tests and generated/compiler work and are provided as
+provenance, not as a quality metric.
 
 The event work included:
 
@@ -42,14 +44,14 @@ The event work included:
   protocol codecs, and SQL;
 - generated file routes, guards, migrations, Supabase RLS/protocol artifacts,
   and real in-memory graph harnesses;
-- extraction as the standalone `sidux/nodus` package with a CLI, reviewed schema
+- creation of the standalone `sidux/nodus` package with a CLI, reviewed schema
   lock, BSD license, security policy, contribution guide, CI, architecture
   atlas, and Tasks reference application;
-- post-extraction fixes found by running the complete package and example gates.
+- post-launch fixes found by running the complete package and example gates.
 
-The standalone history begins with `bc949a2`, a deliberate extraction commit.
-The original fine-grained history remains in the Pacely repository; it was not
-rewritten into misleading backdated Nodus commits.
+The standalone Nodus history begins with `bc949a2`, its deliberate launch
+commit. The fine-grained Build Week development history remains in the Pacely
+repository; it was not rewritten into misleading backdated Nodus commits.
 
 ## How Codex and GPT-5.6 were used
 

@@ -84,11 +84,11 @@ on “One graph. Every layer.”
 
 **Voiceover:**
 
-> During Build Week, Codex with GPT-5.6 helped turn an in-app experiment into
-> this standalone tool, challenge the architecture, implement the compiler and
-> example, and run 342 tests. Nodus gives vibe coding rails: people and agents
-> express intent once, then the compiler makes every layer reviewable and
-> falsifiable. One graph. Every layer.
+> During Build Week, Codex with GPT-5.6 helped create Nodus from early in-app
+> experiments, challenge the architecture, implement the compiler and example,
+> and run 342 tests. Nodus gives vibe coding rails: people and agents express
+> intent once, then the compiler makes every layer reviewable and falsifiable.
+> One graph. Every layer.
 
 ## Recording checklist
 
