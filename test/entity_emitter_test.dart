@@ -799,6 +799,7 @@ void main() {
       contains('final class WorkItemList extends EntityList<WorkItem>'),
     );
     expect(output, contains('WorkItemList.all('));
+    expect(output, contains('WorkItemList.owned('));
     expect(output, contains('WorkItemList.forOwner('));
     expect(
       output,
@@ -817,6 +818,10 @@ void main() {
       contains(
         'TombstoneVisibility.only => WorkItemFields.deletedAt.isNotNull',
       ),
+    );
+    expect(
+      output,
+      contains('WorkItemFields.ownerId.equals(entityGraph.accountId)'),
     );
     expect(output, contains('WorkItemFields.ownerId.equals(ownerId)'));
     expect(output, isNot(contains('WorkItemList.forSortOrderAndStatement(')));

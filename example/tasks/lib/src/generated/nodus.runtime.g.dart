@@ -378,6 +378,24 @@ final class TaskList extends EntityList<Task> {
            pageSize: pageSize,
          ),
        );
+  TaskList.owned(
+    TasksExampleEntityGraph entityGraph, {
+    EntityPredicate<Task>? where,
+    EntityOrder<Task>? orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    ArchiveVisibility archives = ArchiveVisibility.exclude,
+    int pageSize = EntityQuerySpec.defaultPageSize,
+  }) : super(
+         entityGraph.tasks.query(
+           where:
+               TaskFields.ownerId.equals(entityGraph.accountId) &
+               (where ?? EntityPredicate<Task>.all()),
+           orderBy: orderBy ?? entityGraph.tasks.canonicalOrder,
+           tombstones: tombstones,
+           archives: archives,
+           pageSize: pageSize,
+         ),
+       );
   TaskList.forOwner(
     TasksExampleEntityGraph entityGraph,
     LocalId<Account> ownerId, {
@@ -433,6 +451,22 @@ final class TaskActivityList extends EntityList<TaskActivity> {
            pageSize: pageSize,
          ),
        );
+  TaskActivityList.owned(
+    TasksExampleEntityGraph entityGraph, {
+    EntityPredicate<TaskActivity>? where,
+    EntityOrder<TaskActivity>? orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    int pageSize = EntityQuerySpec.defaultPageSize,
+  }) : super(
+         entityGraph.taskActivities.query(
+           where:
+               TaskActivityFields.ownerId.equals(entityGraph.accountId) &
+               (where ?? EntityPredicate<TaskActivity>.all()),
+           orderBy: orderBy ?? TaskActivityFields.occurredAt.descending(),
+           tombstones: tombstones,
+           pageSize: pageSize,
+         ),
+       );
   TaskActivityList.forOwner(
     TasksExampleEntityGraph entityGraph,
     LocalId<Account> ownerId, {
@@ -479,6 +513,22 @@ final class TaskProjectList extends EntityList<TaskProject> {
   }) : super(
          entityGraph.taskProjects.query(
            where: where,
+           orderBy: orderBy ?? entityGraph.taskProjects.canonicalOrder,
+           tombstones: tombstones,
+           pageSize: pageSize,
+         ),
+       );
+  TaskProjectList.owned(
+    TasksExampleEntityGraph entityGraph, {
+    EntityPredicate<TaskProject>? where,
+    EntityOrder<TaskProject>? orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    int pageSize = EntityQuerySpec.defaultPageSize,
+  }) : super(
+         entityGraph.taskProjects.query(
+           where:
+               TaskProjectFields.ownerId.equals(entityGraph.accountId) &
+               (where ?? EntityPredicate<TaskProject>.all()),
            orderBy: orderBy ?? entityGraph.taskProjects.canonicalOrder,
            tombstones: tombstones,
            pageSize: pageSize,

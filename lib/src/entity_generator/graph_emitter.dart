@@ -502,6 +502,12 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
     }
 
     if (entity.ownership == Ownership.separate) {
+      _emitGraphOwnedListConstructor(
+        buffer,
+        entity: entity,
+        entityGraphName: entityGraphName,
+        retainEntityGraph: exhaustiveOrdering != null,
+      );
       _emitGraphListSelectionConstructor(
         buffer,
         entity: entity,
@@ -663,6 +669,42 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
       ..writeln('}')
       ..writeln();
   }
+}
+
+void _emitGraphOwnedListConstructor(
+  StringBuffer buffer, {
+  required EntitySpec entity,
+  required String entityGraphName,
+  required bool retainEntityGraph,
+}) {
+  final listName = '${entity.className}List';
+  buffer
+    ..writeln('  $listName.owned(')
+    ..writeln('    $entityGraphName entityGraph, {')
+    ..writeln('    EntityPredicate<${entity.className}>? where,')
+    ..writeln('    EntityOrder<${entity.className}>? orderBy,')
+    ..writeln(
+      '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
+    );
+  _emitArchiveParameter(buffer, entity);
+  buffer
+    ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
+    ..writeln(
+      '  }) :${retainEntityGraph ? ' _entityGraph = entityGraph,' : ''}',
+    )
+    ..writeln('       super(entityGraph.${entity.setAccessor}.query(')
+    ..writeln(
+      '         where: ${entity.className}Fields.ownerId.equals('
+      'entityGraph.accountId) &',
+    )
+    ..writeln(
+      '             (where ?? EntityPredicate<${entity.className}>.all()),',
+    )
+    ..writeln('         orderBy: ${_graphListOrderBy(entity)},')
+    ..writeln('         tombstones: tombstones,')
+    ..write(_archiveArgument(entity))
+    ..writeln('         pageSize: pageSize,')
+    ..writeln('       ));');
 }
 
 void _emitGraphListSelectionConstructor(
