@@ -208,6 +208,7 @@ final class NodusGenerator {
     await _run('dart', ['run', 'drift_dev', 'make-migrations']);
     normalizeDriftStepsAccessors();
     normalizeDriftTestSchemaAccessors();
+    normalizeDriftMigrationTests();
     emitDriftMigrations();
     await _formatGeneratedDart();
 
@@ -723,6 +724,71 @@ final class NodusGenerator {
       });
     });
     writeIfChanged(steps, normalized);
+  }
+
+  /// Removes Drift's placeholder data-integrity template from generated tests.
+  ///
+  /// The exhaustive empty-schema migration matrix remains. The trailing
+  /// template contains unresolved TODOs and empty expectations, so it does not
+  /// exercise production behavior until an application authors a real data
+  /// migration test of its own.
+  void normalizeDriftMigrationTests() {
+    final testDirectory = Directory(_path('test'));
+    if (!testDirectory.existsSync()) return;
+    const marker = '  // The following template shows how to write tests';
+    final versionImport = RegExp(
+      r"^import 'generated/schema_v\d+\.dart' as v\d+;\n",
+      multiLine: true,
+    );
+    for (final file
+        in testDirectory
+            .listSync(recursive: true, followLinks: false)
+            .whereType<File>()
+            .where(
+              (file) => file.uri.pathSegments.last == 'migration_test.dart',
+            )) {
+      final source = file.readAsStringSync();
+      final templateStart = source.indexOf(marker);
+      var normalized = templateStart < 0
+          ? source
+          : '${source.substring(0, templateStart).replaceAll(versionImport, '').trimRight()}\n}\n';
+      final runtimeImport = RegExp(
+        r"import 'package:([^/]+)/src/generated/nodus\.runtime\.g\.dart';",
+      ).firstMatch(normalized);
+      final databaseConstructor = RegExp(
+        r'final db = (\w+Database)\(schema\.newConnection\(\)\);',
+      ).firstMatch(normalized);
+      if (runtimeImport != null && databaseConstructor != null) {
+        final packageName = runtimeImport.group(1)!;
+        final databaseName = databaseConstructor.group(1)!;
+        final metadataName = databaseName.replaceFirst(
+          RegExp(r'Database$'),
+          'Metadata',
+        );
+        final migrationsImport =
+            "import 'package:$packageName/src/generated/nodus.migrations.g.dart';";
+        if (!normalized.contains(migrationsImport)) {
+          normalized = normalized.replaceFirst(
+            runtimeImport.group(0)!,
+            '${runtimeImport.group(0)!}\n$migrationsImport',
+          );
+        }
+        normalized = normalized.replaceFirst(
+          databaseConstructor.group(0)!,
+          '''final db = $databaseName(
+              schema.newConnection(),
+              migrationOverride: nodusMigrationStrategy<$databaseName>(
+                initialPullTargets: $metadataName.definition.syncTargets,
+              ),
+            );''',
+        );
+      }
+      if (normalized == source) continue;
+      final formatted = DartFormatter(
+        languageVersion: DartFormatter.latestLanguageVersion,
+      ).format(normalized);
+      file.writeAsStringSync(formatted);
+    }
   }
 
   /// Restores declared getters in Drift's generated migration-test libraries.

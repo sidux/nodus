@@ -100,36 +100,6 @@ Future<List<String>> _generatedRouteExports(BuildStep buildStep) async {
   return List.unmodifiable(exports);
 }
 
-/// Compatibility builder used by compiler fixtures that still provide an
-/// explicit graph source. Applications use [InferredEntityGraphBuilder].
-final class EntityGraphBuilder implements Builder {
-  @override
-  Map<String, List<String>> get buildExtensions => const {
-    'lib/entity_graph.dart': [
-      'lib/entity_graph.runtime.g.dart',
-      'supabase/nodus/schema.sql',
-    ],
-  };
-
-  @override
-  Future<void> build(BuildStep buildStep) async {
-    final graph = await parseEntityGraph(buildStep);
-    if (graph == null) return;
-    await buildStep.writeAsString(
-      buildStep.allowedOutputs.singleWhere(
-        (output) => output.path.endsWith('.dart'),
-      ),
-      emitEntityGraph(graph),
-    );
-    await buildStep.writeAsString(
-      buildStep.allowedOutputs.singleWhere(
-        (output) => output.path.endsWith('.sql'),
-      ),
-      _emitConventionalSupabaseSql(graph),
-    );
-  }
-}
-
 String _emitConventionalSupabaseSql(EntityGraphSpec graph) {
   final targets = graph.syncTargets
       .where((target) => target.wireName == 'supabase')

@@ -101,29 +101,22 @@ abstract class Note implements OwnedBy<Note, Account> {}
 
 final class Account {}
 ''';
-    final sources = _sources(source)
-      ..['nodus|lib/sync_targets.dart'] =
-          'enum TestSyncTarget { supabase, convex }'
-      ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-import 'package:nodus/sync_targets.dart';
-
-@EntityGraph(
-  schemaVersion: 1,
-  defaultSyncTarget: TestSyncTarget.supabase,
-)
-abstract final class TestGraph {}
-''';
+    final sources = _sources(source);
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains(
-              "typeIdentity: 'package:nodus/sync_targets.dart#TestSyncTarget'",
+              "typeIdentity: 'package:nodus/nodus.g.dart#TestGraphSyncTarget'",
             ),
             contains("wireName: 'supabase'"),
             contains('entityType: \'Note\''),
@@ -150,25 +143,19 @@ abstract class Note implements OwnedBy<Note, Account> {}
 
 final class Account {}
 ''';
-    final sources = _sources(source)
-      ..['nodus|lib/sync_targets.dart'] = 'enum TestSyncTarget { supabase }'
-      ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-import 'package:nodus/sync_targets.dart';
-
-@EntityGraph(
-  schemaVersion: 1,
-  defaultSyncTarget: TestSyncTarget.supabase,
-)
-abstract final class TestGraph {}
-''';
+    final sources = _sources(source);
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('mode: SyncMode.localOnly'),
             isNot(contains('target: supabaseSyncTarget')),
@@ -179,62 +166,40 @@ abstract final class TestGraph {}
     );
   });
 
-  test('sync modes generate minimal directional adapter slots', () async {
-    final sources =
-        _sources(
-            r'''
+  test('imported sync generates one minimal inbound adapter slot', () async {
+    final sources = _sources(
+      r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
-import 'package:nodus/sync_targets.dart';
 
 @Entity(
   sync: SyncMode.imported,
-  syncTarget: TestSyncTarget.supabase,
   grants: [RlsGrant(RlsOperation.select, RlsPrincipal.owner)],
 )
 abstract class ImportedNote implements OwnedBy<ImportedNote, Account> {}
 ''',
-            fileName: 'imported_note.dart',
-            includeGraph: false,
-          )
-          ..['nodus|lib/account.dart'] = 'final class Account {}'
-          ..['nodus|lib/exported_note.dart'] = r'''
-import 'package:nodus/nodus.dart';
-import 'package:nodus/account.dart';
-import 'package:nodus/sync_targets.dart';
-
-@Entity(
-  sync: SyncMode.exported,
-  syncTarget: TestSyncTarget.convex,
-)
-abstract class ExportedNote implements OwnedBy<ExportedNote, Account> {}
-'''
-          ..['nodus|lib/sync_targets.dart'] =
-              'enum TestSyncTarget { supabase, convex }'
-          ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-
-@EntityGraph(schemaVersion: 1)
-abstract final class TestGraph {}
-''';
+      fileName: 'imported_note.dart',
+    )..['nodus|lib/account.dart'] = 'final class Account {}';
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('final PullSyncAdapter supabase;'),
-            contains('final PushSyncAdapter convex;'),
+            isNot(contains('final PushSyncAdapter supabase;')),
             isNot(contains('final PushPullSyncAdapter')),
           ]),
         ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
-          allOf([
-            contains('create table if not exists public.imported_notes'),
-            isNot(contains('public.exported_notes')),
-          ]),
+          allOf([contains('create table if not exists public.imported_notes')]),
         ),
       },
     );
@@ -244,48 +209,37 @@ abstract final class TestGraph {}
     'Supabase pull exposes only inbound entities on the same target',
     () async {
       final sources =
-          _sources(
-              r'''
+          _sources(r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
-import 'package:nodus/sync_targets.dart';
 
 @Entity(
   sync: SyncMode.imported,
-  syncTarget: TestSyncTarget.supabase,
   grants: [RlsGrant(RlsOperation.select, RlsPrincipal.owner)],
 )
 abstract class ImportedNote implements OwnedBy<ImportedNote, Account> {}
-''',
-              fileName: 'imported_note.dart',
-              includeGraph: false,
-            )
+''', fileName: 'imported_note.dart')
             ..['nodus|lib/account.dart'] = 'final class Account {}'
             ..['nodus|lib/exported_note.dart'] = r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
-import 'package:nodus/sync_targets.dart';
 
 @Entity(
   sync: SyncMode.exported,
-  syncTarget: TestSyncTarget.supabase,
 )
 abstract class ExportedNote implements OwnedBy<ExportedNote, Account> {}
-'''
-            ..['nodus|lib/sync_targets.dart'] =
-                'enum TestSyncTarget { supabase }'
-            ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-
-@EntityGraph(schemaVersion: 1)
-abstract final class TestGraph {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains('create table if not exists public.imported_notes'),
@@ -294,46 +248,15 @@ abstract final class TestGraph {}
               isNot(contains("when 'ExportedNote' then")),
             ]),
           ),
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
         },
       );
     },
   );
 
-  test('rejects a non-local sync mode without a target', () async {
-    const source = r'''
-import 'package:nodus/nodus.dart';
-
-@Entity(
-  sync: SyncMode.imported,
-  grants: [RlsGrant(RlsOperation.select, RlsPrincipal.owner)],
-)
-abstract class Note implements OwnedBy<Note, Account> {}
-
-final class Account {}
-''';
-
-    final sources = _sources(source)
-      ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-
-@EntityGraph(schemaVersion: 1)
-abstract final class TestGraph {}
-''';
-    final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
-      sources,
-      rootPackage: 'nodus',
-    );
-
-    expect(result.succeeded, isFalse);
-    expect(
-      result.errors.join('\n'),
-      contains('uses imported sync but no target can be inferred'),
-    );
-  });
-
-  test('rejects mixed sync-target enum types in one graph', () async {
+  test('rejects an ad hoc sync-target enum outside nodus.lock', () async {
     const noteSource = r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/sync_targets.dart';
@@ -344,23 +267,10 @@ abstract class Note implements OwnedBy<Note, Account> {}
 final class Account {}
 ''';
     final sources = _sources(noteSource)
-      ..['nodus|lib/sync_targets.dart'] = r'''
-enum PrimaryTarget { supabase }
-enum SecondaryTarget { convex }
-'''
-      ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-import 'package:nodus/sync_targets.dart';
-
-@EntityGraph(
-  schemaVersion: 1,
-  defaultSyncTarget: PrimaryTarget.supabase,
-)
-abstract final class TestGraph {}
-''';
+      ..['nodus|lib/sync_targets.dart'] = 'enum SecondaryTarget { convex }';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
     );
@@ -389,21 +299,10 @@ abstract class Note implements OwnedBy<Note, Account> {
 
 final class Account {}
 ''';
-    final sources = _sources(source)
-      ..['nodus|lib/sync_targets.dart'] = 'enum TestSyncTarget { supabase }'
-      ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-import 'package:nodus/sync_targets.dart';
-
-@EntityGraph(
-  schemaVersion: 1,
-  defaultSyncTarget: TestSyncTarget.supabase,
-)
-abstract final class TestGraph {}
-''';
+    final sources = _sources(source);
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
     );
@@ -412,58 +311,6 @@ abstract final class TestGraph {}
     expect(
       result.errors.join('\n'),
       contains('is imported and must be a read-only projection'),
-    );
-  });
-
-  test('rejects persisted references across sync targets', () async {
-    final sources =
-        _sources(r'''
-import 'package:nodus/nodus.dart';
-import 'package:nodus/project.dart';
-import 'package:nodus/sync_targets.dart';
-
-@Entity(
-  syncTarget: TestSyncTarget.convex,
-  grants: [RlsGrant(RlsOperation.select, RlsPrincipal.owner)],
-)
-abstract class Note implements OwnedBy<Note, Account> {
-  @Reference(onDelete: ReferenceDeleteAction.cascade)
-  abstract final LocalId<Project> projectId;
-}
-
-final class Account {}
-''')
-          ..['nodus|lib/project.dart'] = r'''
-import 'package:nodus/nodus.dart';
-
-@Entity(grants: [RlsGrant(RlsOperation.select, RlsPrincipal.owner)])
-abstract class Project implements OwnedBy<Project, Account> {}
-
-final class Account {}
-'''
-          ..['nodus|lib/sync_targets.dart'] =
-              'enum TestSyncTarget { supabase, convex }'
-          ..['nodus|lib/entity_graph.dart'] = r'''
-import 'package:nodus/nodus.dart';
-import 'package:nodus/sync_targets.dart';
-
-@EntityGraph(
-  schemaVersion: 1,
-  defaultSyncTarget: TestSyncTarget.supabase,
-)
-abstract final class TestGraph {}
-''';
-
-    final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
-      sources,
-      rootPackage: 'nodus',
-    );
-
-    expect(result.succeeded, isFalse);
-    expect(
-      result.errors.join('\n'),
-      contains('cannot constrain Project across `convex` and `supabase`'),
     );
   });
 
@@ -601,11 +448,18 @@ final class Account {}
 ''';
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source, fileName: 'goal.dart'),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains(
@@ -631,7 +485,7 @@ final class Account {}
     final cases = <(String, String)>[
       (
         'String title = "";\n  @Action()\n  Future<void> rename({required String title});',
-        'must be an abstract final, client-authoritative domain field',
+        'Persisted entity field `title` must be declared final',
       ),
       (
         'abstract final String title;\n  @Action()\n  Future<void> rename({String title = ""});',
@@ -753,13 +607,16 @@ final class Account {}
     );
   });
 
-  test('canonicalizes mutable timestamps before optimistic storage', () async {
+  test('canonicalizes action timestamps before optimistic storage', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account> {
-  abstract DateTime? scheduledAt;
+  abstract final DateTime? scheduledAt;
+
+  @Action()
+  Future<void> reschedule({required DateTime? scheduledAt});
 }
 
 final class Account {}
@@ -772,15 +629,15 @@ final class Account {}
       outputs: {
         'nodus|lib/note.entity.g.dart': decodedMatches(
           allOf([
-            contains('final normalizedValue = value?.toUtc();'),
-            contains('_scheduledAtStore.value = normalizedValue;'),
+            contains('final nextScheduledAt = scheduledAt?.toUtc();'),
+            contains('_scheduledAtStore.value = nextScheduledAt;'),
           ]),
         ),
       },
     );
   });
 
-  test('infers immutable homogeneous value-list persistence', () async {
+  test('rejects persisted collection fields', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
@@ -788,63 +645,52 @@ enum ReminderInterval { oneDay, twoDays }
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account> {
-  List<String> labels = const [];
-  List<bool> flags = const [true];
-  List<int> ranks = const [1, 2];
-  List<ReminderInterval> reminders = const [ReminderInterval.oneDay];
+  final List<String> labels = const [];
+  final List<bool> flags = const [true];
+  final List<int> ranks = const [1, 2];
+  final List<ReminderInterval> reminders = const [ReminderInterval.oneDay];
 }
 
 final class Account {}
 ''';
 
-    await testBuilder(
+    final result = await testBuilder(
       localEntityBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
-      outputs: {
-        'nodus|lib/note.entity.g.dart': decodedMatches(
-          allOf([
-            contains('kind: EntityFieldKind.list'),
-            contains('elementKind: EntityFieldKind.text'),
-            contains('elementKind: EntityFieldKind.boolean'),
-            contains('elementKind: EntityFieldKind.integer'),
-            contains("protocolDefault: const ['one_day']"),
-            contains('decodeEntityList<ReminderInterval>'),
-            contains('ReminderInterval.oneDay => \'one_day\''),
-            contains('immutableEntityList<ReminderInterval>(value)'),
-            contains('entityValuesEqual(oldValue, value)'),
-            contains('json_valid(reminders)'),
-          ]),
-        ),
-      },
+    );
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains('Persisted collection field `labels` is not supported'),
     );
   });
 
   test('rejects ambiguous or relational collection shapes', () async {
     final cases = <(String, String)>[
       (
-        'List<String?> values = const [];',
-        'Persisted collection elements must be non-nullable.',
+        'final List<String?> values = const [];',
+        'Persisted collection field `values` is not supported',
       ),
       (
-        'List<double> values = const [];',
-        'unsupported collection element type `double`',
+        'final List<double> values = const [];',
+        'Persisted collection field `values` is not supported',
       ),
       (
-        'List<DateTime> values = const [];',
-        'unsupported collection element type `DateTime`',
+        'final List<DateTime> values = const [];',
+        'Persisted collection field `values` is not supported',
       ),
       (
-        'List<LocalId<Tag>> values = const [];',
-        'Model entity IDs and other relationships as referenced join entities.',
+        'final List<LocalId<Tag>> values = const [];',
+        'Persisted collection field `values` is not supported',
       ),
       (
-        'List<List<String>> values = const [];',
-        'unsupported collection element type `List<String>`',
+        'final List<List<String>> values = const [];',
+        'Persisted collection field `values` is not supported',
       ),
       (
-        '@Indexed()\n  List<String> values = const [];',
-        'cannot use a scalar index',
+        '@Indexed()\n  final List<String> values = const [];',
+        'Persisted collection field `values` is not supported',
       ),
     ];
 
@@ -871,7 +717,7 @@ final class Tag {}
     }
   });
 
-  test('rejects value collections inside compound indexes', () async {
+  test('rejects collection persistence before compound indexes', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
@@ -880,8 +726,8 @@ import 'package:nodus/nodus.dart';
   indexes: [CompoundIndex([#values, #name])],
 )
 abstract class Note implements OwnedBy<Note, Account> {
-  List<String> values = const [];
-  String name = '';
+  final List<String> values = const [];
+  final String name = '';
 }
 
 final class Account {}
@@ -895,7 +741,7 @@ final class Account {}
     expect(result.succeeded, isFalse);
     expect(
       result.errors.join('\n'),
-      contains('CompoundIndex cannot use value collection field `values`.'),
+      contains('Persisted collection field `values` is not supported'),
     );
   });
 
@@ -908,7 +754,7 @@ import 'package:nodus/nodus.dart';
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(sinceProtocolVersion: 2)
-  bool pinned = true;
+  final bool pinned = true;
 
 }
 
@@ -947,7 +793,7 @@ const colors = ['red', 'blue'];
 @Entity(cardinality: Cardinality.bounded)
 abstract class Tag implements OwnedBy<Tag, Account> {
   @Persisted(allowedValues: colors)
-  String color = 'red';
+  final String color = 'red';
 }
 
 final class Account {}
@@ -972,21 +818,21 @@ final class Account {}
   test('rejects invalid closed String value declarations', () async {
     final cases = <(String, String)>[
       (
-        "@Persisted(allowedValues: const ['1'])\n  int value = 1;",
+        "@Persisted(allowedValues: const ['1'])\n  final int value = 1;",
         '`allowedValues` is only valid for String fields.',
       ),
       (
         "@Persisted(allowedValues: const ['one', 'one'])\n"
-            "  String value = 'one';",
+            "  final String value = 'one';",
         '`allowedValues` must not contain duplicates.',
       ),
       (
         "@Persisted(minLength: 2, allowedValues: const [''])\n"
-            "  String value = '';",
+            "  final String value = '';",
         'must satisfy its length bounds.',
       ),
       (
-        "@Persisted(allowedValues: const ['one'])\n  String value = 'two';",
+        "@Persisted(allowedValues: const ['one'])\n  final String value = 'two';",
         'must be in `allowedValues`.',
       ),
     ];
@@ -1129,7 +975,7 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  abstract String body;
+  abstract final String body;
 
   bool get isBlank => body.trim().isEmpty;
 }
@@ -1161,7 +1007,7 @@ enum NoteKind { idea, finalDecision }
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  NoteKind kind = NoteKind.idea;
+  final NoteKind kind = NoteKind.idea;
 }
 
 final class Account {}
@@ -1256,11 +1102,18 @@ final class Account {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         _sources(source, fileName: 'progress.dart'),
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains('create table if not exists public.progresses'),
@@ -1274,7 +1127,7 @@ final class Account {}
     },
   );
 
-  test('rejects mutable server-authoritative fields', () async {
+  test('rejects mutable persisted fields', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
@@ -1296,7 +1149,7 @@ final class Account {}
     expect(result.succeeded, isFalse);
     expect(
       result.errors.join('\n'),
-      contains('Server-authoritative `status` must be final'),
+      contains('Persisted entity field `status` must be declared final'),
     );
   });
 
@@ -1334,11 +1187,14 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  @Persisted(minValue: 0, maxValue: 1439)
-  int minute = 0;
+  @Persisted(defaultValue: 0, minValue: 0, maxValue: 1439)
+  abstract final int minute;
 
   @Persisted(minValue: 1, maxValue: 10)
-  abstract int? optionalRank;
+  abstract final int? optionalRank;
+
+  @Action()
+  Future<void> edit({required int minute, required int? optionalRank});
 }
 
 final class Account {}
@@ -1353,8 +1209,8 @@ final class Account {}
           allOf([
             contains("'CHECK (minute >= 0)'"),
             contains("'CHECK (minute <= 1439)'"),
-            contains('if (value < 0)'),
-            contains('if (value != null && value < 1)'),
+            contains('if (nextMinute < 0)'),
+            contains('if (nextOptionalRank != null && nextOptionalRank < 1)'),
             contains('remoteMinute = NoteFields.minute.decode'),
           ]),
         ),
@@ -1369,10 +1225,13 @@ import 'package:nodus/nodus.dart';
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(defaultValue: 50.0, minValue: 0, maxValue: 100)
-  double score = 50.0;
+  abstract final double score;
 
   @Persisted(minValue: 0, maxValue: 100)
-  abstract double? optionalScore;
+  abstract final double? optionalScore;
+
+  @Action()
+  Future<void> edit({required double score, required double? optionalScore});
 }
 
 final class Account {}
@@ -1389,7 +1248,9 @@ final class Account {}
             contains("real().named('score')"),
             contains('kind: EntityFieldKind.real'),
             contains("'CHECK (score >= 0)'"),
-            contains('if (value != null && value > 100)'),
+            contains(
+              'if (nextOptionalScore != null && nextOptionalScore > 100)',
+            ),
             contains('required double? optionalScore'),
             contains('double score = 50.0'),
           ]),
@@ -1397,11 +1258,18 @@ final class Account {}
       },
     );
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains('score double precision not null default 50.0'),
@@ -1419,10 +1287,13 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class TimeBlock implements OwnedBy<TimeBlock, Account>, SoftDeletable {
-  abstract int startMinutes;
+  abstract final int startMinutes;
 
   @Persisted(greaterThan: #startMinutes)
-  abstract int endMinutes;
+  abstract final int endMinutes;
+
+  @Action()
+  Future<void> edit({required int startMinutes, required int endMinutes});
 }
 
 final class Account {}
@@ -1437,8 +1308,7 @@ final class Account {}
           allOf([
             contains("'CHECK (end_minutes > start_minutes)'"),
             contains('if ((endMinutes) <= (startMinutes))'),
-            contains('if ((value) <= (startMinutes))'),
-            contains('if ((endMinutes) <= (value))'),
+            contains('if ((nextEndMinutes) <= (nextStartMinutes))'),
             contains('hasEndMinutes ? remoteEndMinutes : endMinutes'),
             contains('hasStartMinutes ? remoteStartMinutes : startMinutes'),
           ]),
@@ -1455,10 +1325,13 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class NumericRange implements OwnedBy<NumericRange, Account>, SoftDeletable {
-  abstract double? minimum;
+  abstract final double? minimum;
 
   @Persisted(greaterThanOrEqual: #minimum)
-  abstract double? maximum;
+  abstract final double? maximum;
+
+  @Action()
+  Future<void> edit({required double? minimum, required double? maximum});
 }
 
 final class Account {}
@@ -1483,11 +1356,18 @@ final class Account {}
         },
       );
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         _sources(source),
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             contains('check (maximum >= minimum)'),
           ),
@@ -1504,10 +1384,13 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class TimeBlock implements OwnedBy<TimeBlock, Account>, SoftDeletable {
-  abstract int? startMinutes;
+  abstract final int? startMinutes;
 
   @Persisted(greaterThan: #startMinutes, requires: #startMinutes)
-  abstract int? endMinutes;
+  abstract final int? endMinutes;
+
+  @Action()
+  Future<void> edit({required int? startMinutes, required int? endMinutes});
 }
 
 final class Account {}
@@ -1722,7 +1605,7 @@ import 'package:nodus/nodus.dart';
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(greaterThan: #missing)
-  abstract int rank;
+  abstract final int rank;
 }
 
 final class Account {}
@@ -1740,10 +1623,10 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  abstract String title;
+  abstract final String title;
 
   @Persisted(greaterThan: #title)
-  abstract int rank;
+  abstract final int rank;
 }
 
 final class Account {}
@@ -1766,10 +1649,10 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class NumericRange implements OwnedBy<NumericRange, Account>, SoftDeletable {
-  abstract String minimum;
+  abstract final String minimum;
 
   @Persisted(greaterThanOrEqual: #minimum)
-  abstract double maximum;
+  abstract final double maximum;
 }
 
 final class Account {}
@@ -1792,10 +1675,10 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  abstract int? start;
+  abstract final int? start;
 
   @Persisted(requires: #missing)
-  abstract int? end;
+  abstract final int? end;
 }
 
 final class Account {}
@@ -1813,10 +1696,10 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  abstract int? start;
+  abstract final int? start;
 
   @Persisted(requires: #start)
-  abstract int end;
+  abstract final int end;
 }
 
 final class Account {}
@@ -1840,7 +1723,7 @@ import 'package:nodus/nodus.dart';
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(minValue: 10, maxValue: 5)
-  int rank = 0;
+  final int rank = 0;
 }
 
 final class Account {}
@@ -1861,7 +1744,7 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  abstract Money budget;
+  abstract final Money budget;
 }
 
 extension type Money(int cents) {}
@@ -1898,10 +1781,13 @@ final class Money implements PersistedScalarValue<int> {
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(defaultValue: 0, minValue: 0, maxValue: 1000000)
-  abstract Money budget;
+  abstract final Money budget;
 
   @Persisted(minValue: 0, maxValue: 1000000)
   abstract final Money? estimate;
+
+  @Action()
+  Future<void> edit({required Money budget, required Money? estimate});
 }
 
 final class Account {}
@@ -1921,7 +1807,7 @@ final class Account {}
             contains('Money budget = const Money.fromScalar(0)'),
             contains('Money.fromScalar(switch (source)'),
             contains('value.toScalar()'),
-            contains('normalizedValue.toScalar() > 1000000'),
+            contains('nextEstimate?.toScalar()'),
             contains('final validatedEstimate = remoteEstimate?.toScalar();'),
             contains('validatedEstimate != null &&'),
             contains('EqualityEntityField<Note, Money>'),
@@ -1931,11 +1817,18 @@ final class Account {}
       },
     );
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains('budget bigint not null default 0'),
@@ -2023,136 +1916,38 @@ final class Account {}
     }
   });
 
-  test('infers one canonical codec for persisted JSON value objects', () async {
-    const source = r'''
-import 'package:nodus/nodus.dart';
-
-final class Metadata implements PersistedJsonValue<JsonMap> {
-  const Metadata(this.values);
-
-  factory Metadata.fromJson(JsonMap json) => Metadata(json);
-
-  final JsonMap values;
-
-  @override
-  JsonMap toJson() => values;
-}
-
-final class Timeline implements PersistedJsonValue<List<Object?>> {
-  const Timeline(this.values);
-
-  factory Timeline.fromJson(List<Object?> json) => Timeline(json);
-
-  final List<Object?> values;
-
-  @override
-  List<Object?> toJson() => values;
-}
-
-@Entity(cardinality: Cardinality.bounded)
-abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  abstract Metadata metadata;
-  abstract final Timeline timeline;
-  abstract Metadata? optionalMetadata;
-}
-
-final class Account {}
-''';
-
-    await testBuilder(
-      localEntityBuilder(BuilderOptions.empty),
-      _sources(source),
-      rootPackage: 'nodus',
-      outputs: {
-        'nodus|lib/note.entity.g.dart': decodedMatches(
-          allOf([
-            contains('kind: EntityFieldKind.json'),
-            contains('jsonShape: JsonValueShape.object'),
-            contains('jsonShape: JsonValueShape.array'),
-            contains('Metadata.fromJson('),
-            contains('Timeline.fromJson('),
-            contains('canonicalJsonObject(value.toJson()'),
-            contains('canonicalJsonArray(value.toJson()'),
-            contains('json_valid(metadata)'),
-            contains('json_valid(timeline)'),
-            contains('optional_metadata IS NULL OR'),
-            contains('entityValuesEqual(oldValue, value)'),
-          ]),
-        ),
-      },
-    );
-  });
-
-  test('rejects incomplete persisted JSON value contracts', () async {
-    final cases = <(String, String)>[
-      (
-        '''
-final class Metadata implements PersistedJsonValue<JsonMap> {
-  @override JsonMap toJson() => const {};
-}
-''',
-        'must expose exactly one named `fromJson` constructor',
-      ),
-      (
-        '''
-final class Metadata implements PersistedJsonValue<String> {
-  Metadata.fromJson(String json);
-  @override String toJson() => '';
-}
-''',
-        'Use JsonMap or List<Object?>',
-      ),
-      (
-        '''
-final class Metadata implements PersistedJsonValue<JsonMap> {
-  Metadata.fromJson(Object? json);
-  @override JsonMap toJson() => const {};
-}
-''',
-        'must accept one required positional',
-      ),
-      (
-        '''
-class Metadata implements PersistedJsonValue<JsonMap> {
-  Metadata.fromJson(JsonMap json);
-  @override JsonMap toJson() => const {};
-}
-''',
-        'must be a concrete final value type',
-      ),
-      (
-        '''
-final class Metadata implements PersistedJsonValue<JsonMap> {
-  Metadata.fromJson(JsonMap json);
-  JsonMap values = const {};
-  @override JsonMap toJson() => values;
-}
-''',
-        'only final instance fields',
-      ),
+  test('rejects JSON and object persistence', () async {
+    const cases = <(String, String)>[
+      ('JsonMap', 'Map<String, Object?>'),
+      ('Metadata', 'Metadata'),
     ];
-
-    for (final (valueDeclaration, message) in cases) {
+    for (final (fieldType, diagnosticType) in cases) {
       final source =
           '''
 import 'package:nodus/nodus.dart';
 
-$valueDeclaration
+final class Metadata {
+  const Metadata();
+}
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
-  abstract final Metadata metadata;
+  abstract final $fieldType metadata;
 }
 
 final class Account {}
 ''';
+
       final result = await testBuilder(
         localEntityBuilder(BuilderOptions.empty),
         _sources(source),
         rootPackage: 'nodus',
       );
       expect(result.succeeded, isFalse);
-      expect(result.errors.join('\n'), contains(message));
+      expect(
+        result.errors.join('\n'),
+        contains('Unsupported persisted type `$diagnosticType`'),
+      );
     }
   });
 
@@ -2163,7 +1958,7 @@ import 'package:nodus/nodus.dart';
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(defaultValue: 1)
-  abstract String title;
+  abstract final String title;
 }
 
 final class Account {}
@@ -2364,7 +2159,7 @@ abstract class Invitation implements OwnedBy<Invitation, Account> {
   @AccessParticipant()
   abstract final LocalId<Account> inviteeId;
 
-  @Persisted(transitions: [
+  @Persisted(defaultValue: InvitationStatus.pending, transitions: [
     AllowedTransition(
       InvitationStatus.pending,
       InvitationStatus.accepted,
@@ -2372,7 +2167,13 @@ abstract class Invitation implements OwnedBy<Invitation, Account> {
     ),
     AllowedTransition(InvitationStatus.pending, InvitationStatus.declined),
   ])
-  InvitationStatus status = InvitationStatus.pending;
+  abstract final InvitationStatus status;
+
+  @Action(values: [ActionValue(#status, InvitationStatus.accepted)])
+  Future<void> accept();
+
+  @Action(values: [ActionValue(#status, InvitationStatus.declined)])
+  Future<void> decline();
 }
 
 final class Account {}
@@ -2415,7 +2216,10 @@ import 'package:nodus/account.dart';
 
 @Entity()
 abstract class Document implements OwnedBy<Document, Account>, Component {
-  abstract String body;
+  abstract final String body;
+
+  @Action()
+  Future<void> edit({required String body});
 }
 ''';
 
@@ -2451,11 +2255,16 @@ abstract class Document implements OwnedBy<Document, Account>, Component {
       );
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('CREATE TRIGGER tasks_document_id_composition_insert'),
               contains('Composition component owner mismatch'),
@@ -2595,7 +2404,7 @@ final class Account {}
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source, fileName: 'document.dart'),
       rootPackage: 'nodus',
     );
@@ -2679,11 +2488,18 @@ abstract class Project implements OwnedBy<Project, Account> {}
     );
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains(
@@ -2792,11 +2608,18 @@ abstract class ProjectMember implements OwnedBy<ProjectMember, Account> {
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains(
@@ -2861,7 +2684,7 @@ abstract class HabitCompletion
   @Reference(onDelete: ReferenceDeleteAction.cascade)
   abstract final LocalId<Habit> habitId;
 
-  abstract String note;
+  abstract final String note;
 }
 ''';
     final sources =
@@ -2876,11 +2699,18 @@ abstract class Habit implements OwnedBy<Habit, Account> {}
 ''';
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains(
@@ -2952,7 +2782,7 @@ import 'package:nodus/nodus.dart';
   $configuration
 )
 abstract class Item implements OwnedBy<Item, Account> {
-  abstract String name;
+  abstract final String name;
 }
 
 final class Account {}
@@ -3052,7 +2882,7 @@ import 'package:nodus/account.dart';
   collaboration: CollaborationAccess(),
 )
 abstract class Task implements OwnedBy<Task, Account>, SoftDeletable {
-  abstract String title;
+  abstract final String title;
 }
 '''
       ..['nodus|lib/task_event.dart'] = r'''
@@ -3075,11 +2905,18 @@ abstract class TaskEvent implements OwnedBy<TaskEvent, Account> {
 ''';
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains(
@@ -3147,7 +2984,7 @@ abstract class TaskEvent implements OwnedBy<TaskEvent, Account> {
         '',
       );
     final invalid = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       missingSource,
       rootPackage: 'nodus',
     );
@@ -3220,11 +3057,18 @@ abstract class Project implements OwnedBy<Project, Account> {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains('access_path_0.reviewer_id = auth.uid()'),
@@ -3337,11 +3181,18 @@ abstract class NoteEvent implements OwnedBy<NoteEvent, Account> {
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains(
@@ -3441,11 +3292,18 @@ abstract class TaskMember implements OwnedBy<TaskMember, Account> {
 ''';
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains(
@@ -3524,7 +3382,7 @@ abstract class DocumentProjectLink
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
     );
@@ -3599,11 +3457,18 @@ abstract class Task implements OwnedBy<Task, Account> {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains(
@@ -3664,11 +3529,18 @@ abstract class Habit implements OwnedBy<Habit, Account> {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains(
@@ -3764,14 +3636,17 @@ import 'package:nodus/nodus.dart';
   ],
 )
 abstract class Invitation implements OwnedBy<Invitation, Account> {
-  @Persisted(transitions: [
+  @Persisted(defaultValue: InvitationStatus.pending, transitions: [
     AllowedTransition(
       InvitationStatus.pending,
       InvitationStatus.accepted,
       by: [RlsPrincipal.participant],
     ),
   ])
-  InvitationStatus status = InvitationStatus.pending;
+  abstract final InvitationStatus status;
+
+  @Action(values: [ActionValue(#status, InvitationStatus.accepted)])
+  Future<void> accept();
 }
 
 final class Account {}
@@ -3810,7 +3685,10 @@ abstract class Friendship implements OwnedBy<Friendship, Account> {
   abstract final LocalId<Account> friendId;
 
   @Persisted(updateBy: [RlsPrincipal.owner])
-  abstract bool ownerShares;
+  abstract final bool ownerShares;
+
+  @Action()
+  Future<void> configure({required bool ownerShares});
 }
 
 final class Account {}
@@ -3832,7 +3710,10 @@ import 'package:nodus/nodus.dart';
 @Entity(cardinality: Cardinality.bounded)
 abstract class Friendship implements OwnedBy<Friendship, Account> {
   @Persisted(updateBy: [RlsPrincipal.participant])
-  abstract bool ownerShares;
+  abstract final bool ownerShares;
+
+  @Action()
+  Future<void> configure({required bool ownerShares});
 }
 
 final class Account {}
@@ -3884,7 +3765,7 @@ abstract class Invitation implements OwnedBy<Invitation, Account> {
   @Persisted(transitions: [
     AllowedTransition(InvitationStatus.pending, InvitationStatus.accepted),
   ])
-  abstract InvitationStatus status;
+  abstract final InvitationStatus status;
 }
 
 final class Account {}
@@ -3912,7 +3793,7 @@ abstract class Invitation implements OwnedBy<Invitation, Account> {
   @Persisted(transitions: [
     AllowedTransition(InvitationStatus.pending, InvitationStatus.pending),
   ])
-  InvitationStatus status = InvitationStatus.pending;
+  final InvitationStatus status = InvitationStatus.pending;
 }
 
 final class Account {}
@@ -3990,7 +3871,7 @@ abstract class Invitation implements OwnedBy<Invitation, Account> {
   @Persisted(transitions: [
     AllowedTransition(OtherStatus.pending, InvitationStatus.accepted),
   ])
-  InvitationStatus status = InvitationStatus.pending;
+  final InvitationStatus status = InvitationStatus.pending;
 }
 
 final class Account {}
@@ -4111,7 +3992,7 @@ import 'package:nodus/nodus.dart';
 )
 abstract class Invitation implements OwnedBy<Invitation, Account> {
   @AccessParticipant()
-  abstract LocalId<OtherAccount> inviteeId;
+  abstract final LocalId<OtherAccount> inviteeId;
 }
 
 final class Account {}
@@ -4126,7 +4007,7 @@ final class OtherAccount {}
     expect(result.succeeded, isFalse);
     expect(
       result.errors.join('\n'),
-      contains('requires an immutable, non-null LocalId<Owner> field'),
+      contains('@AccessParticipant requires LocalId<Account>'),
     );
   });
 
@@ -4358,7 +4239,7 @@ final class Account {}
     );
   });
 
-  test('rejects mutable command targets at generation time', () async {
+  test('rejects mutable command targets as persisted state', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
@@ -4379,7 +4260,10 @@ final class Account {}
       rootPackage: 'nodus',
     );
     expect(result.succeeded, isFalse);
-    expect(result.errors.join('\n'), contains('must be read-only'));
+    expect(
+      result.errors.join('\n'),
+      contains('Persisted entity field `status` must be declared final'),
+    );
   });
 
   test('rejects names reserved by generated collaboration APIs', () async {
@@ -4421,7 +4305,7 @@ import 'package:nodus/nodus.dart';
   ownership: Ownership.identity,
 )
 abstract class Profile implements OwnedBy<Profile, Profile> {
-  abstract String displayName;
+  abstract final String displayName;
 }
 ''';
 
@@ -4504,8 +4388,11 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account> {
-  abstract String body;
+  abstract final String body;
   abstract final DateTime updatedAt;
+
+  @Action()
+  Future<void> edit({required String body});
 }
 
 final class Account {}
@@ -4519,10 +4406,10 @@ final class Account {}
           'nodus|lib/note.entity.g.dart': decodedMatches(
             allOf([
               contains(
-                'syncPatch.merge(NoteFields.updatedAt.patch(mutationTime))',
+                'syncPatch.merge(NoteFields.updatedAt.patch(_generatedActionTime))',
               ),
               contains('syncPatch: syncPatch'),
-              contains('_updatedAtStore.value = mutationTime'),
+              contains('_updatedAtStore.value = _generatedActionTime'),
               contains('_updatedAtStore.value = oldUpdatedAt'),
               isNot(contains('set updatedAt(')),
               isNot(contains('required DateTime updatedAt,\n  }) {')),
@@ -4639,11 +4526,18 @@ final class Account {}
       },
     );
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains(
@@ -4708,8 +4602,8 @@ import 'package:nodus/nodus.dart';
   ],
 )
 abstract class Assignment implements OwnedBy<Assignment, Account> {
-  String taskKey = '';
-  AssignmentStatus status = AssignmentStatus.pending;
+  final String taskKey = '';
+  final AssignmentStatus status = AssignmentStatus.pending;
 }
 
 enum AssignmentStatus { pending, accepted, declined, revoked }
@@ -4736,11 +4630,18 @@ final class Account {}
       },
     );
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains(
@@ -4783,8 +4684,8 @@ import 'package:nodus/nodus.dart';
   ],
 )
 abstract class Assignment implements OwnedBy<Assignment, Account> {
-  String taskKey = '';
-  AssignmentStatus status = AssignmentStatus.pending;
+  final String taskKey = '';
+  final AssignmentStatus status = AssignmentStatus.pending;
 }
 
 enum AssignmentStatus { pending, accepted, declined, revoked }
@@ -4886,7 +4787,7 @@ final class Account {}
 ''';
 
       final result = await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         _sources(source, fileName: 'persistence_failure.dart'),
         rootPackage: 'nodus',
       );
@@ -4923,7 +4824,7 @@ abstract class Audit implements OwnedBy<Audit, Admin> {}
           'final class Account {}\nfinal class Admin {}';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
     );
@@ -4955,11 +4856,16 @@ final class Account {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         _sources(source, fileName: 'persistence_failure.dart'),
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             contains('final PersistenceFailureSet domainFailures;'),
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
@@ -4988,7 +4894,7 @@ abstract class TaskList implements OwnedBy<TaskList, Account> {}
       ..['nodus|lib/account.dart'] = 'final class Account {}';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
     );
@@ -5016,11 +4922,16 @@ final class Account {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         _sources(source, fileName: 'person.dart'),
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('final PersonSet people;'),
               isNot(contains('final PersonSet persons;')),
@@ -5058,11 +4969,16 @@ abstract class Group implements OwnedBy<Group, Account> {}
 ''';
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('final class GroupPeople extends EntityList<Person>'),
             contains('GroupPeople people('),
@@ -5095,11 +5011,16 @@ final class Account {}
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         _sources(source, fileName: 'goal.dart'),
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('extension GoalGoalParentGoalIdInverseRelationship'),
               contains('final class GoalSubgoals extends EntityList<Goal>'),
@@ -5149,11 +5070,16 @@ abstract class Child implements OwnedBy<Child, Account>, Ordered {
       ..['nodus|lib/parent.dart'] = parentSource;
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('final class ParentChildren extends EntityList<Child>'),
             isNot(contains('final class ParentParentChildren')),
@@ -5179,7 +5105,7 @@ abstract class Child implements OwnedBy<Child, Account>, Ordered {
           ..['nodus|lib/account.dart'] = 'final class Account {}'
           ..['nodus|lib/parent.dart'] = parentSource;
     final collision = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       collisionSources,
       rootPackage: 'nodus',
     );
@@ -5269,11 +5195,16 @@ abstract class NoteTagLink
       );
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains(
                 'final class NoteTagLinkRelationship '
@@ -5363,11 +5294,16 @@ abstract class NoteTaskLink
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('final class NoteTaskLinkRelationship'),
               contains('RelationshipCardinalityResolution.unboundedByDefault'),
@@ -5417,11 +5353,16 @@ final class Account {}
     );
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('NoteList.active('),
             contains('NoteList.archived('),
@@ -5512,11 +5453,16 @@ abstract class TaskActivity
     );
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('ActivityTrackingDefinition('),
             contains("sourceEntityType: 'Task'"),
@@ -5561,7 +5507,7 @@ final class Account {}
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source, fileName: 'task.dart'),
       rootPackage: 'nodus',
     );
@@ -5724,11 +5670,16 @@ abstract class Note
     );
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('orderBy ?? entityGraph.notes.canonicalOrder'),
             isNot(contains('NoteFields.orderRank')),
@@ -5879,11 +5830,18 @@ final class Account {}
     );
 
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source, fileName: 'node.dart'),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains('(owner_id, parent_node_id, deleted_at, order_rank, id)'),
@@ -5961,11 +5919,18 @@ final class Account {}
       },
     );
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source, fileName: 'node.dart'),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains("'commandName' = 'transferInOrder'"),
@@ -6191,11 +6156,18 @@ final class Account {}
       },
     );
     await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
       outputs: {
-        'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           allOf([
             contains('rebalance_window_size := 8;'),
@@ -6243,11 +6215,16 @@ abstract class Activity implements OwnedBy<Activity, Account> {
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('final TestGraphEntityGraph _entityGraph;'),
               contains(
@@ -6289,7 +6266,7 @@ import 'package:nodus/account.dart';
   collaboration: CollaborationAccess.workflow(),
 )
 abstract class Goal implements OwnedBy<Goal, Account> {
-  String title = '';
+  final String title = '';
 }
 ''';
       final sources = _sources(goalSource, fileName: 'goal.dart')
@@ -6317,7 +6294,7 @@ abstract class GoalMember implements OwnedBy<GoalMember, Account> {
   @AccessParticipant()
   abstract final LocalId<Account> memberId;
 
-  @Persisted(transitions: [
+  @Persisted(defaultValue: MembershipStatus.pending, transitions: [
     AllowedTransition(
       MembershipStatus.pending,
       MembershipStatus.accepted,
@@ -6349,7 +6326,19 @@ abstract class GoalMember implements OwnedBy<GoalMember, Account> {
       by: [RlsPrincipal.owner],
     ),
   ])
-  MembershipStatus status = MembershipStatus.pending;
+  abstract final MembershipStatus status;
+
+  @Action(values: [ActionValue(#status, MembershipStatus.accepted)])
+  Future<void> accept();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.declined)])
+  Future<void> decline();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.revoked)])
+  Future<void> revoke();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.pending)])
+  Future<void> reinvite();
 }
 
 enum MembershipStatus { pending, accepted, declined, revoked }
@@ -6380,11 +6369,18 @@ abstract class GoalRequirement
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains(
@@ -6448,7 +6444,10 @@ import 'package:nodus/membership_status.dart';
   ),
 )
 abstract class Task implements OwnedBy<Task, Account> {
-  String title = '';
+  abstract final String title;
+
+  @Action()
+  Future<void> edit({required String title});
 }
 ''';
       final sources = _sources(taskSource, fileName: 'task.dart')
@@ -6479,7 +6478,7 @@ abstract class TaskMember implements OwnedBy<TaskMember, Account> {
   @AccessParticipant()
   abstract final LocalId<Account> memberId;
 
-  @Persisted(transitions: [
+  @Persisted(defaultValue: MembershipStatus.pending, transitions: [
     AllowedTransition(
       MembershipStatus.pending,
       MembershipStatus.accepted,
@@ -6491,7 +6490,13 @@ abstract class TaskMember implements OwnedBy<TaskMember, Account> {
       by: [RlsPrincipal.owner],
     ),
   ])
-  MembershipStatus status = MembershipStatus.pending;
+  abstract final MembershipStatus status;
+
+  @Action(values: [ActionValue(#status, MembershipStatus.accepted)])
+  Future<void> accept();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.revoked)])
+  Future<void> revoke();
 }
 '''
         ..['nodus|lib/task_attachment.dart'] = r'''
@@ -6510,11 +6515,18 @@ abstract class TaskAttachment
 ''';
 
       await testBuilder(
-        entityGraphBuilder(BuilderOptions.empty),
+        inferredEntityGraphBuilder(BuilderOptions.empty),
         sources,
         rootPackage: 'nodus',
         outputs: {
-          'nodus|lib/entity_graph.runtime.g.dart': decodedMatches(anything),
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains(
@@ -6572,7 +6584,7 @@ final class Account {}
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source, fileName: 'goal.dart'),
       rootPackage: 'nodus',
     );
@@ -6597,7 +6609,7 @@ final class Account {}
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source, fileName: 'goal.dart'),
       rootPackage: 'nodus',
     );
@@ -6647,7 +6659,7 @@ abstract class GoalMember implements OwnedBy<GoalMember, Account> {
   @AccessParticipant()
   abstract final LocalId<Account> memberId;
 
-  @Persisted(transitions: [
+  @Persisted(defaultValue: MembershipStatus.pending, transitions: [
     AllowedTransition(
       MembershipStatus.pending,
       MembershipStatus.approved,
@@ -6659,21 +6671,27 @@ abstract class GoalMember implements OwnedBy<GoalMember, Account> {
       by: [RlsPrincipal.owner],
     ),
   ])
-  MembershipStatus status = MembershipStatus.pending;
+  abstract final MembershipStatus status;
+
+  @Action(values: [ActionValue(#status, MembershipStatus.approved)])
+  Future<void> approve();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.revoked)])
+  Future<void> revoke();
 }
 
 enum MembershipStatus { pending, approved, revoked }
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       sources,
       rootPackage: 'nodus',
     );
     expect(result.succeeded, isFalse);
     expect(
       result.errors.join('\n'),
-      contains('requires a mutable enum `status`'),
+      contains('requires an immutable enum `status`'),
     );
   });
 
@@ -6691,7 +6709,7 @@ final class Account {}
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
     );
@@ -6719,7 +6737,7 @@ final class Account {}
 ''';
 
     final result = await testBuilder(
-      entityGraphBuilder(BuilderOptions.empty),
+      inferredEntityGraphBuilder(BuilderOptions.empty),
       _sources(source),
       rootPackage: 'nodus',
     );
@@ -6740,26 +6758,23 @@ Map<String, String> _sources(
   String fileName = 'note.dart',
 }) => {
   'nodus|lib/$fileName': source,
+  if (includeGraph) r'nodus|$package$': '',
   if (includeGraph)
-    'nodus|lib/entity_graph.dart': '''
-import 'package:nodus/nodus.dart';
-
-enum TestSyncTarget { supabase }
-
-@EntityGraph(
-  schemaVersion: 1,
-  defaultSyncTarget: TestSyncTarget.supabase,
-)
-abstract final class TestGraph {}
+    'nodus|nodus.lock': '''
+{
+  "formatVersion": 1,
+  "packageName": "nodus",
+  "graphName": "TestGraph",
+  "schemaVersion": 1,
+  "schemaFingerprint": null,
+  "targets": ["supabase"],
+  "defaultTarget": "supabase"
+}
 ''',
   'nodus|lib/nodus.dart': '''
 export 'src/annotations.dart';
 
 typedef JsonMap = Map<String, Object?>;
-
-abstract interface class PersistedJsonValue<Wire extends Object> {
-  Wire toJson();
-}
 
 abstract interface class PersistedScalarValue<Wire extends Object> {
   Wire toScalar();

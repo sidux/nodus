@@ -21,9 +21,6 @@ Builder inferredLocalEntityBuilder(BuilderOptions options) =>
 Builder inferredEntityGraphBuilder(BuilderOptions options) =>
     InferredEntityGraphBuilder();
 
-/// Builds a package-wide entity graph with explicit builder options.
-Builder entityGraphBuilder(BuilderOptions options) => EntityGraphBuilder();
-
 /// Builds typed file routes with explicit builder options.
 Builder fileRoutesBuilder(BuilderOptions options) => FileRoutesBuilder();
 

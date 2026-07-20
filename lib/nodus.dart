@@ -22,20 +22,6 @@ part 'src/migration.dart';
 
 typedef JsonMap = Map<String, Object?>;
 
-/// Contract for an immutable domain value persisted through one generated
-/// JSON codec.
-///
-/// Implementations expose their canonical JSON shape once and provide a named
-/// `fromJson` constructor with one required positional parameter of the same
-/// [Wire] type. The entity generator validates that convention and then derives
-/// Drift, PostgreSQL, synchronization, patch, and query serialization from it.
-/// [Wire] is intentionally limited to [JsonMap] or `List<Object?>`: scalar
-/// domain concepts should use enums or dedicated primitive extension types,
-/// while entity relationships remain normalized references.
-abstract interface class PersistedJsonValue<Wire extends Object> {
-  Wire toJson();
-}
-
 /// Contract for an immutable domain value backed by one native scalar.
 ///
 /// Implementations expose the storage value once and provide a named
@@ -2662,8 +2648,6 @@ String _stableQueryValue(Object? value) => switch (value) {
     'list:[${value.map(_stableQueryValue).join(',')}]',
   final Map<String, Object?> value =>
     'map:{${value.entries.map((entry) => '${jsonEncode(entry.key)}:${_stableQueryValue(entry.value)}').join(',')}}',
-  final PersistedJsonValue<Object> value =>
-    'json:${jsonEncode(canonicalJsonValue(value.toJson(), field: 'query'))}',
   final PersistedScalarValue<Object> value =>
     'scalar:${value.runtimeType}:${_stableQueryValue(value.toScalar())}',
   _ => throw StateError(
@@ -2678,9 +2662,6 @@ String _stableQueryValue(Object? value) => switch (value) {
 /// Flutter-only collection helper into the entity-graph runtime.
 bool entityValuesEqual(Object? left, Object? right) {
   if (identical(left, right)) return true;
-  if (left is PersistedJsonValue && right is PersistedJsonValue) {
-    return entityValuesEqual(left.toJson(), right.toJson());
-  }
   if (left is PersistedScalarValue && right is PersistedScalarValue) {
     return left.runtimeType == right.runtimeType &&
         entityValuesEqual(left.toScalar(), right.toScalar());
@@ -2711,7 +2692,6 @@ bool entityValuesEqual(Object? left, Object? right) {
 /// default. Domain value objects can use this helper to implement a matching
 /// `hashCode` without duplicating the runtime's recursive value rules.
 int entityValueHash(Object? value) {
-  if (value is PersistedJsonValue) return entityValueHash(value.toJson());
   if (value is PersistedScalarValue) {
     return Object.hash(value.runtimeType, entityValueHash(value.toScalar()));
   }
@@ -2797,28 +2777,6 @@ List<Object?> canonicalJsonArray(Object? source, {required String field}) {
     throw FormatException('Expected a JSON array for `$field`.');
   }
   return canonical;
-}
-
-/// Takes an immutable snapshot of a list before it enters observable state.
-List<T> immutableEntityList<T>(Iterable<T> values) =>
-    List<T>.unmodifiable(values);
-
-/// Validates and decodes one generated homogeneous list wire value.
-List<T> decodeEntityList<T>(
-  Object? source, {
-  required String field,
-  required T Function(Object? element) decode,
-}) {
-  if (source is! List) {
-    throw FormatException('Invalid list `$field`.');
-  }
-  try {
-    return List<T>.unmodifiable(source.map(decode));
-  } on FormatException {
-    rethrow;
-  } on Object catch (error) {
-    throw FormatException('Invalid list element in `$field`.', error);
-  }
 }
 
 enum FieldConflictPolicy { localWins, serverWins }

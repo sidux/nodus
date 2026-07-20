@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tasks_example/nodus.g.dart';
 
@@ -16,6 +18,69 @@ void main() {
     autoSync: autoSync,
     clock: clock,
   )).entityGraph;
+
+  test(
+    'Given one graph transaction, When a nested aggregate transaction runs, Then both join one durable batch',
+    () async {
+      final graph = await openGraph();
+      addTearDown(graph.close);
+
+      late TaskProject project;
+      late Task task;
+      await graph.transaction(() async {
+        project = await graph.taskProjects.create(title: 'Nested batch');
+        await graph.transaction(() async {
+          task = await graph.tasks.create(
+            title: 'Joined mutation',
+            projectId: project.id,
+          );
+          await task.complete();
+        });
+      });
+
+      expect(task.projectId, project.id);
+      expect(task.status, TaskStatus.done);
+      expect(graph.persistenceFailures, isEmpty);
+    },
+  );
+
+  test(
+    'Given an active graph transaction, When unrelated asynchronous work mutates, Then it cannot join the batch',
+    () async {
+      final graph = await openGraph();
+      addTearDown(graph.close);
+      final transactionStarted = Completer<void>();
+      final releaseTransaction = Completer<void>();
+
+      final transaction = graph.transaction(() async {
+        await graph.tasks.create(title: 'Owned transaction');
+        transactionStarted.complete();
+        await releaseTransaction.future;
+      });
+      await transactionStarted.future;
+
+      try {
+        await expectLater(
+          graph.tasks.create(title: 'Unrelated mutation'),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('owned by another asynchronous flow'),
+            ),
+          ),
+        );
+      } finally {
+        releaseTransaction.complete();
+        await transaction;
+      }
+
+      final tasks = await TaskList.all(
+        graph,
+      ).useAll((items) => List<Task>.of(items));
+      expect(tasks.map((task) => task.title), ['Owned transaction']);
+    },
+  );
 
   test(
     'Given a tracked task, When it changes, Then entity state and generated activity commit together',

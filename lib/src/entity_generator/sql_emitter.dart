@@ -70,11 +70,6 @@ String emitSupabaseSql(
             '${spec.fields.singleWhere((candidate) => candidate.name == otherName).columnName})',
       if (field.isEnum)
         "check (${field.columnName} in (${field.enumWireValues.map(_sqlLiteral).join(', ')}))",
-      if (field.isCollection)
-        "check (jsonb_typeof(${field.columnName}) = 'array')",
-      if (field.isCollection) _collectionElementCheck(field),
-      if (field.isJsonValue)
-        "check (jsonb_typeof(${field.columnName}) = '${field.jsonValue!.shape.name}')",
       if (field.name == EntityConventions.orderRankFieldName)
         "check (${field.columnName} ~ '^[0-9]{78}\$' and "
             "${field.columnName}::numeric > 0 and "
@@ -1043,9 +1038,6 @@ String _orderTransferJsonTypeCheck(FieldSpec field) {
     SqlType.uuid ||
     SqlType.date ||
     SqlType.timestampWithTimeZone => 'string',
-    SqlType.json => throw StateError(
-      'An ordering-scope transfer cannot target JSON.',
-    ),
   };
   final expression =
       "current_operation -> 'patch' -> 'targetScope' -> '${field.name}'";
@@ -2970,9 +2962,7 @@ String _actionInitialStateValidationSql(
   return fields
       .map((field) {
         final value = _jsonCast("$patchExpression -> '${field.name}'", field);
-        final expected = field.isCollection
-            ? _jsonbLiteral(field.persistedDefaultValue)
-            : _sqlLiteral(field.persistedDefaultValue);
+        final expected = _sqlLiteral(field.persistedDefaultValue);
         return '''${indent}if ($value) is distinct from $expected then
 $indent  raise exception 'Invalid initial entity action state' using errcode = '23514';
 ${indent}end if;''';
@@ -3146,7 +3136,6 @@ String _postgresType(FieldSpec field) => switch (field.sqlType) {
   SqlType.real => 'double precision',
   SqlType.date => 'date',
   SqlType.timestampWithTimeZone => 'timestamptz',
-  SqlType.json => 'jsonb',
 };
 
 String _jsonCast(String expression, FieldSpec field) {
@@ -3158,32 +3147,7 @@ String _jsonCast(String expression, FieldSpec field) {
     SqlType.real => "($expression #>> '{}')::double precision",
     SqlType.date => "($expression #>> '{}')::date",
     SqlType.timestampWithTimeZone => "($expression #>> '{}')::timestamptz",
-    SqlType.json =>
-      "case when jsonb_typeof($expression) = 'null' then null else $expression end",
   };
-}
-
-String _collectionElementCheck(FieldSpec field) {
-  final column = field.columnName;
-  final type = switch (field.collectionElementSqlType!) {
-    SqlType.text => 'string',
-    SqlType.boolean => 'boolean',
-    SqlType.integer || SqlType.real => 'number',
-    SqlType.uuid ||
-    SqlType.date ||
-    SqlType.timestampWithTimeZone ||
-    SqlType.json => throw StateError(
-      'Unsupported collection element type for `${field.name}`.',
-    ),
-  };
-  final conditions = <String>[
-    '@.type() != "$type"',
-    if (field.collectionElementSqlType == SqlType.integer) '@ != @.floor()',
-    if (field.isEnumCollection)
-      '(${field.enumWireValues.map((value) => '@ != "$value"').join(' && ')})',
-  ];
-  final path = '\$[*] ? (${conditions.join(' || ')})';
-  return "check (not jsonb_path_exists($column, ${_sqlLiteral(path)}))";
 }
 
 String _jsonbLiteral(Object? value) {
@@ -3199,6 +3163,5 @@ String _sqlLiteral(Object? value) => switch (value) {
   _ => throw StateError('Unsupported SQL default: $value'),
 };
 
-String _sqlDefaultLiteral(FieldSpec field) => field.isCollection
-    ? _jsonbLiteral(field.persistedDefaultValue)
-    : _sqlLiteral(field.persistedDefaultValue);
+String _sqlDefaultLiteral(FieldSpec field) =>
+    _sqlLiteral(field.persistedDefaultValue);

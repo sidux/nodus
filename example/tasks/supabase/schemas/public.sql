@@ -180,6 +180,10 @@ begin
   if not found then
     raise exception 'Entity not found' using errcode = 'P0002';
   end if;
+  if p_operation = 'patch' and p_patch ? 'title'
+     and not ((p_patch ?& array['title']::text[])) then
+    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
+  end if;
   if current_row.server_version <> p_base_server_version then
     raise exception 'Version conflict' using errcode = '40001';
   end if;

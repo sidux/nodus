@@ -1,6 +1,6 @@
 // GENERATED FILE. DO NOT EDIT.
 // Source: package:tasks_example/nodus.lock
-// Schema fingerprint: dc33ae03a80f990050d6cf26239dd1e053852d65bcb827af12d35a0ad89bd7eb
+// Schema fingerprint: 0218a913de9d5ce875369707cc836f23258fa2ff515b76e11e8e2e17b3785ddd
 // ignore_for_file: unused_field, type=lint
 
 import 'dart:async';
@@ -58,7 +58,7 @@ final class TasksExampleDatabase extends _$TasksExampleDatabase {
     : _migrationOverride = migrationOverride;
   final MigrationStrategy? _migrationOverride;
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
   @override
   MigrationStrategy get migration {
     final configured =
@@ -98,7 +98,7 @@ abstract final class TasksExampleMetadata {
     wireName: 'supabase',
   );
   static final definition = EntityGraphDefinition(
-    schemaVersion: 1,
+    schemaVersion: 2,
     descriptors: [
       taskDescriptor,
       taskActivityDescriptor,

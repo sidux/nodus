@@ -1,18 +1,6 @@
 part of '../nodus.dart';
 
-enum EntityFieldKind {
-  text,
-  uuid,
-  boolean,
-  integer,
-  real,
-  date,
-  timestamp,
-  list,
-  json,
-}
-
-enum JsonValueShape { object, array }
+enum EntityFieldKind { text, uuid, boolean, integer, real, date, timestamp }
 
 @TableIndex.sql(
   "CREATE INDEX local_entity_push_patch_idx "
@@ -149,22 +137,8 @@ final class EntityFieldDescriptor {
     this.inCreatePayload = true,
     this.reference,
     this.allowedTransitions = const [],
-    this.elementKind,
-    this.jsonShape,
     this.constraints = const EntityFieldConstraints(),
-  }) : assert(
-         (kind == EntityFieldKind.list) == (elementKind != null),
-         'List fields require exactly one scalar element kind.',
-       ),
-       assert(
-         (kind == EntityFieldKind.json) == (jsonShape != null),
-         'JSON value fields require exactly one root shape.',
-       ),
-       assert(
-         elementKind != EntityFieldKind.list &&
-             elementKind != EntityFieldKind.json,
-         'Structured persisted list elements are not supported.',
-       );
+  });
 
   final String name;
   final String columnName;
@@ -179,8 +153,6 @@ final class EntityFieldDescriptor {
   final bool inCreatePayload;
   final EntityReferenceDescriptor? reference;
   final List<EntityValueTransition> allowedTransitions;
-  final EntityFieldKind? elementKind;
-  final JsonValueShape? jsonShape;
   final EntityFieldConstraints constraints;
 
   bool allowsTransition(Object? from, Object? to) =>
@@ -212,9 +184,7 @@ final class EntityFieldDescriptor {
     EntityFieldKind.text ||
     EntityFieldKind.uuid ||
     EntityFieldKind.date ||
-    EntityFieldKind.timestamp ||
-    EntityFieldKind.list ||
-    EntityFieldKind.json => 'TEXT',
+    EntityFieldKind.timestamp => 'TEXT',
   };
 
   Object? toDatabase(Object? value) {
@@ -227,10 +197,6 @@ final class EntityFieldDescriptor {
       },
       EntityFieldKind.timestamp =>
         value is DateTime ? value.toUtc().toIso8601String() : value,
-      EntityFieldKind.list => jsonEncode(value as List<Object?>),
-      EntityFieldKind.json => jsonEncode(
-        canonicalJsonValue(value, field: name),
-      ),
       _ => value,
     };
   }
@@ -249,16 +215,6 @@ final class EntityFieldDescriptor {
       },
       EntityFieldKind.timestamp =>
         value is DateTime ? value.toUtc().toIso8601String() : value.toString(),
-      EntityFieldKind.list => _decodeStoredList(
-        value,
-        fieldName: name,
-        elementKind: elementKind!,
-      ),
-      EntityFieldKind.json => _decodeStoredJson(
-        value,
-        fieldName: name,
-        shape: jsonShape!,
-      ),
       _ => value,
     };
   }
@@ -279,8 +235,6 @@ final class EntityFieldDescriptor {
       value,
       entityType: entityType,
       fieldName: name,
-      elementKind: elementKind,
-      jsonShape: jsonShape,
     );
     constraints.validate(decoded, entityType: entityType, fieldName: name);
     return decoded;
@@ -292,8 +246,6 @@ Object _decodeWireValue(
   Object value, {
   required String entityType,
   required String fieldName,
-  EntityFieldKind? elementKind,
-  JsonValueShape? jsonShape,
 }) {
   return switch (kind) {
     EntityFieldKind.text when value is String => value,
@@ -310,68 +262,8 @@ Object _decodeWireValue(
     EntityFieldKind.timestamp when value is String => DateTime.parse(
       value,
     ).toUtc().toIso8601String(),
-    EntityFieldKind.list when value is List => List<Object>.unmodifiable(
-      value.map((element) {
-        if (element == null) {
-          throw FormatException('Invalid $entityType.$fieldName wire value.');
-        }
-        return _decodeWireValue(
-          elementKind!,
-          element,
-          entityType: entityType,
-          fieldName: fieldName,
-        );
-      }),
-    ),
-    EntityFieldKind.json => switch (jsonShape!) {
-      JsonValueShape.object => canonicalJsonObject(
-        value,
-        field: '$entityType.$fieldName',
-      ),
-      JsonValueShape.array => canonicalJsonArray(
-        value,
-        field: '$entityType.$fieldName',
-      ),
-    },
     _ => throw FormatException('Invalid $entityType.$fieldName wire value.'),
   };
-}
-
-Object _decodeStoredJson(
-  Object value, {
-  required String fieldName,
-  required JsonValueShape shape,
-}) {
-  final decoded = value is String ? jsonDecode(value) : value;
-  return switch (shape) {
-    JsonValueShape.object => canonicalJsonObject(
-      decoded,
-      field: 'SQLite.$fieldName',
-    ),
-    JsonValueShape.array => canonicalJsonArray(
-      decoded,
-      field: 'SQLite.$fieldName',
-    ),
-  };
-}
-
-List<Object?> _decodeStoredList(
-  Object value, {
-  required String fieldName,
-  required EntityFieldKind elementKind,
-}) {
-  final decoded = value is String ? jsonDecode(value) : value;
-  if (decoded is! List) {
-    throw FormatException('Invalid SQLite list for $fieldName.', value);
-  }
-  return _decodeWireValue(
-        EntityFieldKind.list,
-        decoded,
-        entityType: 'SQLite',
-        fieldName: fieldName,
-        elementKind: elementKind,
-      )
-      as List<Object?>;
 }
 
 final class EntityValueTransition {
@@ -1247,8 +1139,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       graphCoordinator.authenticatedPrincipalId;
 
   @override
-  bool get isInMutationTransaction =>
-      graphCoordinator._transactionBuffer != null;
+  bool get isInMutationTransaction => graphCoordinator._ownsCurrentTransaction;
 
   @override
   void validateMutationAuthorization({
@@ -1373,7 +1264,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         plan.rollback();
         rethrow;
       }
-      if (graphCoordinator._transactionBuffer == null) {
+      if (!graphCoordinator._ownsCurrentTransaction) {
         (await commit).throwIfFailed();
       }
     });
@@ -1414,7 +1305,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           relatedOrderChanges: plan.changes,
         );
         result = created.entity;
-        if (graphCoordinator._transactionBuffer == null) {
+        if (!graphCoordinator._ownsCurrentTransaction) {
           (await created.commit).throwIfFailed();
         }
       } catch (_) {
@@ -1890,6 +1781,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       );
 
   List<_OrderedProjection<T>> _transactionOrderedOverlay() {
+    if (!graphCoordinator._ownsCurrentTransaction) return const [];
     final pending = graphCoordinator._transactionBuffer;
     if (pending == null || pending.isEmpty) return const [];
     final ids = <String>{};
@@ -2305,9 +2197,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       EntityFieldKind.text ||
       EntityFieldKind.uuid ||
       EntityFieldKind.date ||
-      EntityFieldKind.timestamp ||
-      EntityFieldKind.list ||
-      EntityFieldKind.json => Variable.withString(encoded as String),
+      EntityFieldKind.timestamp => Variable.withString(encoded as String),
     };
   }
 
@@ -2404,7 +2294,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       id: id,
       orderedPlacement: orderedPlacement,
     );
-    if (graphCoordinator._transactionBuffer == null) {
+    if (!graphCoordinator._ownsCurrentTransaction) {
       (await created.commit).throwIfFailed();
     }
     return created.entity;
@@ -3729,6 +3619,7 @@ final class LocalEntityGraphCoordinator
   late final ReadOnlyObservableList<LocalPersistenceFailure>
   persistenceFailures;
   List<_PendingMutation>? _transactionBuffer;
+  Object? _transactionOwnerToken;
   final Map<SyncTargetId, StreamSubscription<void>> _remoteSignalSubscriptions =
       {};
   StreamSubscription<Set<TableUpdate>>? _queueUpdateSubscription;
@@ -3854,15 +3745,26 @@ final class LocalEntityGraphCoordinator
     );
     final transaction = _transactionBuffer;
     if (transaction != null) {
+      if (!_ownsCurrentTransaction) {
+        throw StateError(
+          'A mutation cannot join an entity graph transaction owned by '
+          'another asynchronous flow.',
+        );
+      }
       transaction.add(pending);
       _appendActivityForMutation(mutation);
       return pending.committed;
     }
 
     final batch = <_PendingMutation>[pending];
+    final ownerToken = Object();
     _transactionBuffer = batch;
+    _transactionOwnerToken = ownerToken;
     try {
-      _appendActivityForMutation(mutation);
+      runZoned(
+        () => _appendActivityForMutation(mutation),
+        zoneValues: {this: ownerToken},
+      );
     } catch (error, stackTrace) {
       runInAction(() {
         for (final mutation in batch.reversed) {
@@ -3877,6 +3779,7 @@ final class LocalEntityGraphCoordinator
       rethrow;
     } finally {
       _transactionBuffer = null;
+      _transactionOwnerToken = null;
     }
     _mutationCoordinator._scheduleBatch(batch);
     return pending.committed;
@@ -3936,15 +3839,32 @@ final class LocalEntityGraphCoordinator
 
   Future<R> transaction<R>(FutureOr<R> Function() body) async {
     if (_closed) throw StateError('The entity graph is closed.');
+    if (_ownsCurrentTransaction) {
+      return _runJoinedTransaction(body);
+    }
     if (_transactionBuffer != null) {
-      throw StateError('Nested entity graph transactions are not supported.');
+      throw StateError(
+        'The entity graph already has a transaction owned by another '
+        'asynchronous flow.',
+      );
     }
     await _mutationCoordinator.flush();
+    if (_transactionBuffer != null) {
+      throw StateError(
+        'The entity graph acquired another transaction while waiting to '
+        'flush pending mutations.',
+      );
+    }
     final pending = <_PendingMutation>[];
+    final ownerToken = Object();
     _transactionBuffer = pending;
+    _transactionOwnerToken = ownerToken;
     late R result;
     try {
-      result = await Future<R>.value(runInAction(body));
+      result = await runZoned(
+        () => Future<R>.value(runInAction(body)),
+        zoneValues: {this: ownerToken},
+      );
       _validateComponentCreates(pending);
     } catch (error, stackTrace) {
       runInAction(() {
@@ -3960,10 +3880,37 @@ final class LocalEntityGraphCoordinator
       rethrow;
     } finally {
       _transactionBuffer = null;
+      _transactionOwnerToken = null;
     }
     _mutationCoordinator._scheduleBatch(pending);
     await _mutationCoordinator.flush();
     return result;
+  }
+
+  bool get _ownsCurrentTransaction =>
+      _transactionBuffer != null &&
+      identical(Zone.current[this], _transactionOwnerToken);
+
+  Future<R> _runJoinedTransaction<R>(FutureOr<R> Function() body) async {
+    final pending = _transactionBuffer!;
+    final savepoint = pending.length;
+    try {
+      return await Future<R>.value(runInAction(body));
+    } catch (error, stackTrace) {
+      final joined = pending.sublist(savepoint);
+      runInAction(() {
+        for (final mutation in joined.reversed) {
+          mutation.rollbackIfCurrent();
+        }
+      });
+      pending.removeRange(savepoint, pending.length);
+      final failure = LocalMutationCommitResult.failure(error, stackTrace);
+      for (final mutation in joined) {
+        mutation.onSettled?.call();
+        mutation.complete(failure);
+      }
+      rethrow;
+    }
   }
 
   void _validateComponentCreates(List<_PendingMutation> pending) {

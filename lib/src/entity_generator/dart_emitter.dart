@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:dart_style/dart_style.dart';
 import 'package:nodus/nodus.dart';
 
@@ -110,16 +108,6 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
       ..writeln("    name: '${field.name}',")
       ..writeln("    columnName: '${field.columnName}',")
       ..writeln('    kind: EntityFieldKind.${_fieldKind(field)},');
-    if (field.isCollection) {
-      buffer.writeln(
-        '    elementKind: EntityFieldKind.${_elementFieldKind(field)},',
-      );
-    }
-    if (field.isJsonValue) {
-      buffer.writeln(
-        '    jsonShape: JsonValueShape.${field.jsonValue!.shape.name},',
-      );
-    }
     buffer
       ..writeln('    nullable: ${field.nullable},')
       ..writeln('    mutable: ${spec.isPatchable(field)},')
@@ -232,8 +220,7 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
       SqlType.text ||
       SqlType.uuid ||
       SqlType.date ||
-      SqlType.timestampWithTimeZone ||
-      SqlType.json => 'TextColumn',
+      SqlType.timestampWithTimeZone => 'TextColumn',
     };
     final builderMethod = switch (field.sqlType) {
       SqlType.boolean => 'boolean',
@@ -242,8 +229,7 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
       SqlType.text ||
       SqlType.uuid ||
       SqlType.date ||
-      SqlType.timestampWithTimeZone ||
-      SqlType.json => 'text',
+      SqlType.timestampWithTimeZone => 'text',
     };
     final builder = '$builderMethod()';
     final modifiers = <String>[
@@ -306,26 +292,6 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
         _dartLiteral(
           'CHECK (${field.columnName} IN '
           '(${field.enumWireValues.map(_sqlStringLiteral).join(', ')}))',
-        ),
-    for (final field in spec.fields)
-      if (field.isCollection)
-        _dartLiteral(
-          field.nullable
-              ? 'CHECK (${field.columnName} IS NULL OR '
-                    '(json_valid(${field.columnName}) AND '
-                    "json_type(${field.columnName}) = 'array'))"
-              : 'CHECK (json_valid(${field.columnName}) AND '
-                    "json_type(${field.columnName}) = 'array')",
-        ),
-    for (final field in spec.fields)
-      if (field.isJsonValue)
-        _dartLiteral(
-          field.nullable
-              ? 'CHECK (${field.columnName} IS NULL OR '
-                    '(json_valid(${field.columnName}) AND '
-                    "json_type(${field.columnName}) = '${field.jsonValue!.shape.name}'))"
-              : 'CHECK (json_valid(${field.columnName}) AND '
-                    "json_type(${field.columnName}) = '${field.jsonValue!.shape.name}')",
         ),
     for (final group in spec.exclusiveFieldGroups)
       _dartLiteral(
@@ -2081,18 +2047,6 @@ String _actionAssignmentExpression(
 };
 
 String _normalizedEntityValueExpression(FieldSpec field, String source) {
-  if (field.isCollection) {
-    final elementType = field.collectionElementDartType!;
-    return field.nullable
-        ? '$source == null ? null : immutableEntityList<$elementType>($source)'
-        : 'immutableEntityList<$elementType>($source)';
-  }
-  if (field.isJsonValue) {
-    final normalized =
-        '${field.dartType.replaceAll('?', '')}.fromJson('
-        '${_canonicalJsonExpression(field, '$source.toJson()')})';
-    return field.nullable ? '$source == null ? null : $normalized' : normalized;
-  }
   if (field.isScalarValue) {
     final type = field.dartType.replaceAll('?', '');
     final normalized = '$type.fromScalar($source.toScalar())';
@@ -2108,7 +2062,7 @@ String _entityValueChangedExpression(
   FieldSpec field,
   String oldValue,
   String newValue,
-) => field.isCollection || field.isJsonValue || field.isScalarValue
+) => field.isScalarValue
     ? '!entityValuesEqual($oldValue, $newValue)'
     : '$oldValue != $newValue';
 
@@ -2123,15 +2077,12 @@ void _emitSetter(StringBuffer buffer, EntitySpec spec, FieldSpec field) {
     ..writeln('  @override')
     ..writeln('  set ${field.name}(${field.dartType} value) {');
   final normalizesValue =
-      field.isCollection ||
-      field.isJsonValue ||
-      field.isScalarValue ||
-      field.dartType.replaceAll('?', '') == 'DateTime';
+      field.isScalarValue || field.dartType.replaceAll('?', '') == 'DateTime';
   final valueExpression = normalizesValue ? 'normalizedValue' : 'value';
   buffer
     ..writeln('    final oldValue = _${field.name}Store.value;')
     ..writeln(
-      field.isCollection || field.isJsonValue || field.isScalarValue
+      field.isScalarValue
           ? '    if (entityValuesEqual(oldValue, value)) return;'
           : '    if (oldValue == value) return;',
     );
@@ -3281,18 +3232,6 @@ void _emitRecordCollaborationApi(StringBuffer buffer, EntitySpec spec) {
 String _decodeExpression(FieldSpec field, String source) {
   final nullableSuffix = field.nullable ? '?' : '!';
   final nonNullableType = field.dartType.replaceAll('?', '');
-  if (field.isCollection) {
-    final decode =
-        'decodeEntityList<${field.collectionElementDartType}>($source, '
-        "field: '${field.name}', decode: (element) => "
-        '${_decodeCollectionElementExpression(field, 'element')})';
-    return field.nullable ? '$source == null ? null : $decode' : decode;
-  }
-  if (field.isJsonValue) {
-    final decodeJson = _canonicalJsonExpression(field, source);
-    final decode = '$nonNullableType.fromJson($decodeJson)';
-    return field.nullable ? '$source == null ? null : $decode' : decode;
-  }
   if (field.isScalarValue) {
     final wire = _decodeScalarWireExpression(field, source);
     final decode = '$nonNullableType.fromScalar($wire)';
@@ -3357,18 +3296,6 @@ String _checkedRealExpression(FieldSpec field, String source) =>
 
 String _encodeExpression(FieldSpec field, String source) {
   final nonNullableType = field.dartType.replaceAll('?', '');
-  if (field.isCollection) {
-    final encoded =
-        'List<Object?>.unmodifiable($source.map((element) => '
-        '${_encodeCollectionElementExpression(field, 'element')}))';
-    return field.nullable ? '$source == null ? null : $encoded' : encoded;
-  }
-  if (field.isJsonValue) {
-    final encode = _canonicalJsonExpression(field, '$source.toJson()');
-    if (!field.nullable) return encode;
-    final nullableEncode = _canonicalJsonExpression(field, '$source!.toJson()');
-    return '$source == null ? null : $nullableEncode';
-  }
   if (field.isScalarValue) {
     return field.nullable ? '$source?.toScalar()' : '$source.toScalar()';
   }
@@ -3401,14 +3328,6 @@ String _encodeExpression(FieldSpec field, String source) {
   return source;
 }
 
-String _canonicalJsonExpression(FieldSpec field, String source) =>
-    switch (field.jsonValue!.shape) {
-      JsonValueShape.object =>
-        "canonicalJsonObject($source, field: '${field.name}')",
-      JsonValueShape.array =>
-        "canonicalJsonArray($source, field: '${field.name}')",
-    };
-
 String _decodeScalarWireExpression(FieldSpec field, String source) {
   return switch (field.scalarValue!.wireDartType) {
     'String' => '($source)! as String',
@@ -3434,22 +3353,7 @@ String _fieldKind(FieldSpec field) => switch (field.sqlType) {
   SqlType.real => 'real',
   SqlType.date => 'date',
   SqlType.timestampWithTimeZone => 'timestamp',
-  SqlType.json => field.isCollection ? 'list' : 'json',
 };
-
-String _elementFieldKind(FieldSpec field) =>
-    switch (field.collectionElementSqlType!) {
-      SqlType.text => 'text',
-      SqlType.boolean => 'boolean',
-      SqlType.integer => 'integer',
-      SqlType.real => 'real',
-      SqlType.uuid ||
-      SqlType.date ||
-      SqlType.timestampWithTimeZone ||
-      SqlType.json => throw StateError(
-        'Unsupported collection element type for `${field.name}`.',
-      ),
-    };
 
 String _queryFieldClass(FieldSpec field) {
   if (field.isScalarValue) {
@@ -3464,7 +3368,7 @@ String _queryFieldClass(FieldSpec field) {
     SqlType.real ||
     SqlType.date ||
     SqlType.timestampWithTimeZone => true,
-    SqlType.uuid || SqlType.boolean || SqlType.json => false,
+    SqlType.uuid || SqlType.boolean => false,
   };
   return switch ((field.nullable, comparable)) {
     (true, true) => 'NullableComparableEntityField',
@@ -3490,43 +3394,8 @@ String _dartLiteral(Object? value) => switch (value) {
 
 String _domainDefaultLiteral(FieldSpec field) => domainDefaultLiteral(field);
 
-String _sqliteDefaultLiteral(FieldSpec field) => field.isCollection
-    ? _dartLiteral(jsonEncode(field.persistedDefaultValue))
-    : _dartLiteral(field.persistedDefaultValue);
-
-String _decodeCollectionElementExpression(FieldSpec field, String source) {
-  if (field.isEnumCollection) {
-    return [
-      'switch ($source) {',
-      for (final (index, value) in field.enumValues.indexed)
-        "'${field.enumWireValues[index]}' => ${field.collectionElementDartType}.$value,",
-      "_ => throw const FormatException('Invalid enum `${field.name}` element.'),",
-      '}',
-    ].join(' ');
-  }
-  return switch (field.collectionElementDartType) {
-    'String' =>
-      "switch ($source) { final String value => value, _ => throw const FormatException('Invalid String `${field.name}` element.'), }",
-    'bool' =>
-      "switch ($source) { final bool value => value, _ => throw const FormatException('Invalid bool `${field.name}` element.'), }",
-    'int' => _checkedIntegerExpression(field, source),
-    _ => throw StateError(
-      'Unsupported collection element type for `${field.name}`.',
-    ),
-  };
-}
-
-String _encodeCollectionElementExpression(FieldSpec field, String source) {
-  if (field.isEnumCollection) {
-    return [
-      'switch ($source) {',
-      for (final (index, value) in field.enumValues.indexed)
-        "${field.collectionElementDartType}.$value => '${field.enumWireValues[index]}',",
-      '}',
-    ].join(' ');
-  }
-  return source;
-}
+String _sqliteDefaultLiteral(FieldSpec field) =>
+    _dartLiteral(field.persistedDefaultValue);
 
 String _sqlStringLiteral(String value) => "'${value.replaceAll("'", "''")}'";
 

@@ -456,23 +456,6 @@ final class Transient {
   const Transient();
 }
 
-/// Legacy compiler-fixture graph root.
-///
-/// Applications use package discovery plus tool-owned `nodus.lock`; this type
-/// is retained temporarily only for migration validation fixtures and is not a
-/// supported setup surface.
-@Deprecated(
-  'Run `dart run nodus init --target <name>`; no graph root is needed.',
-)
-final class EntityGraph {
-  const EntityGraph({required this.schemaVersion, this.defaultSyncTarget});
-
-  final int schemaVersion;
-
-  /// Typed enum constant inherited by ordinary replicated entities.
-  final Object? defaultSyncTarget;
-}
-
 final class Persisted {
   const Persisted({
     this.column,

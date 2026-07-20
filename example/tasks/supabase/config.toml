@@ -2,14 +2,14 @@ project_id = "tasks_example"
 
 [api]
 enabled = true
-port = 55321
+port = 56321
 schemas = ["public", "graphql_public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 
 [db]
-port = 55322
-shadow_port = 55320
+port = 56322
+shadow_port = 56320
 major_version = 17
 
 [db.migrations]
@@ -26,12 +26,12 @@ enabled = true
 
 [studio]
 enabled = true
-port = 55323
+port = 56323
 api_url = "http://127.0.0.1"
 
 [local_smtp]
 enabled = true
-port = 55324
+port = 56324
 
 [storage]
 enabled = false

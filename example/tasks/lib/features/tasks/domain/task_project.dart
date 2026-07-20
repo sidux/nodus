@@ -11,9 +11,8 @@ import '../../accounts/domain/account.dart';
 abstract class TaskProject
     implements OwnedBy<TaskProject, Account>, SoftDeletable, Ordered {
   @Persisted(minLength: 1, maxLength: 80, conflict: ConflictStrategy.localWins)
-  abstract String title;
+  abstract final String title;
 
-  void rename(String value) {
-    title = value.trim();
-  }
+  @Action()
+  Future<void> rename({required String title});
 }

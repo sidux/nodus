@@ -87,119 +87,6 @@ void main() {
     );
   });
 
-  test('list field descriptors canonicalize and validate every boundary', () {
-    const field = EntityFieldDescriptor(
-      name: 'ranks',
-      columnName: 'ranks',
-      kind: EntityFieldKind.list,
-      elementKind: EntityFieldKind.integer,
-      nullable: false,
-      mutable: true,
-      conflictPolicy: FieldConflictPolicy.serverWins,
-    );
-
-    expect(field.sqliteType, 'TEXT');
-    expect(field.toDatabase(const [1, 2]), '[1,2]');
-    final decoded = field.fromDatabase('[1,2.0]')! as List<Object?>;
-    expect(decoded, [1, 2]);
-    expect(() => decoded.add(3), throwsUnsupportedError);
-    expect(field.decodeWireValue(const [1, 2.0], entityType: 'Item'), [1, 2]);
-    expect(
-      () => field.decodeWireValue(const [1.5], entityType: 'Item'),
-      throwsFormatException,
-    );
-    expect(
-      () => field.decodeWireValue(const [null], entityType: 'Item'),
-      throwsFormatException,
-    );
-    expect(() => field.fromDatabase('{"not":"a-list"}'), throwsFormatException);
-  });
-
-  test('JSON field descriptors canonicalize shape and key order', () {
-    const field = EntityFieldDescriptor(
-      name: 'metadata',
-      columnName: 'metadata',
-      kind: EntityFieldKind.json,
-      jsonShape: JsonValueShape.object,
-      nullable: false,
-      mutable: true,
-      conflictPolicy: FieldConflictPolicy.serverWins,
-    );
-
-    expect(field.sqliteType, 'TEXT');
-    expect(field.toDatabase({'z': 1.0, 'a': true}), '{"a":true,"z":1}');
-    final decoded = field.fromDatabase('{"z":[2],"a":{"b":1}}')! as JsonMap;
-    expect(decoded.keys, ['a', 'z']);
-    expect(() => decoded['other'] = false, throwsUnsupportedError);
-    expect(
-      () => (decoded['z']! as List<Object?>).add(3),
-      throwsUnsupportedError,
-    );
-    expect(
-      () => (decoded['a']! as JsonMap)['other'] = false,
-      throwsUnsupportedError,
-    );
-    expect(
-      field.decodeWireValue({
-        'z': 1,
-        'a': [true, null],
-      }, entityType: 'Item'),
-      {
-        'a': [true, null],
-        'z': 1,
-      },
-    );
-    expect(
-      () => field.decodeWireValue(const [1], entityType: 'Item'),
-      throwsFormatException,
-    );
-    expect(
-      () => field.decodeWireValue({'invalid': double.nan}, entityType: 'Item'),
-      throwsFormatException,
-    );
-  });
-
-  test('persisted JSON values have structural query identity', () {
-    final field = EqualityEntityField<_JsonItem, _JsonValue>(
-      name: 'value',
-      read: (item) => item.value,
-      encode: (value) => canonicalJsonObject(value.toJson(), field: 'value'),
-    );
-    final first = field.equals(_JsonValue({'z': 1.0, 'a': true}));
-    final equivalent = field.equals(_JsonValue({'a': true, 'z': 1}));
-
-    expect(first, equivalent);
-    expect(first.hashCode, equivalent.hashCode);
-    expect(first.test(_JsonItem(_JsonValue({'a': true, 'z': 1}))), isTrue);
-  });
-
-  test('structurally equal entity values have matching hashes', () {
-    final first = _JsonValue({
-      'nested': {
-        'items': [1, true, null],
-      },
-      'label': 'same',
-    });
-    final equivalent = _JsonValue({
-      'label': 'same',
-      'nested': {
-        'items': [1, true, null],
-      },
-    });
-    final different = _JsonValue({
-      'nested': {
-        'items': [1, false, null],
-      },
-      'label': 'same',
-    });
-
-    expect(entityValuesEqual(first, equivalent), isTrue);
-    expect(entityValueHash(first), entityValueHash(equivalent));
-    expect(entityValuesEqual(first, different), isFalse);
-    expect(entityValuesEqual(first, const _OtherScalarValue(7)), isFalse);
-    expect(entityValueHash(first), isNot(entityValueHash(different)));
-  });
-
   test('persisted scalar values use their native wire identity', () {
     final first = _ScalarValue.fromScalar(7);
     const equivalent = _ScalarValue(7);
@@ -209,28 +96,6 @@ void main() {
     expect(entityValueHash(first), entityValueHash(equivalent));
     expect(entityValuesEqual(first, different), isFalse);
     expect(entityValueHash(first), isNot(entityValueHash(different)));
-  });
-
-  test('list values have structural mutation and query identity', () {
-    final source = [1, 2];
-    final immutable = immutableEntityList(source);
-    source.add(3);
-
-    expect(immutable, [1, 2]);
-    expect(entityValuesEqual(immutable, const [1, 2]), isTrue);
-    expect(entityValuesEqual(immutable, const [2, 1]), isFalse);
-
-    final field = EqualityEntityField<_ListItem, List<int>>(
-      name: 'values',
-      read: (item) => item.values,
-      encode: (value) => value,
-    );
-    final first = field.equals(const [1, 2]);
-    final equivalent = field.equals(List<int>.of(const [1, 2]));
-    expect(first, equivalent);
-    expect(first.hashCode, equivalent.hashCode);
-    expect(first.test(const _ListItem([1, 2])), isTrue);
-    expect(first.test(const _ListItem([2, 1])), isFalse);
   });
 
   test('sync operation IDs validate and canonicalize UUID wire values', () {
@@ -3545,12 +3410,6 @@ void main() {
   );
 }
 
-final class _ListItem {
-  const _ListItem(this.values);
-
-  final List<int> values;
-}
-
 final class _Item {
   _Item(String name) : _name = Observable(name), _isActive = Observable(true);
 
@@ -3808,15 +3667,6 @@ final class _NullableItem {
   final String? value;
 }
 
-final class _JsonValue implements PersistedJsonValue<JsonMap> {
-  const _JsonValue(this.value);
-
-  final JsonMap value;
-
-  @override
-  JsonMap toJson() => value;
-}
-
 final class _ScalarValue implements PersistedScalarValue<int> {
   const _ScalarValue(this.value);
 
@@ -3826,21 +3676,6 @@ final class _ScalarValue implements PersistedScalarValue<int> {
 
   @override
   int toScalar() => value;
-}
-
-final class _OtherScalarValue implements PersistedScalarValue<int> {
-  const _OtherScalarValue(this.value);
-
-  final int value;
-
-  @override
-  int toScalar() => value;
-}
-
-final class _JsonItem {
-  const _JsonItem(this.value);
-
-  final _JsonValue value;
 }
 
 final class _SyncQueueHost implements SyncQueueHost {

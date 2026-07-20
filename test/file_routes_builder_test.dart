@@ -174,13 +174,13 @@ Widget notFoundPage(
       fileRoutesBuilder(BuilderOptions.empty),
       {
         'example|lib/work_filter.dart': 'enum WorkFilter { all, active }',
-        'example|lib/entity_graph.runtime.g.dart': '''
+        'example|lib/nodus.g.dart': '''
 export 'work_filter.dart';
 
 final class ExampleEntityGraph {}
 ''',
         'example|lib/features/work/presentation/pages/work/page.dart': '''
-import 'package:example/entity_graph.runtime.g.dart';
+import 'package:example/nodus.g.dart';
 import 'package:example/work_filter.dart';
 
 class Widget { const Widget(); }
@@ -203,9 +203,7 @@ Widget notFoundPage(Object error) => Widget();
         'example|lib/features/shell/presentation/pages/not_found.routes.g.dart':
             decodedMatches(
               allOf([
-                contains(
-                  "import 'package:example/entity_graph.runtime.g.dart';",
-                ),
+                contains("import 'package:example/nodus.g.dart';"),
                 isNot(contains("import 'package:example/work_filter.dart';")),
                 contains('FileRouteScope.read<ExampleEntityGraph>(context)'),
                 contains('final WorkFilter filter;'),

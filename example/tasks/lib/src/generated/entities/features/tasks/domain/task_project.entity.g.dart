@@ -46,6 +46,7 @@ final class TaskProjectDescriptor
     implements
         EntityDescriptor<TaskProject, TaskProjectRecord>,
         EntityIdentityDescriptor<TaskProject>,
+        ActionPolicyProvider,
         OrderedDescriptor {
   const TaskProjectDescriptor();
 
@@ -93,6 +94,14 @@ final class TaskProjectDescriptor
       value,
     );
   }
+
+  @override
+  ActionPolicy get actionPolicy => const ActionPolicy(
+    actions: [
+      ActionDefinition(fieldNames: const ['title'], assignments: []),
+    ],
+    fixedInitialValues: {},
+  );
 
   @override
   EntitySemanticCommand<dynamic> decodeSemanticCommand(
@@ -288,57 +297,6 @@ final class TaskProjectRecord extends TaskProject
   final Observable<String> _titleStore;
   @override
   String get title => _titleStore.value;
-  @override
-  set title(String value) {
-    final oldValue = _titleStore.value;
-    if (oldValue == value) return;
-    if (_deletedAtStore.value != null) {
-      throw const EntityValidationException(
-        entityType: 'TaskProject',
-        field: 'title',
-        message: 'Deleted entities cannot be changed.',
-      );
-    }
-    if (value.trim().length < 1) {
-      throw const EntityValidationException(
-        entityType: 'TaskProject',
-        field: 'title',
-        message: 'Must contain at least 1 non-whitespace character(s).',
-      );
-    }
-    if (value.length > 80) {
-      throw const EntityValidationException(
-        entityType: 'TaskProject',
-        field: 'title',
-        message: 'Must contain at most 80 character(s).',
-      );
-    }
-    _mutationSink.validateMutationAuthorization(
-      entity: this,
-      operation: RlsOperation.update,
-      principals: const [RlsPrincipal.owner],
-    );
-    final mutationTime = _clock.nowUtc();
-    final previousRevision = _localRevision;
-    final mutationRevision = ++_localRevision;
-    runInAction(() {
-      _titleStore.value = value;
-    });
-    final syncPatch = TaskProjectFields.title.patch(value);
-    _generatedLocalCommit = _mutationSink.recordEntityMutation<TaskProject>(
-      entity: this,
-      patch: syncPatch,
-      syncPatch: syncPatch,
-      operation: SyncMutationOperation.patch,
-      occurredAt: mutationTime,
-      rollbackIfCurrent: () {
-        if (_localRevision != mutationRevision) return;
-        _localRevision = previousRevision;
-        _titleStore.value = oldValue;
-      },
-    );
-  }
-
   final Observable<OrderRank> _orderRankStore;
   @override
   OrderRank get generatedOrderRank => _orderRankStore.value;
@@ -438,6 +396,61 @@ final class TaskProjectRecord extends TaskProject
       }
       rethrow;
     }
+  }
+
+  @override
+  Future<void> rename({required String title}) {
+    final _generatedActionTime = _clock.nowUtc();
+    final oldTitle = _titleStore.value;
+    final nextTitle = title;
+    final titleChanged = oldTitle != nextTitle;
+    if (!(titleChanged)) return Future.value();
+    if (_deletedAtStore.value != null) {
+      throw const EntityValidationException(
+        entityType: 'TaskProject',
+        field: 'rename',
+        message: 'Deleted entities cannot be changed.',
+      );
+    }
+    if (nextTitle.trim().length < 1) {
+      throw const EntityValidationException(
+        entityType: 'TaskProject',
+        field: 'title',
+        message: 'Must contain at least 1 non-whitespace character(s).',
+      );
+    }
+    if (nextTitle.length > 80) {
+      throw const EntityValidationException(
+        entityType: 'TaskProject',
+        field: 'title',
+        message: 'Must contain at most 80 character(s).',
+      );
+    }
+    if (titleChanged) {
+      _mutationSink.validateMutationAuthorization(
+        entity: this,
+        operation: RlsOperation.update,
+        principals: const [RlsPrincipal.owner],
+      );
+    }
+    final previousRevision = _localRevision;
+    final mutationRevision = ++_localRevision;
+    runInAction(() {
+      _titleStore.value = nextTitle;
+    });
+    final syncPatch = TaskProjectFields.title.patch(nextTitle);
+    _generatedLocalCommit = _mutationSink.recordEntityMutation<TaskProject>(
+      entity: this,
+      patch: syncPatch,
+      syncPatch: syncPatch,
+      occurredAt: _generatedActionTime,
+      rollbackIfCurrent: () {
+        if (_localRevision != mutationRevision) return;
+        _localRevision = previousRevision;
+        _titleStore.value = oldTitle;
+      },
+    );
+    return _generatedMutationCompletion(_generatedLocalCommit);
   }
 
   @override

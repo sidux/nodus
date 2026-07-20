@@ -12,10 +12,6 @@ import 'package:source_gen/source_gen.dart';
 import 'model.dart';
 
 const _entityChecker = TypeChecker.typeNamed(Entity, inPackage: 'nodus');
-const _entityGraphChecker = TypeChecker.typeNamed(
-  EntityGraph,
-  inPackage: 'nodus',
-);
 const _persistedChecker = TypeChecker.typeNamed(Persisted, inPackage: 'nodus');
 const _indexedChecker = TypeChecker.typeNamed(Indexed, inPackage: 'nodus');
 const _referenceChecker = TypeChecker.typeNamed(Reference, inPackage: 'nodus');
@@ -53,10 +49,6 @@ const _softDeletableChecker = TypeChecker.typeNamed(
 const _orderedChecker = TypeChecker.fromUrl('package:nodus/nodus.dart#Ordered');
 const _componentChecker = TypeChecker.fromUrl(
   'package:nodus/nodus.dart#Component',
-);
-const _persistedJsonValueChecker = TypeChecker.typeNamed(
-  PersistedJsonValue,
-  inPackage: 'nodus',
 );
 const _persistedScalarValueChecker = TypeChecker.typeNamed(
   PersistedScalarValue,
@@ -346,6 +338,14 @@ Future<EntitySpec?> parseEntityAsset(
         element: field,
       );
     }
+    if (!field.isFinal) {
+      throw InvalidGenerationSourceError(
+        'Persisted entity field `${field.name}` must be declared final. '
+        'Express durable changes through an @Action or an entity draft; '
+        'Nodus does not generate asynchronous property setters.',
+        element: field,
+      );
+    }
     if (const {
       EntityConventions.idFieldName,
       EntityConventions.ownerFieldName,
@@ -422,20 +422,18 @@ Future<EntitySpec?> parseEntityAsset(
     final collectionElementType = _isDartCoreList(field.type)
         ? (field.type as InterfaceType).typeArguments.single
         : null;
-    if (collectionElementType?.nullabilitySuffix ==
-        NullabilitySuffix.question) {
+    if (collectionElementType != null) {
       throw InvalidGenerationSourceError(
-        'Persisted collection elements must be non-nullable.',
+        'Persisted collection field `${field.name}` is not supported. '
+        'Normalize collection members as owned entities or relationships so '
+        'identity, ordering, access, and synchronization stay explicit.',
         element: field,
       );
     }
     final scalarEnumElement = field.type.element is EnumElement
         ? field.type.element as EnumElement
         : null;
-    final collectionEnumElement = collectionElementType?.element is EnumElement
-        ? collectionElementType!.element as EnumElement
-        : null;
-    final enumElement = scalarEnumElement ?? collectionEnumElement;
+    final enumElement = scalarEnumElement;
     final enumValues = enumElement == null
         ? const <String>[]
         : enumElement.fields
@@ -443,19 +441,9 @@ Future<EntitySpec?> parseEntityAsset(
               .map((candidate) => candidate.name!)
               .toList(growable: false);
     _collectTypeImports(field.type, typeImports);
-    final scalarValue = collectionElementType == null && enumElement == null
+    final scalarValue = enumElement == null
         ? _parseScalarValue(field.type, field)
         : null;
-    final jsonValue = collectionElementType == null && enumElement == null
-        ? _parseJsonValue(field.type, field)
-        : null;
-    if (scalarValue != null && jsonValue != null) {
-      throw InvalidGenerationSourceError(
-        '`${field.name}` cannot implement both PersistedScalarValue and '
-        'PersistedJsonValue.',
-        element: field,
-      );
-    }
     final nullable = field.type.nullabilitySuffix == NullabilitySuffix.question;
     if (isComposition &&
         (indexedObject != null ||
@@ -493,53 +481,27 @@ Future<EntitySpec?> parseEntityAsset(
         ownership: ownership,
       );
     }
-    final collectionElementSqlType = collectionElementType == null
-        ? null
-        : collectionEnumElement == null
-        ? _inferCollectionElementSqlType(collectionElementType, field)
-        : SqlType.text;
-    final sqlType = collectionElementType != null
-        ? SqlType.json
-        : enumElement == null
-        ? scalarValue != null
-              ? scalarValue.sqlType
-              : jsonValue == null
-              ? _inferSqlType(dartType)
-              : SqlType.json
+    final sqlType = enumElement == null
+        ? scalarValue?.sqlType ?? _inferSqlType(dartType)
         : SqlType.text;
 
     final columnName = persisted?.peek('column')?.isNull ?? true
         ? snakeCase(field.name!)
         : persisted!.read('column').stringValue;
     _validateSqlIdentifier(columnName, field, label: 'column');
-    if (jsonValue != null &&
-        ((persisted?.peek('defaultValue')?.isNull == false) ||
-            initializers[field.name] != null)) {
-      throw InvalidGenerationSourceError(
-        'Persisted JSON values cannot declare a const field default. Make the '
-        'field required, nullable, or introduce it through a nullable protocol '
-        'migration.',
-        element: field,
-      );
-    }
-    final configuredDefault = jsonValue == null
-        ? _configuredDefaultValue(
-            persisted,
-            field,
-            enumElement,
-            scalarValue: scalarValue,
-          )
-        : null;
+    final configuredDefault = _configuredDefaultValue(
+      persisted,
+      field,
+      enumElement,
+      scalarValue: scalarValue,
+    );
     final transitions = _parseAllowedTransitions(
       persisted,
       field,
       scalarEnumElement,
     );
     final updatePrincipals = _parseFieldUpdatePrincipals(persisted, field);
-    if (configuredDefault != null &&
-        enumElement == null &&
-        collectionElementType == null &&
-        jsonValue == null) {
+    if (configuredDefault != null && enumElement == null) {
       _validateConfiguredDefault(
         field,
         configuredDefault,
@@ -617,10 +579,7 @@ Future<EntitySpec?> parseEntityAsset(
             : _readEnum(indexed.read('scope'), IndexScope.values),
         enumValues: enumValues,
         enumTypeImport: enumElement?.library.uri.toString(),
-        collectionElementDartType: collectionElementType?.getDisplayString(),
-        collectionElementSqlType: collectionElementSqlType,
         scalarValue: scalarValue,
-        jsonValue: jsonValue,
         reference: reference,
         sinceProtocolVersion:
             persisted?.read('sinceProtocolVersion').intValue ?? 1,
@@ -1224,10 +1183,7 @@ List<String>? _parseOrderScope(
   final commandTargets = commands.map((command) => command.targetField).toSet();
   for (final name in resolvedNames) {
     final field = fieldsByName[name];
-    if (field == null ||
-        field.generatedOnly ||
-        field.isCollection ||
-        field.isJsonValue) {
+    if (field == null || field.generatedOnly) {
       throw InvalidGenerationSourceError(
         'Entity.orderScope field `$name` must be a persisted scalar field.',
         element: element,
@@ -1371,9 +1327,10 @@ void _validateAndInferWorkflowMembership(
           (status.dartType != collaboration.readableEnumType ||
               status.enumTypeImport != collaboration.readableEnumImport))) {
     throw InvalidGenerationSourceError(
-      'Workflow membership `$tableName` requires a mutable enum '
-      '`${collaboration.statusField}` with non-accepted default, an `$accepted` '
-      'value, matching readable states, and declared transitions.',
+      'Workflow membership `$tableName` requires an immutable enum '
+      '`${collaboration.statusField}` targeted by Actions, with non-accepted '
+      'default, an `$accepted` value, matching readable states, and declared '
+      'transitions.',
       element: element,
     );
   }
@@ -2040,7 +1997,7 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
           element: element,
         );
       }
-      if (field.nullable || field.isCollection || field.isJsonValue) {
+      if (field.nullable) {
         throw InvalidGenerationSourceError(
           'IndexCondition field `$fieldName` must be a non-null scalar value.',
           element: element,
@@ -2098,16 +2055,6 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
       if (field == null) {
         throw InvalidGenerationSourceError(
           'CompoundIndex field `$name` is not persisted.',
-          element: element,
-        );
-      }
-      if (field.isCollection || field.isJsonValue) {
-        final kind = field.isCollection
-            ? 'value collection'
-            : 'structured JSON';
-        throw InvalidGenerationSourceError(
-          'CompoundIndex cannot use $kind field `$name`. '
-          'Model queryable relationships as referenced join entities.',
           element: element,
         );
       }
@@ -2292,49 +2239,6 @@ void _collectTypeImports(DartType type, Set<String> imports) {
   }
 }
 
-Future<EntityGraphSpec?> parseEntityGraph(BuildStep buildStep) async {
-  final library = LibraryReader(await buildStep.inputLibrary);
-  final annotated = library.annotatedWith(_entityGraphChecker).toList();
-  if (annotated.isEmpty) return null;
-  if (annotated.length != 1 || annotated.single.element is! ClassElement) {
-    throw InvalidGenerationSourceError(
-      'Each entity graph file must contain exactly one '
-      '@EntityGraph class.',
-      element: annotated.first.element,
-    );
-  }
-  final element = annotated.single.element as ClassElement;
-  final schemaVersion = annotated.single.annotation
-      .read('schemaVersion')
-      .intValue;
-  if (schemaVersion < 1) {
-    throw InvalidGenerationSourceError(
-      'Entity graph schemaVersion must be a positive integer.',
-      element: element,
-    );
-  }
-  final defaultSyncTarget = _parseSyncTarget(
-    annotated.single.annotation.peek('defaultSyncTarget'),
-    element,
-    label: 'EntityGraph.defaultSyncTarget',
-  );
-  final entities = await _discoverGraphEntities(
-    buildStep,
-    excludedAsset: buildStep.inputId,
-  );
-  final packageName = buildStep.inputId.package;
-  final relativePath = buildStep.inputId.path.substring('lib/'.length);
-  return _resolveEntityGraph(
-    className: element.name!,
-    packageName: packageName,
-    inputImport: 'package:$packageName/$relativePath',
-    schemaVersion: schemaVersion,
-    entities: entities,
-    defaultSyncTarget: defaultSyncTarget,
-    element: element,
-  );
-}
-
 /// Discovers the package graph without a handwritten Dart graph root.
 Future<EntityGraphSpec> parseInferredEntityGraph(
   BuildStep buildStep, {
@@ -2375,13 +2279,10 @@ Future<EntityGraphSpec> parseInferredEntityGraph(
   );
 }
 
-Future<List<EntitySpec>> _discoverGraphEntities(
-  BuildStep buildStep, {
-  AssetId? excludedAsset,
-}) async {
+Future<List<EntitySpec>> _discoverGraphEntities(BuildStep buildStep) async {
   final entities = <EntitySpec>[];
   await for (final asset in buildStep.findAssets(Glob('lib/**.dart'))) {
-    if (asset == excludedAsset || !await buildStep.resolver.isLibrary(asset)) {
+    if (!await buildStep.resolver.isLibrary(asset)) {
       continue;
     }
     final entity = await parseEntityAsset(buildStep, asset);
@@ -2399,7 +2300,7 @@ EntityGraphSpec _resolveEntityGraph({
   required List<EntitySpec> entities,
   required SyncTargetSpec? defaultSyncTarget,
   required Element element,
-  String outputBaseName = 'entity_graph.runtime.g',
+  String outputBaseName = 'nodus.g',
   bool emitsSyncTargetEnum = false,
 }) {
   if (entities.isEmpty) {
@@ -3624,14 +3525,6 @@ void _validateEntity(
   }
   final idField = fields.singleWhere((field) => field.isId);
   for (final field in fields) {
-    if ((field.isCollection || field.isJsonValue) && field.indexed) {
-      throw InvalidGenerationSourceError(
-        '`${field.name}` is structured JSON and cannot use a scalar index. '
-        'Model queryable relationships as referenced join entities; '
-        'collection-specific indexes require an explicit future capability.',
-        element: element,
-      );
-    }
     if (field.transitions.isNotEmpty && field.defaultValue == null) {
       throw InvalidGenerationSourceError(
         'Transitioned enum `${field.name}` must declare its single initial '
@@ -3887,7 +3780,7 @@ void _validateEntity(
       }
       final fieldType = field.dartType.replaceAll('?', '');
       final otherType = other.single.dartType.replaceAll('?', '');
-      if (fieldType != otherType || field.isCollection || field.isJsonValue) {
+      if (fieldType != otherType) {
         throw InvalidGenerationSourceError(
           '`notEqualTo` requires two scalar fields with the same Dart type.',
           element: element,
@@ -4356,92 +4249,6 @@ void _validatePersistedValueClass(
       element: field,
     );
   }
-}
-
-JsonValueSpec? _parseJsonValue(DartType type, FieldElement field) {
-  if (type is! InterfaceType || type.element is! ClassElement) return null;
-  final element = type.element as ClassElement;
-  final contracts = element.allSupertypes
-      .where((candidate) => _persistedJsonValueChecker.isExactlyType(candidate))
-      .toList(growable: false);
-  if (contracts.isEmpty) return null;
-  _validatePersistedValueClass(element, type, field);
-  if (contracts.length != 1 || contracts.single.typeArguments.length != 1) {
-    throw InvalidGenerationSourceError(
-      '`${field.name}` must implement exactly one PersistedJsonValue contract.',
-      element: field,
-    );
-  }
-
-  final wireType = contracts.single.typeArguments.single;
-  final shape = _jsonValueShape(wireType, field);
-  final constructors = element.constructors
-      .where((candidate) => candidate.name == 'fromJson')
-      .toList(growable: false);
-  if (constructors.length != 1) {
-    throw InvalidGenerationSourceError(
-      '`${type.getDisplayString()}` must expose exactly one named `fromJson` '
-      'constructor.',
-      element: field,
-    );
-  }
-  final constructor = constructors.single;
-  if (constructor.formalParameters.length != 1 ||
-      !constructor.formalParameters.single.isRequiredPositional ||
-      constructor.formalParameters.single.type.getDisplayString() !=
-          wireType.getDisplayString()) {
-    throw InvalidGenerationSourceError(
-      '`${type.getDisplayString()}.fromJson` must accept one required positional '
-      '`${wireType.getDisplayString()}` value.',
-      element: field,
-    );
-  }
-
-  return JsonValueSpec(shape: shape);
-}
-
-JsonValueShape _jsonValueShape(DartType type, FieldElement field) {
-  if (type is InterfaceType) {
-    final uri = type.element.library.uri.toString();
-    final arguments = type.typeArguments;
-    if (uri == 'dart:core' &&
-        type.element.name == 'List' &&
-        arguments.length == 1 &&
-        arguments.single.getDisplayString() == 'Object?') {
-      return JsonValueShape.array;
-    }
-    if (uri == 'dart:core' &&
-        type.element.name == 'Map' &&
-        arguments.length == 2 &&
-        arguments.first.getDisplayString() == 'String' &&
-        arguments.last.getDisplayString() == 'Object?') {
-      return JsonValueShape.object;
-    }
-  }
-  throw InvalidGenerationSourceError(
-    '`${field.name}` has unsupported PersistedJsonValue wire type '
-    '`${type.getDisplayString()}`. Use JsonMap or List<Object?>.',
-    element: field,
-  );
-}
-
-SqlType _inferCollectionElementSqlType(
-  DartType elementType,
-  FieldElement field,
-) {
-  final dartType = elementType.getDisplayString();
-  return switch (dartType) {
-    'String' => SqlType.text,
-    'bool' => SqlType.boolean,
-    'int' => SqlType.integer,
-    _ => throw InvalidGenerationSourceError(
-      '`${field.name}` has unsupported collection element type `$dartType`. '
-      'Persisted collections are intentionally limited to String, bool, int, '
-      'and enum values. Model entity IDs and other relationships as referenced '
-      'join entities.',
-      element: field,
-    ),
-  };
 }
 
 FieldSpec _infrastructureField({

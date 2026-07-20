@@ -89,7 +89,8 @@ void main() {
       addTearDown(fixture.dispose);
       fixture.writeSchema(1, [_column('id')]);
       fixture.writeSchema(2, [_column('id'), _column('title')]);
-      final steps = fixture.file('lib/entity_graph.runtime.g.steps.dart')
+      final steps = fixture.file('lib/src/generated/nodus.runtime.g.steps.dart')
+        ..createSync(recursive: true)
         ..writeAsStringSync('// generated steps\n');
       final generated = fixture.file('test/drift/generated/schema_v2.dart')
         ..createSync(recursive: true)
@@ -109,7 +110,7 @@ void main() {
       final fixture = _Fixture();
       addTearDown(fixture.dispose);
       fixture.writeSchema(1, [_column('id')]);
-      final steps = fixture.file('lib/nested/entity_graph.runtime.g.steps.dart')
+      final steps = fixture.file('lib/src/generated/nodus.runtime.g.steps.dart')
         ..createSync(recursive: true)
         ..writeAsStringSync('// steps');
       final generator = fixture.generator();
@@ -164,7 +165,7 @@ void main() {
         _column('id'),
         _column('text', getterName: 'textColumn'),
       ]);
-      final steps = fixture.file('lib/entity_graph.runtime.g.steps.dart')
+      final steps = fixture.file('lib/src/generated/nodus.runtime.g.steps.dart')
         ..createSync(recursive: true)
         ..writeAsStringSync('''
 late final Shape1 notes = Shape1(
@@ -243,6 +244,45 @@ class NotesData extends DataClass {
       }
     });
 
+    test('removes the no-op Drift data migration template', () {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      final migrationTest =
+          fixture.file('test/drift/application/migration_test.dart')
+            ..createSync(recursive: true)
+            ..writeAsStringSync('''
+import 'generated/schema.dart';
+import 'package:fixture/src/generated/nodus.runtime.g.dart';
+import 'generated/schema_v1.dart' as v1;
+import 'generated/schema_v2.dart' as v2;
+
+void main() {
+  test('generated migration matrix', () {
+    final schema = verifier.schemaAt(1);
+    final db = FixtureDatabase(schema.newConnection());
+  });
+
+  // The following template shows how to write tests ensuring your migrations
+  // preserve existing data.
+  // Placeholder data setup
+  test('migration from v1 to v2 does not corrupt data', () {});
+}
+''');
+
+      fixture.generator().normalizeDriftMigrationTests();
+
+      final output = migrationTest.readAsStringSync();
+      expect(output, contains("import 'generated/schema.dart';"));
+      expect(output, contains("test('generated migration matrix'"));
+      expect(output, contains('nodus.migrations.g.dart'));
+      expect(output, contains('nodusMigrationStrategy<FixtureDatabase>'));
+      expect(output, contains('FixtureMetadata.definition.syncTargets'));
+      expect(output, isNot(contains('schema_v1.dart')));
+      expect(output, isNot(contains('schema_v2.dart')));
+      expect(output, isNot(contains('Placeholder data setup')));
+      expect(output.trimRight(), endsWith('}'));
+    });
+
     test('replaces changed indexes without requiring application policy', () {
       final fixture = _Fixture();
       addTearDown(fixture.dispose);
@@ -276,7 +316,7 @@ class NotesData extends DataClass {
       addTearDown(fixture.dispose);
       fixture.writeSchema(1, [_column('id')]);
       fixture.writeSchema(2, [_column('id'), _column('label')]);
-      fixture.file('lib/entity_graph.runtime.g.steps.dart')
+      fixture.file('lib/src/generated/nodus.runtime.g.steps.dart')
         ..createSync(recursive: true)
         ..writeAsStringSync('// steps');
 
@@ -298,7 +338,7 @@ class NotesData extends DataClass {
       expect(output, contains('plan.handlesManualChanges'));
       expect(
         output,
-        contains("import '../../entity_graph.runtime.g.steps.dart' as steps;"),
+        contains("import './nodus.runtime.g.steps.dart' as steps;"),
       );
       expect(output, isNot(contains('WorkItems')));
     });

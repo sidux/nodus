@@ -1,15 +1,6 @@
 import 'package:nodus/nodus.dart';
 
-enum SqlType {
-  text,
-  uuid,
-  boolean,
-  integer,
-  real,
-  date,
-  timestampWithTimeZone,
-  json,
-}
+enum SqlType { text, uuid, boolean, integer, real, date, timestampWithTimeZone }
 
 final class EntitySpec {
   const EntitySpec({
@@ -719,10 +710,6 @@ String domainDefaultLiteral(FieldSpec field) {
   if (field.isEnum) {
     return '${field.dartType.replaceAll('?', '')}.${field.defaultValue}';
   }
-  if (field.isEnumCollection) {
-    final values = field.defaultValue! as List<Object?>;
-    return 'const [${values.map((value) => '${field.collectionElementDartType}.$value').join(', ')}]';
-  }
   if (field.dartType.replaceAll('?', '') == 'OrderRank') {
     return 'OrderRank.parse(${dartLiteral(field.defaultValue)})';
   }
@@ -769,7 +756,7 @@ final class EntityGraphSpec {
     required List<EntitySpec> entities,
     this.defaultSyncTarget,
     List<SyncBindingSpec>? syncBindings,
-    this.outputBaseName = 'entity_graph.runtime.g',
+    this.outputBaseName = 'nodus.g',
     this.emitsSyncTargetEnum = false,
   }) : entities = List.unmodifiable(entities),
        syncBindings = List.unmodifiable(
@@ -1208,10 +1195,7 @@ final class FieldSpec {
     this.transitions = const [],
     this.updatePrincipals = const [],
     this.enumTypeImport,
-    this.collectionElementDartType,
-    this.collectionElementSqlType,
     this.scalarValue,
-    this.jsonValue,
     this.generatedOnly = false,
   });
 
@@ -1260,10 +1244,7 @@ final class FieldSpec {
   final List<ValueTransitionSpec> transitions;
   final List<RlsPrincipal> updatePrincipals;
   final String? enumTypeImport;
-  final String? collectionElementDartType;
-  final SqlType? collectionElementSqlType;
   final ScalarValueSpec? scalarValue;
-  final JsonValueSpec? jsonValue;
   final bool generatedOnly;
 
   FieldSpec withReference(ReferenceSpec value) => FieldSpec(
@@ -1309,33 +1290,20 @@ final class FieldSpec {
     transitions: transitions,
     updatePrincipals: updatePrincipals,
     enumTypeImport: enumTypeImport,
-    collectionElementDartType: collectionElementDartType,
-    collectionElementSqlType: collectionElementSqlType,
     scalarValue: scalarValue,
-    jsonValue: jsonValue,
     generatedOnly: generatedOnly,
   );
 
   bool get isServerManaged => authority == FieldAuthority.server;
   bool get isMutable => !isFinal && !serverGenerated && !isServerManaged;
-  bool get isCollection => collectionElementSqlType != null;
   bool get isScalarValue => scalarValue != null;
-  bool get isJsonValue => jsonValue != null;
-  bool get isEnum => !isCollection && enumValues.isNotEmpty;
-  bool get isEnumCollection => isCollection && enumValues.isNotEmpty;
+  bool get isEnum => enumValues.isNotEmpty;
   List<String> get enumWireValues => [
     for (final value in enumValues) snakeCase(value),
   ];
   Object? get persistedDefaultValue {
     if (isEnum && defaultValue is String) {
       return snakeCase(defaultValue! as String);
-    }
-    if (isEnumCollection && defaultValue is List<Object?>) {
-      return List<Object?>.unmodifiable(
-        (defaultValue! as List<Object?>).map(
-          (value) => snakeCase(value! as String),
-        ),
-      );
     }
     return defaultValue;
   }
@@ -1358,12 +1326,6 @@ final class FieldSpec {
       dartType == 'DateTime';
   bool get inCreatePayload =>
       !serverGenerated && !autoUpdated && !isServerManaged;
-}
-
-final class JsonValueSpec {
-  const JsonValueSpec({required this.shape});
-
-  final JsonValueShape shape;
 }
 
 final class ScalarValueSpec {

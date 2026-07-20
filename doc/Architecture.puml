@@ -24,7 +24,7 @@ package "HANDWRITTEN INTENT\nsmall, stable, application-owned" as Authored #E3F2
   abstract class "@Entity\nabstract public domain type" as Entity #BBDEFB
   component "Persisted fields + defaults\nnominal IDs + relationships\ninvariants + computed business methods" as EntityIntent #E3F2FD
   component "Typed ownership + concise capabilities\nOwnedBy<Self, Owner> · Ordered · Component\nArchivable · SoftDeletable · Activatable\nCollaborative<Principal> · ActivityTracked/ActivityOf" as Capabilities #E3F2FD
-  abstract class "@EntityGraph\none graph declaration" as GraphDeclaration #BBDEFB
+  artifact "nodus.lock\npackage graph identity" as GraphDeclaration #BBDEFB
   component "Filesystem pages\nwidget constructor = route contract" as Pages #E3F2FD
   component "Only irreducible overrides\nambiguity · policy · codec · target\nsource process · projection" as Overrides #E3F2FD
 
@@ -243,7 +243,7 @@ skinparam packageBorderColor #455A64
 skinparam noteBorderColor #455A64
 skinparam noteBackgroundColor #FFFDE7
 
-component "@EntityGraph\noptional defaultSyncTarget" as GraphDecl #BBDEFB
+component "nodus.lock\ntyped default target" as GraphDecl #BBDEFB
 component "@Entity\noptional sync mode or target override" as EntityDecl #BBDEFB
 component "Generated typed target enum + registry\nentity descriptor groups + capability validation" as TargetRegistry #C8E6C9
 component "One physical durable scheduler\nfair work-kind/target/direction lanes" as Scheduler #E1BEE7
