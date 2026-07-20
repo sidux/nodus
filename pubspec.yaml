@@ -1,5 +1,5 @@
 name: nodus
-description: A local-first Flutter application compiler generating typed entities, persistence, sync, security, and routing from one graph.
+description: A multiplatform application compiler for Flutter that generates typed state, persistence, offline sync, backend security, routes, and tests from one graph.
 version: 0.1.0
 repository: https://github.com/sidux/nodus
 issue_tracker: https://github.com/sidux/nodus/issues

@@ -2,10 +2,12 @@
 
 > One graph. Every layer.
 
-Nodus is a local-first Flutter application compiler. You write one typed domain
-model; it generates the application graph, reactive entities, mutation drafts,
-Drift persistence, durable synchronization, Supabase schema and RLS, typed
-queries, file-based routes, and a real in-memory test harness.
+Flutter made sharing an interface across platforms simpler. Nodus builds on
+that foundation by carrying one typed product model through the application
+layers behind the interface. It generates the application graph, reactive
+entities, mutation drafts, Drift persistence, durable synchronization, backend
+schema and security, typed queries, file-based routes, and a real in-memory test
+harness.
 
 Nodus is currently `0.1.0`: suitable for evaluation and new projects, with API
 evolution expected before `1.0.0`. The built-in durable store supports Android,

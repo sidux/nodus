@@ -8,9 +8,8 @@ Nodus
 
 ## Elevator pitch
 
-Vibe coding needs rails: one typed domain graph becomes a production-ready,
-local-first Flutter stack—persistence, sync, security, queries, routes, and real
-tests.
+Flutter made multiplatform UI simpler. Nodus takes the next step: one typed
+product model generates local data, sync, backend security, routes, and tests.
 
 ## Category
 
@@ -25,20 +24,25 @@ PostgreSQL, GoRouter, build_runner
 
 ### Inspiration
 
-AI can produce a screen quickly, but production applications fail in the seams:
-the model says one thing, the database another, authorization is copied by hand,
-offline state is bolted on later, and test doubles no longer match runtime
-behavior. Coding agents inherit the same fragmentation, only faster.
+Flutter removed a major source of multiplatform duplication: teams can build
+one interface and run much of the same code across platforms. But the product
+behind the screen is still repeated across state models, local tables, API
+payloads, sync logic, backend constraints and permissions, routes, and test
+doubles. The UI may be shared while the application meaning drifts.
+
+AI makes that seam more visible. A coding agent can produce a screen quickly,
+but it also inherits every duplicated model and configuration, only faster.
 
 Nodus begins with a different question: what if a product decision were written
 once, kept typed and reviewable, and compiled into every mechanical layer?
 
 ### What it does
 
-Nodus is a local-first Flutter application compiler. A developer declares an
-abstract entity with fields, constraints, relationships, capabilities, and
-actions. Nodus resolves those declarations once into a canonical entity graph
-and deterministically emits:
+Nodus builds on Flutter's multiplatform foundation with a local-first
+application architecture and compiler. A developer declares an abstract entity
+with fields, constraints, relationships, capabilities, and actions. Nodus
+resolves those declarations once into a canonical entity graph and
+deterministically emits:
 
 - reactive, identity-stable Dart entities and typed create/edit/action APIs;
 - Drift tables, constraints, migrations, observable queries, and durable work;
@@ -48,9 +52,13 @@ and deterministically emits:
   and receipts;
 - typed file-system routes and a production-runtime in-memory test harness.
 
+The result is more than one UI codebase. It is one product model whose state,
+offline behavior, persistence, backend policies, and tests stay coherent as the
+application moves between platforms.
+
 The generated Tasks app demonstrates offline creation, editing, transitions,
 ordering, collaboration, activity, tombstones, paging, deep links, and durable
-sync scheduling.
+sync scheduling. It is evidence of Nodus, not the project being submitted.
 
 ### Supabase without Supabase lock-in
 
@@ -61,7 +69,11 @@ workers, operation IDs, codecs, and conflict policies speak a generic Nodus
 protocol. A new backend implements a directional adapter and, if it provisions
 schema, its own emitter. Feature code and entity declarations do not change.
 
-### How we built it
+Supabase is the only production-ready provisioning target in `0.1.0`. The
+extension contract is ready; Firebase, REST, and other adapters are not bundled
+yet.
+
+### How I built it
 
 Nodus uses a multi-phase compiler: discover declarations, parse and normalize
 them, infer safe facts, validate ambiguity and graph invariants, freeze one
@@ -89,7 +101,7 @@ study; repository-level code generation benefits from full dependency context
 and iterative debugging; and OpenAI's Codex guidance emphasizes durable repo
 instructions and executable gates. Other research shows AI tools can slow
 experienced maintainers in mature repositories and can generate insecure code.
-So our claim is not “AI is automatically faster.” It is that AI-assisted work
+So the claim is not “AI is automatically faster.” It is that AI-assisted work
 needs an architectural boundary that is coherent, inspectable, and falsifiable.
 The README links every source and states what Nodus has not yet measured.
 
@@ -99,7 +111,7 @@ The hard part was preserving one meaning across very different systems. A
 relationship affects the Dart API, local foreign keys, inverse collections,
 remote access, sync patches, delete policy, ordering scopes, and tests. The
 tempting solution is to let each generator infer independently; that creates
-drift. We instead built one canonical graph, made ambiguity fatal, and kept the
+drift. I instead built one canonical graph, made ambiguity fatal, and kept the
 emitters deliberately boring.
 
 Local-first semantics were another challenge. `await save()` cannot honestly
@@ -118,14 +130,14 @@ acknowledgement, remote changes, and rebase happen independently.
   static analysis, dartdoc validation, generated-output checks, and pub dry-run.
 - Built the Tasks demo as a universal release-mode macOS application.
 
-### What we learned
+### What I learned
 
 The useful boundary between human/AI intent and generated mechanics is not
 “model versus boilerplate.” It is “real domain decision versus safely derivable
 fact.” Nodus became simpler whenever a product choice stayed explicit and every
 mechanical consequence moved into the graph.
 
-We also learned to be careful with the vibe-coding claim. Architecture should
+I also learned to be careful with the vibe-coding claim. Architecture should
 make AI output easier to test and review, but that benefit must be measured. The
 submission includes the evidence behind the thesis and a proposed controlled
 evaluation rather than presenting inference as a benchmark.
@@ -170,11 +182,9 @@ are in `BUILD_WEEK.md`.
 5. **Vibe coding needs rails** — Codex and GPT-5.6 work against one architecture
    contract and executable generation, type, schema, and test feedback.
 
-## Remaining external fields
+## Submitted links
 
-- Public YouTube demo URL: pending upload.
-- Devpost feedback session ID: run `/feedback` in the primary Codex build task.
-- Repository access: make the repository public, or grant
-  `testing@devpost.com` and `build-week-event@openai.com` access while private.
-- Submitter country and submitter-type answers: enter the owner's accurate
-  details in the form.
+- Devpost project: https://devpost.com/software/nodus
+- Unlisted YouTube demo: https://youtu.be/eI_jyBBLImI
+- Public repository: https://github.com/sidux/nodus
+- Submitter: individual, France

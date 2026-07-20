@@ -6,22 +6,31 @@
 
 ![Nodus: one graph becomes every application layer](assets/build-week/nodus-devpost-thumbnail.png)
 
-> One graph. Every layer.
+> Flutter made multiplatform UI simpler. Nodus takes the next step.
 
-**Vibe coding needs rails.** Nodus turns a small, typed statement of product
-intent into deterministic application infrastructure that both people and
-coding agents can inspect, regenerate, and test.
+Flutter lets teams share an interface and much of their application code across
+platforms. The product behind that interface is still too often restated in
+reactive state, local tables, API models, synchronization logic, backend
+constraints and permissions, routes, and test doubles. Those copies can drift
+even when the widgets are shared.
 
-Nodus is a local-first Flutter application compiler. You declare a typed domain
-model once; Nodus generates the account-scoped entity graph, reactive
-identities, mutation drafts, Drift persistence, durable synchronization,
-Supabase schema and row-level security, typed queries, file-based routes, and a
-real in-memory test harness.
+Nodus builds on Flutter's multiplatform foundation with a local-first
+application compiler. You declare one typed product model; Nodus resolves it
+into a canonical graph and generates the account-scoped entities, reactive
+state, mutation drafts, Drift persistence, durable synchronization, backend
+schema and security, typed queries, file-based routes, and a real in-memory test
+harness.
+
+The result is more than one UI codebase: it is one product meaning carried
+coherently through the application layers that must behave the same on every
+platform. **Vibe coding needs rails, too.** The same typed boundary gives people
+and coding agents a smaller surface to edit and deterministic infrastructure to
+inspect, regenerate, and test.
 
 Nodus is currently at `0.1.0`. It is ready for evaluation and new applications,
 but its API may evolve before `1.0.0`. The package is not on pub.dev yet.
 
-## The idea
+## From one multiplatform UI to one multiplatform system
 
 ```mermaid
 flowchart LR

@@ -11,9 +11,10 @@ output, generated boundaries, and verification results.
 **Voiceover:**
 
 > Vibe coding can make the first screen fast, then leave five versions of the
-> same idea across models, tables, APIs, security, and tests. Nodus is a
-> local-first Flutter application compiler: one typed domain graph becomes every
-> application layer.
+> same idea across models, tables, APIs, security, and tests. Flutter made one
+> interface across platforms much simpler. Nodus takes the next step: one typed
+> product graph becomes the state, local data, sync, backend security, routes,
+> and tests behind that interface.
 
 ## 0:18–0:47 — One declaration
 
@@ -88,7 +89,8 @@ on “One graph. Every layer.”
 > experiments, challenge the architecture, implement the compiler and example,
 > and run 342 tests. Nodus gives vibe coding rails: people and agents express
 > intent once, then the compiler makes every layer reviewable and falsifiable.
-> One graph. Every layer.
+> It extends Flutter's multiplatform promise from the screen to the application
+> architecture. One graph. Every layer.
 
 ## Recording checklist
 
