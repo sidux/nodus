@@ -734,56 +734,59 @@ final class NodusGenerator {
   void normalizeDriftTestSchemaAccessors() {
     final snapshots = _schemaSnapshots(inferDriftSchemaDirectory());
     if (snapshots.isEmpty) return;
-    final renamedByTable = <String, Map<String, String>>{};
-    for (final entry in _entities(snapshots.last.file).entries) {
-      if (entry.key.type != 'table') continue;
-      final renamed = <String, String>{};
-      for (final column in _columns(entry.value).entries) {
-        final getter = _requiredString(column.value, 'getter_name');
-        if (getter != column.key) renamed[column.key] = getter;
-      }
-      if (renamed.isNotEmpty) renamedByTable[entry.key.name] = renamed;
-    }
-    if (renamedByTable.isEmpty) return;
     final testRoot = Directory(_path('test'));
     if (!testRoot.existsSync()) return;
-    final version = snapshots.last.version;
-    for (final file
-        in testRoot
-            .listSync(recursive: true, followLinks: false)
-            .whereType<File>()
-            .where((file) => file.path.endsWith('schema_v$version.dart'))) {
-      final source = file.readAsStringSync();
-      final tableClasses = RegExp(
-        r'class \w+ extends Table\s+with TableInfo<[\s\S]*?(?=\nclass \w+Data extends DataClass)',
-        multiLine: true,
-      );
-      final normalized = source.replaceAllMapped(tableClasses, (match) {
-        var tableSource = match.group(0)!;
-        final tableName = RegExp(
-          r"static const String \$name = '([^']+)';",
-        ).firstMatch(tableSource)?.group(1);
-        final renamed = renamedByTable[tableName];
-        if (renamed == null) return tableSource;
-        for (final entry in renamed.entries) {
-          final oldGetter = RegExp.escape(entry.key);
-          tableSource = tableSource.replaceFirstMapped(
-            RegExp(
-              '(late final GeneratedColumn<[^>]+> )$oldGetter( = '
-              'GeneratedColumn<[^>]+>\\()',
-            ),
-            (declaration) =>
-                '${declaration.group(1)}${entry.value}${declaration.group(2)}',
-          );
-          tableSource = _replaceAccessorMetadata(
-            tableSource,
-            oldGetter: entry.key,
-            newGetter: entry.value,
-          );
+    final generatedSchemas = testRoot
+        .listSync(recursive: true, followLinks: false)
+        .whereType<File>()
+        .toList(growable: false);
+    for (final snapshot in snapshots) {
+      final renamedByTable = <String, Map<String, String>>{};
+      for (final entry in _entities(snapshot.file).entries) {
+        if (entry.key.type != 'table') continue;
+        final renamed = <String, String>{};
+        for (final column in _columns(entry.value).entries) {
+          final getter = _requiredString(column.value, 'getter_name');
+          if (getter != column.key) renamed[column.key] = getter;
         }
-        return tableSource;
-      });
-      if (normalized != source) writeIfChanged(file, normalized);
+        if (renamed.isNotEmpty) renamedByTable[entry.key.name] = renamed;
+      }
+      if (renamedByTable.isEmpty) continue;
+      for (final file in generatedSchemas.where(
+        (file) => file.path.endsWith('schema_v${snapshot.version}.dart'),
+      )) {
+        final source = file.readAsStringSync();
+        final tableClasses = RegExp(
+          r'class \w+ extends Table\s+with TableInfo<[\s\S]*?(?=\nclass \w+Data extends DataClass)',
+          multiLine: true,
+        );
+        final normalized = source.replaceAllMapped(tableClasses, (match) {
+          var tableSource = match.group(0)!;
+          final tableName = RegExp(
+            r"static const String \$name = '([^']+)';",
+          ).firstMatch(tableSource)?.group(1);
+          final renamed = renamedByTable[tableName];
+          if (renamed == null) return tableSource;
+          for (final entry in renamed.entries) {
+            final oldGetter = RegExp.escape(entry.key);
+            tableSource = tableSource.replaceFirstMapped(
+              RegExp(
+                '(late final GeneratedColumn<[^>]+> )$oldGetter( = '
+                'GeneratedColumn<[^>]+>\\()',
+              ),
+              (declaration) =>
+                  '${declaration.group(1)}${entry.value}${declaration.group(2)}',
+            );
+            tableSource = _replaceAccessorMetadata(
+              tableSource,
+              oldGetter: entry.key,
+              newGetter: entry.value,
+            );
+          }
+          return tableSource;
+        });
+        if (normalized != source) writeIfChanged(file, normalized);
+      }
     }
   }
 
