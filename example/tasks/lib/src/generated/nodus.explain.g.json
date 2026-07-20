@@ -288,6 +288,7 @@
       ],
       "generatedApi": {
         "set": "TaskSet",
+        "setAccessor": "tasks",
         "list": "TaskList",
         "draft": "TaskMutationDraft",
         "create": true
@@ -452,6 +453,7 @@
       "actions": [],
       "generatedApi": {
         "set": "TaskActivitySet",
+        "setAccessor": "taskActivities",
         "list": "TaskActivityList",
         "draft": "TaskActivityMutationDraft",
         "create": false
@@ -570,6 +572,7 @@
       ],
       "generatedApi": {
         "set": "TaskProjectSet",
+        "setAccessor": "taskProjects",
         "list": "TaskProjectList",
         "draft": "TaskProjectMutationDraft",
         "create": true

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dart_style/dart_style.dart';
 
 import '../configuration.dart';
+import 'conformance_inventory.dart';
 
 typedef CommandRunner =
     Future<void> Function(
@@ -30,8 +31,9 @@ Commands:
   init --target NAME                   Create inferred package graph setup.
   generate                             Regenerate application APIs quickly.
   watch                                Regenerate while entity sources change.
-  check                                Fail if generated APIs are stale.
+  check                                Fail if generated APIs or inventories are stale.
   explain [ENTITY] [--json]            Explain the resolved graph or entity.
+  inventory [--write|--check|--json]   Classify semantic migration debt.
   migrate NAME                         Generate a named schema migration.
 ''';
 
@@ -73,6 +75,36 @@ final class NodusToolUsageException implements Exception {
 
   @override
   String toString() => message;
+}
+
+enum NodusInventoryMode { print, write, check, json }
+
+final class NodusInventoryOptions {
+  const NodusInventoryOptions({
+    this.mode = NodusInventoryMode.print,
+    this.showHelp = false,
+  });
+
+  final NodusInventoryMode mode;
+  final bool showHelp;
+}
+
+NodusInventoryOptions parseInventoryOptions(List<String> arguments) {
+  if (arguments.isEmpty) return const NodusInventoryOptions();
+  if (arguments.length != 1) {
+    throw const NodusToolUsageException(
+      'Usage: dart run nodus inventory [--write|--check|--json]',
+    );
+  }
+  return switch (arguments.single) {
+    '--write' => const NodusInventoryOptions(mode: NodusInventoryMode.write),
+    '--check' => const NodusInventoryOptions(mode: NodusInventoryMode.check),
+    '--json' => const NodusInventoryOptions(mode: NodusInventoryMode.json),
+    '--help' || '-h' => const NodusInventoryOptions(showHelp: true),
+    final unknown => throw NodusToolUsageException(
+      'Unknown inventory argument: $unknown',
+    ),
+  };
 }
 
 NodusGenerationOptions parseGenerationOptions(List<String> arguments) {
@@ -257,6 +289,7 @@ final class NodusGenerator {
     try {
       await _run('dart', ['run', 'build_runner', 'build']);
       await _verifySchemaLock(const NodusGenerationOptions(), checkOnly: true);
+      _checkConformanceInventoryIfPresent();
     } on Object catch (error, stackTrace) {
       failure = error;
       failureStack = stackTrace;
@@ -332,6 +365,56 @@ final class NodusGenerator {
     return lines.join('\n');
   }
 
+  Future<String?> inventory(NodusInventoryOptions options) async {
+    if (options.showHelp) return null;
+    _requireConsumerPackage();
+    final before = _generatedSources();
+    try {
+      if (options.mode == NodusInventoryMode.json && _usesDefaultRunner) {
+        await _runQuietly('dart', ['run', 'build_runner', 'build']);
+      } else {
+        await _run('dart', ['run', 'build_runner', 'build']);
+      }
+      final inventory = NodusConformanceInventory(root: root).scan();
+      switch (options.mode) {
+        case NodusInventoryMode.print:
+          return inventory.toMarkdown();
+        case NodusInventoryMode.json:
+          return inventory.toPrettyJson();
+        case NodusInventoryMode.write:
+          final output = File(_path(nodusConformanceInventoryPath));
+          output.parent.createSync(recursive: true);
+          writeIfChanged(output, inventory.toMarkdown());
+          _report('Updated $nodusConformanceInventoryPath.');
+          return null;
+        case NodusInventoryMode.check:
+          final output = File(_path(nodusConformanceInventoryPath));
+          if (!output.existsSync() ||
+              output.readAsStringSync() != inventory.toMarkdown()) {
+            throw const NodusToolUsageException(
+              'Nodus semantic conformance inventory is stale; run '
+              '`dart run nodus inventory --write`.',
+            );
+          }
+          _report('Nodus semantic conformance inventory is current.');
+          return null;
+      }
+    } finally {
+      _restoreGeneratedSources(before, _generatedSources());
+    }
+  }
+
+  void _checkConformanceInventoryIfPresent() {
+    final output = File(_path(nodusConformanceInventoryPath));
+    if (!output.existsSync()) return;
+    final current = NodusConformanceInventory(root: root).scan().toMarkdown();
+    if (output.readAsStringSync() == current) return;
+    throw const NodusToolUsageException(
+      'Nodus semantic conformance inventory is stale; run '
+      '`dart run nodus inventory --write`.',
+    );
+  }
+
   Map<String, String> _generatedSources() {
     final result = <String, String>{};
     final lib = Directory(_path('lib'));
@@ -344,7 +427,9 @@ final class NodusGenerator {
             relative.endsWith('.dart');
         if (!privateGeneratedDart &&
             !relative.endsWith('.g.dart') &&
-            !relative.endsWith('.g.json')) {
+            !relative.endsWith('.g.json') &&
+            !relative.endsWith('.freezed.dart') &&
+            !relative.endsWith('.drift.dart')) {
           continue;
         }
         result[relative] = entry.readAsStringSync();

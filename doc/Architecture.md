@@ -955,7 +955,10 @@ The supported tool workflow is:
 - `dart run nodus watch` for continuous incremental generation;
 - `dart run nodus check` for a non-persistent stale-output/fingerprint check;
 - `dart run nodus explain [Entity] [--json]` for human or machine-readable
-  resolved intent and provenance; and
+  resolved intent and provenance;
+- `dart run nodus inventory [--write|--check|--json]` for deterministic,
+  metadata-aware classification of replaceable application mechanics with
+  source evidence and the generated replacement; and
 - `dart run nodus migrate <name>` for Drift history, target schema, and reviewed
   migration artifacts.
 

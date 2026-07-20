@@ -36,7 +36,7 @@ String emitEntityGraphExplanation(EntityGraphSpec graph) {
                 'fields': action.targetFields,
               },
           ],
-          'generatedApi': {'set': '${entity.className}Set', 'list': '${entity.className}List', 'draft': '${entity.className}MutationDraft', 'create': entity.canCreatePublicly},
+          'generatedApi': {'set': '${entity.className}Set', 'setAccessor': entity.setAccessor, 'list': '${entity.className}List', 'draft': '${entity.className}MutationDraft', 'create': entity.canCreatePublicly},
         },
     ],
   })}\n';

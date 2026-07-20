@@ -52,6 +52,18 @@ Future<void> main(List<String> arguments) async {
       );
       return;
     }
+    if (command == 'inventory') {
+      final options = parseInventoryOptions(arguments.skip(1).toList());
+      if (options.showHelp) {
+        stdout.writeln(
+          'Usage: dart run nodus inventory [--write|--check|--json]',
+        );
+        return;
+      }
+      final output = await generator.inventory(options);
+      if (output != null) stdout.write(output);
+      return;
+    }
     final generationArguments = command == 'migrate'
         ? _migrationArguments(arguments.skip(1).toList())
         : arguments;

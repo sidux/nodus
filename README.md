@@ -414,8 +414,9 @@ durable work without requiring Supabase credentials.
 | `dart run nodus generate` | Regenerate application APIs quickly |
 | `dart run nodus watch` | Regenerate while domain or page sources change |
 | `dart run nodus explain [ENTITY] [--json]` | Explain schema, sync, capability, and field inference |
+| `dart run nodus inventory [--write\|--check\|--json]` | Classify semantic migration debt from graph metadata and analyzer ASTs |
 | `dart run nodus migrate NAME` | Advance the schema and generate local and remote migrations |
-| `dart run nodus check` | Fail when generated output or the schema lock is stale |
+| `dart run nodus check` | Fail when generated output, the schema lock, or an opted-in semantic inventory is stale |
 
 ## Repository layout
 

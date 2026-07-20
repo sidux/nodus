@@ -70,6 +70,18 @@ void main() {
         throwsA(isA<NodusToolUsageException>()),
       );
     });
+
+    test('parses semantic inventory modes', () {
+      expect(parseInventoryOptions([]).mode, NodusInventoryMode.print);
+      expect(parseInventoryOptions(['--write']).mode, NodusInventoryMode.write);
+      expect(parseInventoryOptions(['--check']).mode, NodusInventoryMode.check);
+      expect(parseInventoryOptions(['--json']).mode, NodusInventoryMode.json);
+      expect(parseInventoryOptions(['--help']).showHelp, isTrue);
+      expect(
+        () => parseInventoryOptions(['--write', '--json']),
+        throwsA(isA<NodusToolUsageException>()),
+      );
+    });
   });
 
   group('Drift migration generation', () {
@@ -569,6 +581,84 @@ void main() {
       containsPair('name', 'Note'),
     );
   });
+
+  test(
+    'semantic inventory write and check use the production scanner',
+    () async {
+      final fixture = _Fixture(createPackage: true);
+      addTearDown(fixture.dispose);
+      fixture.file('lib/src/generated/nodus.explain.g.json')
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          jsonEncode({
+            'graph': 'Fixture',
+            'schemaVersion': 1,
+            'targets': ['supabase'],
+            'entities': [
+              {
+                'name': 'Note',
+                'table': 'notes',
+                'source': 'package:fixture/note.dart',
+                'ownership': 'separate',
+                'cardinality': 'unbounded',
+                'sync': {'mode': 'replicated', 'target': 'supabase'},
+                'capabilities': <String, Object?>{},
+                'fields': <Object?>[],
+                'indexes': <Object?>[],
+                'actions': <Object?>[],
+                'generatedApi': {
+                  'set': 'NoteSet',
+                  'setAccessor': 'notes',
+                  'list': 'NoteList',
+                  'draft': 'NoteMutationDraft',
+                  'create': true,
+                },
+              },
+            ],
+          }),
+        );
+      final source = fixture.file('lib/note.dart')
+        ..writeAsStringSync('abstract class Note {}\n');
+      final collateral = fixture.file('lib/provider.g.dart')
+        ..writeAsStringSync('// stable generated output\n');
+      final newlyGenerated = fixture.file('lib/provider.freezed.dart');
+      final commands = <String>[];
+      final generator = fixture.generator(
+        runCommand: (executable, arguments, {required workingDirectory}) async {
+          commands.add('$executable ${arguments.join(' ')}');
+          collateral.writeAsStringSync('// transient build output\n');
+          newlyGenerated.writeAsStringSync('// transient new output\n');
+        },
+      );
+
+      await generator.inventory(
+        const NodusInventoryOptions(mode: NodusInventoryMode.write),
+      );
+      await generator.inventory(
+        const NodusInventoryOptions(mode: NodusInventoryMode.check),
+      );
+
+      source.writeAsStringSync(
+        'abstract class Note {}\n'
+        'Object stale() => NoteList.query(graph, pageSize: 1);\n',
+      );
+      await expectLater(
+        generator.inventory(
+          const NodusInventoryOptions(mode: NodusInventoryMode.check),
+        ),
+        throwsA(
+          isA<NodusToolUsageException>().having(
+            (error) => error.message,
+            'message',
+            contains('inventory is stale'),
+          ),
+        ),
+      );
+      expect(commands, everyElement('dart run build_runner build'));
+      expect(collateral.readAsStringSync(), '// stable generated output\n');
+      expect(newlyGenerated.existsSync(), isFalse);
+    },
+  );
 
   test(
     'deferred orchestration preserves the canonical Supabase schema',
