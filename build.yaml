@@ -7,7 +7,10 @@ builders:
         - "lib/src/generated/entities/{{}}.entity.g.dart"
     auto_apply: dependents
     build_to: source
-    runs_before: ["nodus:entity_graph", "drift_dev:not_shared"]
+    runs_before:
+      - "nodus:entity_graph"
+      - "riverpod_generator:riverpod_generator"
+      - "drift_dev:not_shared"
     defaults:
       generate_for:
         include:
@@ -27,7 +30,10 @@ builders:
         - "supabase/nodus/schema.sql"
     auto_apply: dependents
     build_to: source
-    runs_before: ["nodus:file_routes", "drift_dev:not_shared"]
+    runs_before:
+      - "nodus:file_routes"
+      - "riverpod_generator:riverpod_generator"
+      - "drift_dev:not_shared"
   file_routes:
     import: "package:nodus/builder.dart"
     builder_factories: ["inferredFileRoutesBuilder"]
@@ -36,3 +42,4 @@ builders:
         - "lib/src/generated/routes/{{}}/not_found.routes.g.dart"
     auto_apply: dependents
     build_to: source
+    runs_before: ["riverpod_generator:riverpod_generator"]
