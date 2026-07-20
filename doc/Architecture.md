@@ -1543,6 +1543,8 @@ Generated sets provide:
 - synchronous generated `by...` lookup for a bounded complete set and a
   generated `<Entity>Lookup.by...` lease for an unbounded set, only when an
   unconditional unique index with non-null key fields proves singularity;
+- generated `createOrGetBy...` on a bounded complete set for the same safe
+  unconditional unique indexes, including owner-scoped and compound keys;
 - typed query acquisition, predicates, ordering, paging, and refresh;
 - stable observation of identity and relevant fields.
 
@@ -1555,6 +1557,14 @@ Feature code MUST NOT repeat lookup-lease plumbing, return the entity beyond
 that callback, or translate absence inside a repository/access façade. Bounded
 sets continue to expose synchronous `byId` and `require` because declaration
 guarantees that their complete identity map is already retained.
+
+`createOrGetBy...` checks the complete bounded identity map and otherwise
+delegates to the one generated durable `create` path. Optimistic registration
+happens before that create first yields, so concurrent callers in one entity
+graph converge on the registered identity. Finding an existing identity never
+overwrites its non-key fields. Generation MUST NOT expose this convenience for
+unbounded sets, conditional indexes, nullable unique keys, or indexes whose
+fields cannot be supplied through the canonical create contract.
 
 A generated `<Entity>Lookup` represents exactly zero or one retained stable
 identity. Its constructor name and typed parameters derive from the unique key,

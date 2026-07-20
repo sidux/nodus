@@ -2624,6 +2624,11 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
     }
     buffer.writeln('    );');
     buffer.writeln('  }');
+    _emitCreateOrGetMethods(
+      buffer,
+      spec,
+      cachesAuthenticatedOwner: cachesAuthenticatedOwner,
+    );
   }
   buffer
     ..writeln(
@@ -2671,6 +2676,67 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
     ..writeln();
   if (spec.canCollaborate) {
     _emitCollaborationApi(buffer, spec);
+  }
+}
+
+void _emitCreateOrGetMethods(
+  StringBuffer buffer,
+  EntitySpec spec, {
+  required bool cachesAuthenticatedOwner,
+}) {
+  if (spec.cardinality != Cardinality.bounded) return;
+  final createParameterNames = {
+    for (final field in spec.createParameters) field.name,
+  };
+  for (final index in spec.indexes.where(
+    (candidate) =>
+        candidate.unique &&
+        candidate.condition == null &&
+        candidate.fieldNames.every(
+          (name) =>
+              !spec.fields.singleWhere((field) => field.name == name).nullable,
+        ),
+  )) {
+    final lookupFields = index.ownerScoped
+        ? index.fieldNames
+              .where((name) => name != spec.ownerField.name)
+              .toList(growable: false)
+        : index.fieldNames;
+    if (lookupFields.isEmpty ||
+        lookupFields.any((name) => !createParameterNames.contains(name)) ||
+        (index.ownerScoped && !cachesAuthenticatedOwner)) {
+      continue;
+    }
+    final suffixFields = lookupFields.isEmpty ? index.fieldNames : lookupFields;
+    final suffix = suffixFields.map(_upperCamelIdentifier).join('And');
+    final lookupMethod = 'by$suffix${index.ownerScoped ? 'ForOwner' : ''}';
+    final methodName =
+        'createOrGetBy$suffix${index.ownerScoped ? 'ForOwner' : ''}';
+    buffer
+      ..writeln()
+      ..writeln('  Future<${spec.className}> $methodName({')
+      ..writeln('    LocalId<${spec.className}>? id,');
+    _emitCreateParameters(buffer, spec.createParameters);
+    buffer
+      ..writeln('  }) async {')
+      ..writeln('    final existing = $lookupMethod(');
+    if (index.ownerScoped) {
+      buffer.writeln('      ${spec.ownerField.name}: _ownerId,');
+    }
+    for (final fieldName in lookupFields) {
+      buffer.writeln('      $fieldName: $fieldName,');
+    }
+    buffer
+      ..writeln('    );')
+      ..writeln('    if (existing != null) return existing;')
+      ..writeln('    return create(')
+      ..writeln('      id: id,');
+    for (final field in spec.createParameters) {
+      buffer.writeln('      ${field.name}: ${field.name},');
+    }
+    buffer
+      ..writeln('    );')
+      ..writeln('  }');
   }
 }
 

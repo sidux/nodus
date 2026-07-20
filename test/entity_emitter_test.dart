@@ -401,6 +401,29 @@ void main() {
     expect(
       first,
       contains(
+        'Future<WorkItem> createOrGetByStatementForOwner({\n'
+        '    LocalId<WorkItem>? id,',
+      ),
+    );
+    expect(
+      first,
+      contains(
+        'final existing = byStatementForOwner(\n'
+        '      ownerId: _ownerId,\n'
+        '      statement: statement,',
+      ),
+    );
+    expect(first, contains('if (existing != null) return existing;'));
+    expect(
+      first,
+      contains(
+        'Future<WorkItem> createOrGetBySortOrderAndStatement({\n'
+        '    LocalId<WorkItem>? id,',
+      ),
+    );
+    expect(
+      first,
+      contains(
         'WorkItem? bySortOrderAndStatement({\n'
         '    required int sortOrder,\n'
         '    required String statement,',
@@ -918,6 +941,7 @@ void main() {
       expect(output, contains('WorkItemLookup.byOwnerAndStatement('));
       expect(output, contains('WorkItemLookup.bySortOrderAndStatement('));
       expect(output, contains('pageSize: 1'));
+      expect(output, isNot(contains('createOrGetBy')));
       expect(output, isNot(contains('WorkItemList.forOwnerAndStatement(')));
       expect(output, isNot(contains('WorkItemList.forSortOrderAndStatement(')));
     },
