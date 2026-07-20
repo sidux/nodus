@@ -145,7 +145,14 @@ targets:
       - \$package\$
     builders:
       drift_dev:drift_dev:
-        enabled: false
+        generate_for:
+          include:
+            - lib/**
+          exclude:
+            - lib/src/generated/nodus.runtime.g.dart
+        options:
+          databases:
+            $packageName: lib/src/generated/nodus.runtime.g.dart
       drift_dev:not_shared:
         generate_for:
           - lib/src/generated/nodus.runtime.g.dart

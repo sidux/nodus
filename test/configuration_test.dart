@@ -61,6 +61,9 @@ dependencies:
     final build = File('${root.path}/build.yaml').readAsStringSync();
     expect(build, contains('lib/src/generated/nodus.runtime.g.dart'));
     expect(build, contains('nodus.lock'));
+    expect(build, contains('include:\n            - lib/**'));
+    expect(build, contains('exclude:\n            - lib/src/generated'));
+    expect(build, isNot(contains('enabled: false')));
     expect(
       build,
       contains('tasks_example: lib/src/generated/nodus.runtime.g.dart'),
