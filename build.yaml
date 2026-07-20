@@ -1,0 +1,38 @@
+builders:
+  local_entity:
+    import: "package:nodus/builder.dart"
+    builder_factories: ["inferredLocalEntityBuilder"]
+    build_extensions:
+      "^lib/{{}}.dart":
+        - "lib/src/generated/entities/{{}}.entity.g.dart"
+    auto_apply: dependents
+    build_to: source
+    runs_before: ["nodus:entity_graph", "drift_dev:not_shared"]
+    defaults:
+      generate_for:
+        include:
+          - "lib/**/domain/**.dart"
+        exclude:
+          - "lib/**.g.dart"
+          - "lib/src/generated/**"
+  entity_graph:
+    import: "package:nodus/builder.dart"
+    builder_factories: ["inferredEntityGraphBuilder"]
+    build_extensions:
+      "$package$":
+        - "lib/nodus.g.dart"
+        - "lib/src/generated/nodus.runtime.g.dart"
+        - "lib/src/generated/nodus.explain.g.json"
+        - "test/nodus_test_harness.g.dart"
+        - "supabase/nodus/schema.sql"
+    auto_apply: dependents
+    build_to: source
+    runs_before: ["nodus:file_routes", "drift_dev:not_shared"]
+  file_routes:
+    import: "package:nodus/builder.dart"
+    builder_factories: ["inferredFileRoutesBuilder"]
+    build_extensions:
+      "^lib/features/{{}}/presentation/pages/not_found.dart":
+        - "lib/src/generated/routes/{{}}/not_found.routes.g.dart"
+    auto_apply: dependents
+    build_to: source

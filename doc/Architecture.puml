@@ -1,0 +1,432 @@
+' Entity-first local-first architecture atlas.
+' Render every @startuml block to obtain the complete four-view diagram.
+' The Markdown contract remains normative; this file is its visual map.
+
+@startuml architecture-01-intent-generation-runtime
+!pragma layout smetana
+allowmixing
+title 1/4 — Declare intent once; infer and generate the mechanics
+
+left to right direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam linetype ortho
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowColor #455A64
+skinparam packageBorderColor #455A64
+skinparam packageTitleFontStyle bold
+skinparam noteBorderColor #455A64
+skinparam noteBackgroundColor #FFFDE7
+
+package "HANDWRITTEN INTENT\nsmall, stable, application-owned" as Authored #E3F2FD {
+  abstract class "@Entity\nabstract public domain type" as Entity #BBDEFB
+  component "Persisted fields + defaults\nnominal IDs + relationships\ninvariants + computed business methods" as EntityIntent #E3F2FD
+  component "Typed ownership + concise capabilities\nOwnedBy<Self, Owner> · Ordered · Component\nArchivable · SoftDeletable · Activatable\nCollaborative<Principal> · ActivityTracked/ActivityOf" as Capabilities #E3F2FD
+  abstract class "@EntityGraph\none graph declaration" as GraphDeclaration #BBDEFB
+  component "Filesystem pages\nwidget constructor = route contract" as Pages #E3F2FD
+  component "Only irreducible overrides\nambiguity · policy · codec · target\nsource process · projection" as Overrides #E3F2FD
+
+  Entity --> EntityIntent
+  Entity --> Capabilities
+  Overrides ..> Entity : only when inference is unsafe
+}
+
+package "BUILD-TIME ENTITY-FIRST GENERATION\nno runtime reflection" as Build #FFF3E0 {
+  component "1. Parse the complete graph" as Parse #FFE0B2
+  component "2. Normalize one typed\nsemantic intermediate representation" as Normalize #FFE0B2
+  component "3. Infer once by precedence\ntype → default → name → relationship/index\n→ graph convention → explicit override" as Infer #FFE0B2
+  component "4. Validate at compile time\nambiguity · collisions · unsafe relations\nunsupported types · adapter capabilities" as Validate #FFE0B2
+  artifact "EntityGraphDefinition\nentities + resolved relationship proofs\n+ derivation provenance" as Definition #FFCC80
+  component "5. Independent deterministic emitters\nconsume facts; never repeat inference" as Emit #FFE0B2
+  component "Explain report\nvalue + reason + override + generated shape" as Explain #FFE0B2
+  component "Isolated route pass\npage tree + nominal type/codec catalog" as RoutePass #FFE0B2
+
+  Parse --> Normalize
+  Normalize --> Infer
+  Infer --> Validate
+  Validate --> Definition
+  Definition --> Emit
+  Definition --> Explain
+  Definition --> RoutePass
+}
+
+package "GENERATED PUBLIC CONTRACT\nnever hand-edit generated files" as Generated #E8F5E9 {
+  component "Domain implementation\n<Entity>Record · observable fields\nvalidation · codecs · rollback" as Record #C8E6C9
+  component "Mutation and process surface\n<Entity>Set.create/createFirst/fromSource\ndirect entity actions + collaboration\nautomatic atomic activity append\nbeginEdit + typed draft · transactions" as MutationApi #C8E6C9
+  component "Read surface\nnominal IDs · typed queries\n<Entity>List named constructors\nrelationship cardinality + leases" as ReadApi #C8E6C9
+  component "Local persistence\nDrift tables · mappings · indexes\nconstraints · reviewed migrations" as LocalArtifacts #C8E6C9
+  component "Synchronization contract\nqueue codecs · target groups · registry\npush/pull protocol · upcasters" as SyncArtifacts #C8E6C9
+  component "Target artifacts\nDDL · indexes · RLS/grants\nchange capture · RPC/provisioning" as RemoteArtifacts #C8E6C9
+  component "Typed routing\npaths · parameters · guards\nexternal-input decoding" as RoutingArtifacts #C8E6C9
+}
+
+package "ONE LIVE ACCOUNT-SCOPED RUNTIME" as Runtime #F3E5F5 {
+  component "Optional <Application>EntityGraphHost\nplatform identity subscription only" as EntityGraphHost #E1BEE7
+  component "AccountEntityGraphSession\nserialized open · switch · close" as EntityGraphSession #E1BEE7
+  component "<Application>EntityGraph\npublic domain facade" as EntityGraph #E1BEE7
+  component "Generated <Entity>Sets\nqueries · transactions · relationships" as Sets #E1BEE7
+  component "Private narrow runtimes\nidentity · mutation + activity · query · transaction\nlocal store · process · synchronization" as PrivateRuntimes #E1BEE7
+  component "IdentityMap\none stable MobX entity object per ID" as IdentityMap #E1BEE7
+  database "One account Drift store\naccepted + optimistic state\npending operations · conflicts\nqueue work · receipts · cursors" as Drift #D1C4E9
+  component "One durable work scheduler\nsync · process · projection lanes" as Scheduler #E1BEE7
+  component "Generated typed adapter registry" as Registry #E1BEE7
+
+  EntityGraphHost --> EntityGraphSession
+  EntityGraphSession --> EntityGraph
+  EntityGraph *-- Sets
+  EntityGraph *-- PrivateRuntimes
+  PrivateRuntimes *-- IdentityMap
+  PrivateRuntimes *-- Drift
+  PrivateRuntimes *-- Scheduler
+  PrivateRuntimes *-- Registry
+}
+
+Authored --> Parse : the only authored sources
+Emit --> Record
+Emit --> MutationApi
+Emit --> ReadApi
+Emit --> LocalArtifacts
+Emit --> SyncArtifacts
+Emit --> RemoteArtifacts
+Pages --> RoutePass
+RoutePass --> RoutingArtifacts
+
+Record --> IdentityMap : concrete stable identities
+MutationApi --> Sets
+ReadApi --> Sets
+LocalArtifacts --> Drift
+SyncArtifacts --> Scheduler
+SyncArtifacts --> Registry
+Definition --> EntityGraph : opens only after definition\nand bindings validate
+
+note bottom of EntityGraph
+  entityGraph identifies the account, store, identity map,
+  transaction coordinator, clock, ID source, and target registry.
+  It exposes domain sets, not its private runtimes.
+  It is not a model, repository, provider, or service locator.
+end note
+
+note bottom of EntityGraphHost
+  A host is optional and lifecycle-only. It never proxies entity sets,
+  persistence, mutations, queries, or synchronization.
+end note
+
+note bottom of Generated
+  A declaration change regenerates mechanics end to end.
+  It cannot invent product layout or real business decisions.
+end note
+
+legend bottom
+  |= Surface |= Meaning |
+  | Blue | Handwritten domain intent |
+  | Orange | Build-time inference and validation |
+  | Green | Deterministic generated contract |
+  | Purple | Account-scoped runtime |
+endlegend
+@enduml
+
+
+@startuml architecture-02-write-push-pull-observe
+title 2/4 — One local-first write, asynchronous convergence, precise UI reaction
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam sequenceArrowThickness 1
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 90
+skinparam noteBorderColor #455A64
+skinparam noteBackgroundColor #FFFDE7
+hide footbox
+
+actor "Flutter UI\nObserver + Hooks" as UI
+participant "Generated domain API\nset creation / direct entity actions\ndraft / typed list and lookup" as API
+participant "EntityGraph\ntransaction coordinator" as Graph
+participant "IdentityMap\nMobX projection" as Identity
+database "Drift\nprojection + durable work" as DB
+queue "Durable scheduler\nsync / process / projection lane" as Queue
+participant "Generated router\n+ typed adapter" as Adapter
+participant "Remote target\nSupabase / Convex / API" as Remote
+
+== Typed read and observation ==
+UI -> API : acquire typed <Entity>Query or <Entity>List
+API -> Graph : structural query key + explicit lease
+Graph -> DB : indexed/batched local query
+DB --> Graph : typed rows
+Graph -> Identity : materialize/update the same object per nominal ID
+Identity --> UI : stable identities + exact fields/membership read
+note over UI,Identity
+  MobX records exactly what each Observer reads.
+  Hooks own only widget-lifetime interaction resources.
+end note
+
+== Local-first mutation ==
+UI -> API : create/fromSource / entity action / beginEdit().save() / transaction
+API -> Graph : one typed mutation intent
+Graph -> Graph : validate complete candidate + invariant + authorization
+Graph -> Identity : one optimistic MobX action
+Identity --> UI : immediate coherent projection
+
+Graph -> DB : BEGIN local transaction
+Graph -> DB : persist projection
+opt replicated, exported, durable process, or secondary projection
+  Graph -> DB : persist typed target/process/projection intent with stable operation ID
+end
+Graph -> DB : COMMIT
+DB --> Graph : local durability confirmed
+Graph --> API : Future completes
+API --> UI : success means local commit, never remote completion
+
+note over API,Graph
+  transaction(FutureOr body) keeps one optimistic overlay and one atomic batch.
+  Awaited inner mutations bind buffered commits; only the outer Future owns durability.
+end note
+
+alt local commit fails
+  DB --> Graph : typed persistence failure
+  Graph -> Identity : remove failed overlay; rebase later valid mutations
+  Graph --> UI : typed failure after deterministic rollback/rebase
+else local commit succeeds
+  note over DB,Queue
+    Projection and outbound work are atomic: neither can exist durably without the other.
+  end note
+end
+
+== Asynchronous sync, process, or projection work ==
+Queue -> DB : fairly claim bounded eligible work by target + direction
+DB --> Queue : leased operation batch
+Queue -> Adapter : generated typed payload + required version/receipt contract
+Adapter -> Remote : idempotent target operation
+Remote --> Adapter : canonical acknowledgement, process outcome, or projection receipt
+Adapter -> DB : atomic base/outcome/receipt merge + pending-overlay rebase
+DB -> Identity : publish only exact changed identities/fields/query membership
+Identity --> UI : only dependent reactions rerun
+
+== Collaboration and recovery ==
+Remote -->> Adapter : realtime signal (wake-up hint only)
+Adapter -> Queue : coalesce a durable pull request for this target
+Queue -> Adapter : pull after independent monotonic target cursor
+Adapter -> Remote : ordered change-log request
+Remote --> Adapter : canonical snapshots/tombstones + next cursor
+Adapter -> Adapter : validate descriptor/protocol; allowed deterministic upcast
+Adapter -> DB : atomic base + projection + cursor update
+DB -> Identity : update the same stable objects
+Identity --> UI : exact observers and acquired lists react
+
+note over Adapter,Remote
+  Signals may be lost, delayed, or duplicated.
+  Ordered cursor recovery is correctness; bounded snapshot recovery handles cursor expiry.
+end note
+
+note over UI,Remote
+  No repository, provider mirror, feature refresh registry, direct remote write,
+  raw patch map, duplicate DTO, per-row database stream, or global invalidation participates.
+end note
+@enduml
+
+
+@startuml architecture-03-modes-targets-ordering
+!pragma layout smetana
+title 3/4 — Authority modes, projections, adapters, and ordered collaboration
+
+top to bottom direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam linetype ortho
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowColor #455A64
+skinparam packageBorderColor #455A64
+skinparam noteBorderColor #455A64
+skinparam noteBackgroundColor #FFFDE7
+
+component "@EntityGraph\noptional defaultSyncTarget" as GraphDecl #BBDEFB
+component "@Entity\noptional sync mode or target override" as EntityDecl #BBDEFB
+component "Generated typed target enum + registry\nentity descriptor groups + capability validation" as TargetRegistry #C8E6C9
+component "One physical durable scheduler\nfair work-kind/target/direction lanes" as Scheduler #E1BEE7
+
+GraphDecl --> TargetRegistry : infer default routing
+EntityDecl --> TargetRegistry : inherit default; override only intent
+TargetRegistry --> Scheduler
+
+package "MODE IS AN AUTHORITY CONTRACT" as Modes #E8F5E9 {
+  component "localOnly\nDrift only\nlocal mutations: yes\nqueue / pull: none" as LocalOnly #C8E6C9
+  component "replicated\nlocal mutations: yes\naccepted remote base + pending overlay\npush + ordered pull + conflict rebase" as Replicated #C8E6C9
+  component "imported\nremote authoritative\nordinary local mutation API: absent\nordered pull only" as Imported #C8E6C9
+  component "exported\nDrift authoritative\nlocal mutations + idempotent outbox\nreceipt; no remote base/rebase" as Exported #C8E6C9
+}
+
+TargetRegistry --> LocalOnly : no target → safe default
+TargetRegistry --> Replicated : graph default or entity target
+TargetRegistry --> Imported : explicit only
+TargetRegistry --> Exported : explicit only
+
+package "SYNC TARGET ADAPTERS\ntransport is replaceable; domain is unchanged" as Targets #FFF3E0 {
+  component "SupabaseSyncAdapter\nSQL schema + RLS + RPC + log" as Supabase #FFE0B2
+  component "ConvexSyncAdapter\nnon-SQL protocol/provisioning" as Convex #FFE0B2
+  component "NamedExternalApiSyncAdapter\nonly if it satisfies declared mode capabilities" as External #FFE0B2
+  component "MultiMasterProtocolAdapter\none deterministic merge/recovery authority contract" as MultiMaster #FFE0B2
+}
+
+Scheduler --> Supabase : generated target lane
+Scheduler --> Convex : generated target lane
+Scheduler --> External : generated target lane
+Scheduler --> MultiMaster : one encapsulated authority lane
+Replicated ..> Scheduler
+Imported ..> Scheduler
+Exported ..> Scheduler
+
+note right of Targets
+  An entity names a stable target identifier, never an adapter class.
+  The composition root supplies exactly one compatible adapter per used target.
+  There is no handwritten entity-to-adapter map.
+end note
+
+package "SECONDARY PROJECTIONS — NEVER AUTHORITIES" as ProjectionPackage #E8F5E9 {
+  component "Generated typed projection outbox\ninferred codec · routing · operation ID\nexplicit mapper only for changed semantics" as Projections #C8E6C9
+  component "Search · analytics · calendar\nnotification · webhook · materialized view" as ProjectionTargets #C8E6C9
+  Projections --> ProjectionTargets : independent idempotent receipts
+}
+
+Scheduler --> Projections : independent failure-isolated lanes
+
+package "ORDERED CAPABILITY — SEMANTICS, NOT sortOrder" as Order #F3E5F5 {
+  component "implements Ordered" as Ordered #E1BEE7
+  component "Infer canonical typed scope tuple\nrelationship source → hierarchy → owner → bounded root\nexplicit orderScope only resolves ambiguity" as Scope #E1BEE7
+  component "Generated collection operations\nappend · prepend · moveBefore · moveAfter\nrelationship moveFirst · moveLast · neighbor moves\nexact operations only with a boundedness proof\nexact scope parameters → atomic transfer" as OrderApi #E1BEE7
+  component "Internal scalable rank\nindex = stored scope + lifecycle + rank + stable ID" as Rank #E1BEE7
+  component "Remote canonical scope lane\nhierarchy partition + deterministic source/target locks\nmonotonic typed {scope, version} receipts" as CanonicalOrder #E1BEE7
+
+  Ordered --> Scope
+  Scope --> OrderApi
+  OrderApi --> Rank
+  Rank --> CanonicalOrder
+}
+
+Replicated --> CanonicalOrder : semantic operation carries scope base version
+
+note bottom of Order
+  Creation/removal/restoration/move/reorder/transfer share the same scope lock and version.
+  Local and remote transfers reserve source + target lanes in deterministic key order.
+  Recursive transfer adds an owner/hierarchy-partition lock for cycle safety.
+  Transfer returns source + target receipts and appends by default.
+  Scope fields are immutable to ordinary edits. A move normally writes one member;
+  unbounded recovery expands keyset-indexed windows geometrically and never loads the scope.
+  Transaction-local optimistic members participate in the next boundary calculation.
+end note
+
+note bottom of Scheduler
+  One entity has one authority contract and may have several non-authoritative projections.
+  Projection failure never rolls authoritative state back.
+  Cross-target foreign keys, collaboration joins, or remote atomic invariants are rejected
+  unless an explicit loose-reference, saga, or integration-event contract owns compensation.
+end note
+@enduml
+
+
+@startuml architecture-04-boundaries-and-proof
+!pragma layout smetana
+title 4/4 — Dependency boundaries, extension points, and proof of conformance
+
+left to right direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam linetype ortho
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowColor #455A64
+skinparam packageBorderColor #455A64
+skinparam noteBorderColor #455A64
+skinparam noteBackgroundColor #FFFDE7
+
+package "DEPENDENCY DIRECTION" as Dependencies #E3F2FD {
+  component "Domain declarations\nannotations + nominal/value types only" as Domain #BBDEFB
+  component "Generated domain implementation\nmetadata + records + sets" as GeneratedDomain #C8E6C9
+  component "Generated EntityGraph\nruntime composition" as GeneratedGraph #C8E6C9
+  component "Application composition + UI\ninjection · MobX Observer · Hooks" as AppUI #E1BEE7
+
+  AppUI --> GeneratedGraph : uses
+  GeneratedGraph --> GeneratedDomain : composes
+  GeneratedDomain --> Domain : implements
+}
+
+package "ONE REUSABLE NODUS PACKAGE\none version · one setup · never depends on an application" as Reusable #FFF3E0 {
+  component "public domain surface\nannotations · capabilities · nominal values" as Annotations #FFE0B2
+  component "private compiler\nparser → canonical IR → inference → validation\nprovenance → deterministic emitters" as Generator #FFE0B2
+  component "private narrow runtimes\nidentity · mutation · query · transaction\nlocal store · process · sync" as CoreRuntime #FFE0B2
+  component "internal capability integrations\nDrift · MobX · Flutter · routing\ntarget/process/projection adapters" as Integrations #FFE0B2
+
+  Generator --> Annotations
+  CoreRuntime --> Annotations
+  Integrations --> CoreRuntime
+}
+
+Domain --> Annotations
+GeneratedDomain --> CoreRuntime
+GeneratedGraph --> Integrations
+
+package "ALLOWED NARROW EXTENSIONS" as Extensions #E8F5E9 {
+  component "typed value/source codec or pure mapper" as Codec #C8E6C9
+  component "typed SyncAdapter" as SyncAdapter #C8E6C9
+  component "explicit conflict/authorization policy" as Policy #C8E6C9
+  component "reviewed migration/backfill" as Migration #C8E6C9
+  component "typed process/projection destination\nexternal device/payment/file/computation port" as Port #C8E6C9
+}
+
+Extensions ..> Generator : typed inputs, compile-time checked
+Extensions ..> Integrations : injected at explicit composition boundary
+
+package "FORBIDDEN SECOND MODELS / HIDDEN COSTS" as Forbidden #FFEBEE {
+  component "Repositories · data/access · import/workflow services\ncommands/queries that only forward generated behavior" as NoRepo #FFCDD2
+  component "Any duplicate entity/query state\nprovider/view-model mirrors · global invalidation" as NoProvider #FFCDD2
+  component "Duplicate DTO/schema/serialization\nmanual registry/routes · raw IDs/maps" as NoDuplication #FFCDD2
+  component "Runtime reflection · emitter re-inference · N+1\nunbounded scan · compiler-wide invalidation\nper-row I/O subscriptions · scope-free rank indexes" as NoHiddenCost #FFCDD2
+}
+
+package "EVERY CHANGE MUST PROVE" as Proof #F3E5F5 {
+  component "Clean/no-op/incremental deterministic generation\n+ explain provenance + compile-failure contracts" as GenerateTest #E1BEE7
+  component "Formatting + zero-warning static analysis" as StaticTest #E1BEE7
+  component "Runtime + DB + sync-adapter + security tests" as RuntimeTest #E1BEE7
+  component "UI precision + lifecycle cleanup tests" as UITest #E1BEE7
+  component "Compiler + runtime bounded-cost budgets" as Bench #E1BEE7
+  component "Generated-output + migration-inventory drift checks" as DriftCheck #E1BEE7
+
+  GenerateTest --> StaticTest
+  StaticTest --> RuntimeTest
+  RuntimeTest --> UITest
+  UITest --> Bench
+  Bench --> DriftCheck
+}
+
+GeneratedGraph --> Proof : architectural change is accepted only after all gates
+
+note bottom of Dependencies
+  EntityGraphDefinition = immutable generated metadata.
+  EntityGraphHost = optional platform identity/session composition.
+  AccountEntityGraphSession = serialized account lifecycle.
+  EntityGraph = one live account runtime.
+  IdentityMap = stable observable entity instances.
+  Drift = durable local source observed by the application.
+  These names and responsibilities are never interchangeable.
+end note
+
+note bottom of Reusable
+  One distribution package does not mean one implementation unit.
+  Applications use the stable umbrella API and generated library;
+  they never import src/ or assemble private runtimes.
+end note
+
+note bottom of Forbidden
+  Renaming a wrapper to provider, repository, access, query, command, manager,
+  controller, or service does not make mechanical forwarding architectural.
+end note
+
+note bottom of Proof
+  Migration is complete only when no temporary wrapper/debt remains.
+  Missing generic capability is built once inside Nodus, then consumers migrate mechanically.
+end note
+@enduml

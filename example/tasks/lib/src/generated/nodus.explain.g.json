@@ -1,0 +1,565 @@
+{
+  "graph": "TasksExample",
+  "package": "tasks_example",
+  "schemaVersion": 1,
+  "targets": [
+    "supabase"
+  ],
+  "entities": [
+    {
+      "name": "Task",
+      "source": "package:tasks_example/features/tasks/domain/task.dart",
+      "table": "tasks",
+      "ownership": "separate",
+      "cardinality": "unbounded",
+      "sync": {
+        "mode": "replicated",
+        "target": "supabase"
+      },
+      "capabilities": {
+        "archivable": true,
+        "ordered": true,
+        "collaborative": true,
+        "activityTracked": true,
+        "component": false
+      },
+      "fields": [
+        {
+          "name": "id",
+          "type": "LocalId<Task>",
+          "column": "id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "ownerId",
+          "type": "LocalId<Account>",
+          "column": "owner_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "projectId",
+          "type": "LocalId<TaskProject>?",
+          "column": "project_id",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": "TaskProject",
+          "source": "entity declaration"
+        },
+        {
+          "name": "title",
+          "type": "String",
+          "column": "title",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "description",
+          "type": "String?",
+          "column": "description",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "status",
+          "type": "TaskStatus",
+          "column": "status",
+          "nullable": false,
+          "default": "todo",
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "priority",
+          "type": "TaskPriority",
+          "column": "priority",
+          "nullable": false,
+          "default": "normal",
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "dueAt",
+          "type": "DateTime?",
+          "column": "due_at",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "completedAt",
+          "type": "DateTime?",
+          "column": "completed_at",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "archivedAt",
+          "type": "DateTime?",
+          "column": "archived_at",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "createdAt",
+          "type": "DateTime",
+          "column": "created_at",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "orderRank",
+          "type": "OrderRank",
+          "column": "order_rank",
+          "nullable": false,
+          "default": "057896044618658097711785492504343953926634992332820282019728792003956564819967",
+          "generated": true,
+          "mutable": false,
+          "reference": null,
+          "source": "generated convention or capability"
+        },
+        {
+          "name": "deletedAt",
+          "type": "DateTime?",
+          "column": "deleted_at",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "serverVersion",
+          "type": "ServerVersion",
+          "column": "server_version",
+          "nullable": false,
+          "default": "0",
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "archivedAt",
+            "deletedAt",
+            "status",
+            "dueAt"
+          ],
+          "unique": false,
+          "scope": "field",
+          "keyset": true
+        },
+        {
+          "fields": [
+            "projectId",
+            "archivedAt",
+            "deletedAt"
+          ],
+          "unique": false,
+          "scope": "field",
+          "keyset": true
+        }
+      ],
+      "actions": [
+        {
+          "name": "edit",
+          "parameters": [
+            {
+              "name": "title",
+              "type": "String",
+              "named": true
+            },
+            {
+              "name": "description",
+              "type": "String?",
+              "named": true
+            },
+            {
+              "name": "priority",
+              "type": "TaskPriority",
+              "named": true
+            },
+            {
+              "name": "dueAt",
+              "type": "DateTime?",
+              "named": true
+            }
+          ],
+          "fields": [
+            "title",
+            "description",
+            "priority",
+            "dueAt"
+          ]
+        },
+        {
+          "name": "moveToProject",
+          "parameters": [
+            {
+              "name": "projectId",
+              "type": "LocalId<TaskProject>?",
+              "named": true
+            }
+          ],
+          "fields": [
+            "projectId"
+          ]
+        },
+        {
+          "name": "start",
+          "parameters": [],
+          "fields": [
+            "status",
+            "completedAt"
+          ]
+        },
+        {
+          "name": "complete",
+          "parameters": [],
+          "fields": [
+            "status",
+            "completedAt"
+          ]
+        },
+        {
+          "name": "reopen",
+          "parameters": [],
+          "fields": [
+            "status",
+            "completedAt"
+          ]
+        },
+        {
+          "name": "archive",
+          "parameters": [],
+          "fields": [
+            "archivedAt"
+          ]
+        },
+        {
+          "name": "unarchive",
+          "parameters": [],
+          "fields": [
+            "archivedAt"
+          ]
+        }
+      ],
+      "generatedApi": {
+        "set": "TaskSet",
+        "list": "TaskList",
+        "draft": "TaskMutationDraft",
+        "create": true
+      }
+    },
+    {
+      "name": "TaskActivity",
+      "source": "package:tasks_example/features/tasks/domain/task_activity.dart",
+      "table": "task_activities",
+      "ownership": "separate",
+      "cardinality": "unbounded",
+      "sync": {
+        "mode": "replicated",
+        "target": "supabase"
+      },
+      "capabilities": {
+        "archivable": false,
+        "ordered": false,
+        "collaborative": false,
+        "activityTracked": false,
+        "component": false
+      },
+      "fields": [
+        {
+          "name": "id",
+          "type": "LocalId<TaskActivity>",
+          "column": "id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "ownerId",
+          "type": "LocalId<Account>",
+          "column": "owner_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "subjectId",
+          "type": "LocalId<Task>",
+          "column": "subject_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "actorId",
+          "type": "LocalId<Account>",
+          "column": "actor_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "operation",
+          "type": "ActivityOperation",
+          "column": "operation",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "label",
+          "type": "String",
+          "column": "label",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "sourceOperationId",
+          "type": "String",
+          "column": "source_operation_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "occurredAt",
+          "type": "DateTime",
+          "column": "occurred_at",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "deletedAt",
+          "type": "DateTime?",
+          "column": "deleted_at",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "serverVersion",
+          "type": "ServerVersion",
+          "column": "server_version",
+          "nullable": false,
+          "default": "0",
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "subjectId",
+            "occurredAt"
+          ],
+          "unique": false,
+          "scope": "field",
+          "keyset": false
+        },
+        {
+          "fields": [
+            "occurredAt"
+          ],
+          "unique": false,
+          "scope": "field",
+          "keyset": false
+        },
+        {
+          "fields": [
+            "sourceOperationId"
+          ],
+          "unique": true,
+          "scope": "field",
+          "keyset": false
+        }
+      ],
+      "actions": [],
+      "generatedApi": {
+        "set": "TaskActivitySet",
+        "list": "TaskActivityList",
+        "draft": "TaskActivityMutationDraft",
+        "create": false
+      }
+    },
+    {
+      "name": "TaskProject",
+      "source": "package:tasks_example/features/tasks/domain/task_project.dart",
+      "table": "task_projects",
+      "ownership": "separate",
+      "cardinality": "bounded",
+      "sync": {
+        "mode": "replicated",
+        "target": "supabase"
+      },
+      "capabilities": {
+        "archivable": false,
+        "ordered": true,
+        "collaborative": false,
+        "activityTracked": false,
+        "component": false
+      },
+      "fields": [
+        {
+          "name": "id",
+          "type": "LocalId<TaskProject>",
+          "column": "id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "ownerId",
+          "type": "LocalId<Account>",
+          "column": "owner_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "title",
+          "type": "String",
+          "column": "title",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": true,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "orderRank",
+          "type": "OrderRank",
+          "column": "order_rank",
+          "nullable": false,
+          "default": "057896044618658097711785492504343953926634992332820282019728792003956564819967",
+          "generated": true,
+          "mutable": false,
+          "reference": null,
+          "source": "generated convention or capability"
+        },
+        {
+          "name": "deletedAt",
+          "type": "DateTime?",
+          "column": "deleted_at",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        },
+        {
+          "name": "serverVersion",
+          "type": "ServerVersion",
+          "column": "server_version",
+          "nullable": false,
+          "default": "0",
+          "generated": false,
+          "mutable": false,
+          "reference": null,
+          "source": "entity declaration"
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "deletedAt",
+            "title"
+          ],
+          "unique": false,
+          "scope": "field",
+          "keyset": true
+        }
+      ],
+      "actions": [],
+      "generatedApi": {
+        "set": "TaskProjectSet",
+        "list": "TaskProjectList",
+        "draft": "TaskProjectMutationDraft",
+        "create": true
+      }
+    }
+  ]
+}
