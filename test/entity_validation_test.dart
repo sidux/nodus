@@ -495,6 +495,7 @@ final class Account {}
           'nodus|lib/task.entity.g.dart': decodedMatches(
             allOf([
               contains('Future<EntityBulkMutationResult> removeHierarchy('),
+              contains('if (entity.ownerId != _ownerId) return false;'),
               contains('Future<EntityBulkMutationResult> restoreHierarchy('),
               contains(
                 'Future<EntityBulkMutationResult> setHierarchyArchived(',

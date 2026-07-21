@@ -2932,7 +2932,13 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln("    parentFieldName: '${parentField.name}',")
       ..writeln('    childrenFirst: true,')
       ..writeln('    pageSize: pageSize,')
-      ..writeln('    action: (entity) async {')
+      ..writeln('    action: (entity) async {');
+    if (cachesAuthenticatedOwner) {
+      buffer.writeln(
+        '      if (entity.${spec.ownerField.name} != _ownerId) return false;',
+      );
+    }
+    buffer
       ..writeln(
         '      if (entity.${spec.deletedAtField!.name} != null) return false;',
       )
@@ -2948,7 +2954,13 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln("    parentFieldName: '${parentField.name}',")
       ..writeln('    requireActiveExternalParent: true,')
       ..writeln('    pageSize: pageSize,')
-      ..writeln('    action: (entity) async {')
+      ..writeln('    action: (entity) async {');
+    if (cachesAuthenticatedOwner) {
+      buffer.writeln(
+        '      if (entity.${spec.ownerField.name} != _ownerId) return false;',
+      );
+    }
+    buffer
       ..writeln(
         '      if (entity.${spec.deletedAtField!.name} == null) return false;',
       )
@@ -2967,7 +2979,13 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         ..writeln("    parentFieldName: '${parentField.name}',")
         ..writeln('    childrenFirst: archived,')
         ..writeln('    pageSize: pageSize,')
-        ..writeln('    action: (entity) async {')
+        ..writeln('    action: (entity) async {');
+      if (cachesAuthenticatedOwner) {
+        buffer.writeln(
+          '      if (entity.${spec.ownerField.name} != _ownerId) return false;',
+        );
+      }
+      buffer
         ..writeln(
           '      if (entity.${spec.deletedAtField!.name} != null || '
           '(entity.${spec.archivedAtField!.name} != null) == archived) return false;',
