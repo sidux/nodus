@@ -24,6 +24,7 @@ final class EntitySpec {
     this.persistedVariants = const [],
     this.exclusiveFieldGroups = const [],
     this.compoundIndexes = const [],
+    this.coIdentityClassNames = const [],
     this.typeImports = const [],
     this.protocolVersion = 1,
     this.setAccessorOverride,
@@ -55,6 +56,7 @@ final class EntitySpec {
   final List<PersistedVariantSpec> persistedVariants;
   final List<ExclusiveFieldGroupSpec> exclusiveFieldGroups;
   final List<CompoundIndexSpec> compoundIndexes;
+  final List<String> coIdentityClassNames;
   final List<String> typeImports;
   final List<RlsOperation> relationshipAccessOperations;
   final List<String>? orderScopeFieldNames;
@@ -531,6 +533,7 @@ final class EntitySpec {
       ],
       exclusiveFieldGroups: exclusiveFieldGroups,
       compoundIndexes: compoundIndexes,
+      coIdentityClassNames: coIdentityClassNames,
       typeImports: typeImports,
       protocolVersion: protocolVersion,
       setAccessorOverride: setAccessorOverride,
@@ -952,6 +955,25 @@ final class EntityGraphSpec {
   final List<ActiveRelationshipCollectionSpec> relationships;
   final List<ActivityTrackingSpec> activityTrackings;
 
+  List<(EntitySpec, EntitySpec)> get coIdentityPairs {
+    final byClass = {for (final entity in entities) entity.className: entity};
+    final seen = <String>{};
+    final pairs = <(EntitySpec, EntitySpec)>[];
+    for (final source in entities) {
+      for (final targetName in source.coIdentityClassNames) {
+        final target = byClass[targetName]!;
+        final names = [source.className, target.className]..sort();
+        if (seen.add(names.join('|'))) pairs.add((source, target));
+      }
+    }
+    pairs.sort((left, right) {
+      final leftName = '${left.$1.className}|${left.$2.className}';
+      final rightName = '${right.$1.className}|${right.$2.className}';
+      return leftName.compareTo(rightName);
+    });
+    return List.unmodifiable(pairs);
+  }
+
   List<SyncTargetSpec> get syncTargets {
     final targets = <String, SyncTargetSpec>{};
     for (final binding in syncBindings) {
@@ -1334,6 +1356,7 @@ final class FieldSpec {
     required this.minLength,
     required this.maxLength,
     this.allowWhitespace = false,
+    this.normalization = FieldNormalization.none,
     required this.indexed,
     required this.unique,
     this.authority = FieldAuthority.client,
@@ -1384,6 +1407,7 @@ final class FieldSpec {
   final int? minLength;
   final int? maxLength;
   final bool allowWhitespace;
+  final FieldNormalization normalization;
   final int? minValue;
   final int? maxValue;
   final List<String> allowedValues;
@@ -1436,6 +1460,7 @@ final class FieldSpec {
     minLength: minLength,
     maxLength: maxLength,
     allowWhitespace: allowWhitespace,
+    normalization: normalization,
     minValue: minValue,
     maxValue: maxValue,
     allowedValues: allowedValues,

@@ -10,6 +10,11 @@ import '../../accounts/domain/account.dart';
 )
 abstract class TaskProject
     implements OwnedBy<TaskProject, Account>, SoftDeletable, Ordered {
-  @Persisted(minLength: 1, maxLength: 80, conflict: ConflictStrategy.localWins)
+  @Persisted(
+    minLength: 1,
+    maxLength: 80,
+    conflict: ConflictStrategy.localWins,
+    normalization: FieldNormalization.trim,
+  )
   abstract final String title;
 }

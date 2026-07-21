@@ -1006,6 +1006,122 @@ final class Account {}
     );
   });
 
+  test('generates canonical String normalization across every boundary', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Note implements OwnedBy<Note, Account> {
+  @Persisted(
+    minLength: 1,
+    normalization: FieldNormalization.trim,
+  )
+  final String title = 'Untitled';
+
+  @Persisted(normalization: FieldNormalization.trimToNull)
+  final String? summary = null;
+}
+
+final class Account {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/note.entity.g.dart': decodedMatches(
+          allOf([
+            contains('normalization: FieldNormalization.trim,'),
+            contains('normalization: FieldNormalization.trimToNull,'),
+            contains('normalize: (value) => (value).trim(),'),
+            contains(
+              'normalize: (value) => normalizeTrimmedStringToNull(value),',
+            ),
+            contains("'CHECK (title = trim(title))'"),
+            contains(
+              "'CHECK (summary IS NULL OR (summary = trim(summary) AND length(summary) > 0))'",
+            ),
+            contains('decode: (source) => ((source)! as String).trim(),'),
+            contains('normalizeTrimmedStringToNull(source as String?)'),
+          ]),
+        ),
+      },
+    );
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          contains('"normalization": "trimToNull"'),
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            contains('check (title = btrim(title))'),
+            contains(
+              'check (summary is null or (summary = btrim(summary) and char_length(summary) > 0))',
+            ),
+          ]),
+        ),
+      },
+    );
+  });
+
+  test('rejects unsafe String normalization declarations', () async {
+    final cases = <(String, String)>[
+      (
+        '@Persisted(normalization: FieldNormalization.trim)\n'
+            '  final int value = 1;',
+        'only for persisted String fields',
+      ),
+      (
+        '@Persisted(normalization: FieldNormalization.trimToNull)\n'
+            "  final String value = '';",
+        'requires a nullable String field',
+      ),
+      (
+        '@Persisted(normalization: FieldNormalization.trim, '
+            'allowWhitespace: true)\n'
+            "  final String value = '';",
+        'cannot also set allowWhitespace',
+      ),
+      (
+        '@Persisted(normalization: FieldNormalization.trim, '
+            "defaultValue: ' spaced ')\n"
+            '  abstract final String value;',
+        'default must already be trimmed',
+      ),
+    ];
+
+    for (final (declaration, expected) in cases) {
+      final source =
+          '''
+import 'package:nodus/nodus.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Note implements OwnedBy<Note, Account> {
+  $declaration
+}
+
+final class Account {}
+''';
+      final result = await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(source),
+        rootPackage: 'nodus',
+      );
+      expect(result.succeeded, isFalse, reason: declaration);
+      expect(result.errors.join('\n'), contains(expected), reason: declaration);
+    }
+  });
+
   test(
     'accepts an exceptional complete grant set directly on Entity',
     () async {
@@ -4790,6 +4906,94 @@ final class Account {}
       contains('must use the declaring entity as the exact OwnedBy Owner'),
     );
   });
+
+  test('generates nominal conversions for an explicit co-identity', () async {
+    const accountSource = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(ownership: Ownership.identity)
+abstract class AccountProfile
+    implements OwnedBy<AccountProfile, AccountProfile> {}
+''';
+    const publicProfileSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account_profile.dart';
+
+@Entity(
+  ownership: Ownership.identity,
+  coIdentityWith: [AccountProfile],
+)
+abstract class PublicProfile
+    implements OwnedBy<PublicProfile, PublicProfile> {}
+''';
+    const noteSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account_profile.dart';
+
+@Entity()
+abstract class Note implements OwnedBy<Note, AccountProfile> {}
+''';
+    final sources = _sources(noteSource)
+      ..['nodus|lib/account_profile.dart'] = accountSource
+      ..['nodus|lib/public_profile.dart'] = publicProfileSource;
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          contains('"coIdentityWith": [\n        "AccountProfile"'),
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          allOf([
+            contains(
+              'extension PublicProfileToAccountProfileCoIdentity '
+              'on LocalId<PublicProfile>',
+            ),
+            contains('LocalId<AccountProfile> get asAccountProfileId =>'),
+            contains('parseLocalId<AccountProfile>(value);'),
+            contains('LocalId<PublicProfile> get asPublicProfileId =>'),
+            contains('parseLocalId<PublicProfile>(value);'),
+          ]),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+      },
+    );
+  });
+
+  test(
+    'rejects co-identity without two identity-owned graph entities',
+    () async {
+      const accountSource = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(ownership: Ownership.identity)
+abstract class AccountProfile
+    implements OwnedBy<AccountProfile, AccountProfile> {}
+''';
+      const source = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account_profile.dart';
+
+@Entity(coIdentityWith: [AccountProfile])
+abstract class PublicProfile
+    implements OwnedBy<PublicProfile, AccountProfile> {}
+''';
+      final sources = _sources(source)
+        ..['nodus|lib/account_profile.dart'] = accountSource;
+
+      final result = await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+      );
+      expect(result.succeeded, isFalse);
+      expect(result.errors.join('\n'), contains('Co-identity requires both'));
+    },
+  );
 
   test('non-deletable entities reject delete grants', () async {
     const source = r'''

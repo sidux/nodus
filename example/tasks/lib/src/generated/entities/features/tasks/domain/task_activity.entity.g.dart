@@ -522,6 +522,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final id =
@@ -543,6 +544,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final ownerId =
@@ -564,6 +566,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final subjectId =
@@ -585,6 +588,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final actorId =
@@ -606,6 +610,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.none,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 160),
   );
@@ -628,6 +633,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.none,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 240),
   );
@@ -649,6 +655,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.none,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 64),
   );
@@ -671,6 +678,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final occurredAt =
@@ -692,6 +700,7 @@ abstract final class TaskActivityFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final deletedAt =
@@ -714,6 +723,7 @@ abstract final class TaskActivityFields {
     protocolDefault: 0,
     inCreatePayload: false,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final serverVersion =

@@ -222,6 +222,17 @@ enum ConflictStrategy { localWins, serverWins }
 /// canonical server record is synchronized back into the entity graph.
 enum FieldAuthority { client, server }
 
+/// Deterministic canonicalization applied at every persisted-field boundary.
+enum FieldNormalization {
+  none,
+
+  /// Trims leading and trailing whitespace while preserving an empty String.
+  trim,
+
+  /// Trims a nullable String and canonicalizes an empty result to null.
+  trimToNull,
+}
+
 enum RlsOperation { select, insert, update, delete }
 
 enum RlsPrincipal {
@@ -315,6 +326,7 @@ final class Entity {
     this.orderScope,
     this.sync,
     this.syncTarget,
+    this.coIdentityWith = const [],
   });
 
   final String? table;
@@ -325,6 +337,13 @@ final class Entity {
   /// `people` becomes `people`. Use this only when that resolved vocabulary
   /// collides with another generated entity-graph member.
   final String? setAccessor;
+
+  /// Identity-owned entity types that deliberately share this entity's
+  /// external authority UUID.
+  ///
+  /// Generation validates the target graph entity, ownership, and sync target
+  /// before exposing nominal ID conversions in both directions.
+  final List<Type> coIdentityWith;
 
   /// Replaces the complete inferred grant set for exceptional security rules.
   final List<RlsGrant>? grants;
@@ -502,6 +521,7 @@ final class Persisted {
     this.transitions = const [],
     this.updateBy = const [],
     this.editable,
+    this.normalization = FieldNormalization.none,
   });
 
   final String? column;
@@ -563,6 +583,10 @@ final class Persisted {
   /// Infrastructure, lifecycle, transition, and relationship fields remain
   /// action-owned and cannot be made draft-editable with this override.
   final bool? editable;
+
+  /// Canonicalization applied consistently to creates, drafts, queries,
+  /// storage, synchronization, and remote materialization.
+  final FieldNormalization normalization;
 
   /// Allowed client-originated edges for a mutable persisted enum field.
   ///

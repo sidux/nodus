@@ -87,6 +87,60 @@ void main() {
     );
   });
 
+  test('field predicates canonicalize expected String values', () {
+    final title = ComparableEntityField<_TextItem, String>(
+      name: 'title',
+      read: (item) => item.title,
+      encode: normalizeTrimmedString,
+      normalize: normalizeTrimmedString,
+    );
+    final summary = NullableComparableEntityField<_TextItem, String>(
+      name: 'summary',
+      read: (item) => item.summary,
+      encode: normalizeTrimmedStringToNull,
+      normalize: normalizeTrimmedStringToNull,
+    );
+    const item = _TextItem(title: 'Focus', summary: null);
+
+    expect(title.equals('  Focus ').test(item), isTrue);
+    expect(title.isIn([' Rest ', ' Focus ']).test(item), isTrue);
+    expect(title.canonicalize('  Focus '), 'Focus');
+    expect(summary.equals('   ').test(item), isTrue);
+    expect(normalizeTrimmedStringToNull('  note  '), 'note');
+  });
+
+  test(
+    'field descriptors normalize before transport constraints and storage',
+    () {
+      const title = EntityFieldDescriptor(
+        name: 'title',
+        columnName: 'title',
+        kind: EntityFieldKind.text,
+        nullable: false,
+        mutable: true,
+        conflictPolicy: FieldConflictPolicy.localWins,
+        constraints: EntityFieldConstraints(minLength: 2, maxLength: 5),
+        normalization: FieldNormalization.trim,
+      );
+      const summary = EntityFieldDescriptor(
+        name: 'summary',
+        columnName: 'summary',
+        kind: EntityFieldKind.text,
+        nullable: true,
+        mutable: true,
+        conflictPolicy: FieldConflictPolicy.localWins,
+        normalization: FieldNormalization.trimToNull,
+      );
+
+      expect(title.decodeWireValue('  Focus  ', entityType: 'Rule'), 'Focus');
+      expect(title.toDatabase('  Focus  '), 'Focus');
+      expect(title.fromDatabase('  Focus  '), 'Focus');
+      expect(summary.decodeWireValue('   ', entityType: 'Rule'), isNull);
+      expect(summary.toDatabase('   '), isNull);
+      expect(summary.fromDatabase('   '), isNull);
+    },
+  );
+
   test('persisted scalar values use their native wire identity', () {
     final first = _ScalarValue.fromScalar(7);
     const equivalent = _ScalarValue(7);
@@ -3717,6 +3771,13 @@ final class _NullableItem {
   const _NullableItem(this.value);
 
   final String? value;
+}
+
+final class _TextItem {
+  const _TextItem({required this.title, required this.summary});
+
+  final String title;
+  final String? summary;
 }
 
 final class _ScalarValue implements PersistedScalarValue<int> {

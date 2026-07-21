@@ -22,6 +22,13 @@ part 'src/migration.dart';
 
 typedef JsonMap = Map<String, Object?>;
 
+String normalizeTrimmedString(String value) => value.trim();
+
+String? normalizeTrimmedStringToNull(String? value) {
+  final normalized = value?.trim();
+  return normalized == null || normalized.isEmpty ? null : normalized;
+}
+
 /// Contract for an immutable domain value backed by one native scalar.
 ///
 /// Implementations expose the storage value once and provide a named
@@ -1313,25 +1320,40 @@ sealed class EntityField<E, V> extends EntityFieldReference<E> {
     required this.name,
     required this.read,
     required this.encode,
+    this.normalize,
   }) : super();
 
   @override
   final String name;
   final V Function(E entity) read;
   final Object? Function(V value) encode;
+  final V Function(V value)? normalize;
+
+  /// Returns the same canonical value used by patches, predicates, storage,
+  /// synchronization, and generated mutation APIs.
+  ///
+  /// This is useful when domain code must key or deduplicate an in-memory
+  /// collection before it reaches persistence.
+  V canonicalize(V value) => normalize == null ? value : normalize!(value);
 
   TypedEntityPatch<E> patch(V value) =>
-      TypedEntityPatch<E>._({name: encode(value)});
+      TypedEntityPatch<E>._({name: encode(canonicalize(value))});
 
-  EntityPredicate<E> equals(V expected) =>
-      _ComparisonEntityPredicate(this, EntityComparison.equal, expected);
+  EntityPredicate<E> equals(V expected) => _ComparisonEntityPredicate(
+    this,
+    EntityComparison.equal,
+    canonicalize(expected),
+  );
 
-  EntityPredicate<E> notEquals(V expected) =>
-      _ComparisonEntityPredicate(this, EntityComparison.notEqual, expected);
+  EntityPredicate<E> notEquals(V expected) => _ComparisonEntityPredicate(
+    this,
+    EntityComparison.notEqual,
+    canonicalize(expected),
+  );
 
   /// Matches any of the provided typed values. Empty input matches nothing.
   EntityPredicate<E> isIn(Iterable<V> expected) =>
-      _MembershipEntityPredicate(this, expected);
+      _MembershipEntityPredicate(this, expected.map(canonicalize));
 
   @override
   bool operator ==(Object other) =>
@@ -1363,6 +1385,7 @@ abstract base class PersistedEntityField<E, V> extends EntityField<E, V>
     required this.persistence,
     required super.read,
     required super.encode,
+    super.normalize,
     required this.decode,
   }) : super(name: persistence.name);
 
@@ -1380,6 +1403,7 @@ final class EqualityEntityField<E, V> extends EntityField<E, V> {
     required super.name,
     required super.read,
     required super.encode,
+    super.normalize,
   });
 }
 
@@ -1389,28 +1413,35 @@ final class PersistedEqualityEntityField<E, V>
     required super.persistence,
     required super.read,
     required super.encode,
+    super.normalize,
     required super.decode,
   });
 }
 
 mixin _ComparableFieldCapabilities<E, V extends Comparable<dynamic>>
     on EntityField<E, V> {
-  EntityPredicate<E> isLessThan(V expected) =>
-      _ComparisonEntityPredicate(this, EntityComparison.lessThan, expected);
+  EntityPredicate<E> isLessThan(V expected) => _ComparisonEntityPredicate(
+    this,
+    EntityComparison.lessThan,
+    canonicalize(expected),
+  );
 
   EntityPredicate<E> isAtMost(V expected) => _ComparisonEntityPredicate(
     this,
     EntityComparison.lessThanOrEqual,
-    expected,
+    canonicalize(expected),
   );
 
-  EntityPredicate<E> isGreaterThan(V expected) =>
-      _ComparisonEntityPredicate(this, EntityComparison.greaterThan, expected);
+  EntityPredicate<E> isGreaterThan(V expected) => _ComparisonEntityPredicate(
+    this,
+    EntityComparison.greaterThan,
+    canonicalize(expected),
+  );
 
   EntityPredicate<E> isAtLeast(V expected) => _ComparisonEntityPredicate(
     this,
     EntityComparison.greaterThanOrEqual,
-    expected,
+    canonicalize(expected),
   );
 
   EntityPredicate<E> isBetween(V lower, V upper) =>
@@ -1451,6 +1482,7 @@ final class ComparableEntityField<E, V extends Comparable<dynamic>>
     required super.name,
     required super.read,
     required super.encode,
+    super.normalize,
   });
 }
 
@@ -1461,6 +1493,7 @@ final class PersistedComparableEntityField<E, V extends Comparable<dynamic>>
     required super.persistence,
     required super.read,
     required super.encode,
+    super.normalize,
     required super.decode,
   });
 }
@@ -1480,6 +1513,7 @@ final class NullableEntityField<E, V> extends EntityField<E, V?>
     required super.name,
     required super.read,
     required super.encode,
+    super.normalize,
   });
 }
 
@@ -1490,28 +1524,35 @@ final class PersistedNullableEntityField<E, V>
     required super.persistence,
     required super.read,
     required super.encode,
+    super.normalize,
     required super.decode,
   });
 }
 
 mixin _NullableComparableFieldCapabilities<E, V extends Comparable<dynamic>>
     on EntityField<E, V?> {
-  EntityPredicate<E> isLessThan(V expected) =>
-      _ComparisonEntityPredicate(this, EntityComparison.lessThan, expected);
+  EntityPredicate<E> isLessThan(V expected) => _ComparisonEntityPredicate(
+    this,
+    EntityComparison.lessThan,
+    canonicalize(expected),
+  );
 
   EntityPredicate<E> isAtMost(V expected) => _ComparisonEntityPredicate(
     this,
     EntityComparison.lessThanOrEqual,
-    expected,
+    canonicalize(expected),
   );
 
-  EntityPredicate<E> isGreaterThan(V expected) =>
-      _ComparisonEntityPredicate(this, EntityComparison.greaterThan, expected);
+  EntityPredicate<E> isGreaterThan(V expected) => _ComparisonEntityPredicate(
+    this,
+    EntityComparison.greaterThan,
+    canonicalize(expected),
+  );
 
   EntityPredicate<E> isAtLeast(V expected) => _ComparisonEntityPredicate(
     this,
     EntityComparison.greaterThanOrEqual,
-    expected,
+    canonicalize(expected),
   );
 
   EntityPredicate<E> isBetween(V lower, V upper) =>
@@ -1567,6 +1608,7 @@ final class NullableComparableEntityField<E, V extends Comparable<dynamic>>
     required super.name,
     required super.read,
     required super.encode,
+    super.normalize,
   });
 }
 
@@ -1580,6 +1622,7 @@ final class PersistedNullableComparableEntityField<
     required super.persistence,
     required super.read,
     required super.encode,
+    super.normalize,
     required super.decode,
   });
 }

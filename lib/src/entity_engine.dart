@@ -140,6 +140,7 @@ final class EntityFieldDescriptor {
     this.reference,
     this.allowedTransitions = const [],
     this.constraints = const EntityFieldConstraints(),
+    this.normalization = FieldNormalization.none,
   });
 
   final String name;
@@ -156,6 +157,7 @@ final class EntityFieldDescriptor {
   final EntityReferenceDescriptor? reference;
   final List<EntityValueTransition> allowedTransitions;
   final EntityFieldConstraints constraints;
+  final FieldNormalization normalization;
 
   bool allowsTransition(Object? from, Object? to) =>
       from == to ||
@@ -190,22 +192,28 @@ final class EntityFieldDescriptor {
   };
 
   Object? toDatabase(Object? value) {
-    if (value == null) return null;
+    final normalized = normalizeValue(value);
+    if (normalized == null) return null;
     return switch (kind) {
-      EntityFieldKind.boolean => (value as bool) ? 1 : 0,
-      EntityFieldKind.real => switch (value) {
+      EntityFieldKind.boolean => (normalized as bool) ? 1 : 0,
+      EntityFieldKind.real => switch (normalized) {
         final num number when number.isFinite => number.toDouble(),
-        _ => throw FormatException('Invalid finite real for $name.', value),
+        _ => throw FormatException(
+          'Invalid finite real for $name.',
+          normalized,
+        ),
       },
       EntityFieldKind.timestamp =>
-        value is DateTime ? value.toUtc().toIso8601String() : value,
-      _ => value,
+        normalized is DateTime
+            ? normalized.toUtc().toIso8601String()
+            : normalized,
+      _ => normalized,
     };
   }
 
   Object? fromDatabase(Object? value) {
     if (value == null) return null;
-    return switch (kind) {
+    final decoded = switch (kind) {
       EntityFieldKind.boolean => switch (value) {
         0 || false => false,
         1 || true => true,
@@ -218,6 +226,24 @@ final class EntityFieldDescriptor {
       EntityFieldKind.timestamp =>
         value is DateTime ? value.toUtc().toIso8601String() : value.toString(),
       _ => value,
+    };
+    return normalizeValue(decoded);
+  }
+
+  /// Applies the field's deterministic canonical representation.
+  ///
+  /// Generated entity APIs call the same normalizers before constructing
+  /// domain values. Keeping the descriptor authoritative as well covers raw
+  /// transport, database, and synchronization paths that operate without a
+  /// generated field object.
+  Object? normalizeValue(Object? value) {
+    if (value == null) return null;
+    return switch (normalization) {
+      FieldNormalization.none => value,
+      FieldNormalization.trim => normalizeTrimmedString(value as String),
+      FieldNormalization.trimToNull => normalizeTrimmedStringToNull(
+        value as String,
+      ),
     };
   }
 
@@ -238,8 +264,13 @@ final class EntityFieldDescriptor {
       entityType: entityType,
       fieldName: name,
     );
-    constraints.validate(decoded, entityType: entityType, fieldName: name);
-    return decoded;
+    final normalized = normalizeValue(decoded);
+    if (normalized == null) {
+      if (nullable) return null;
+      throw FormatException('Non-null $entityType.$name cannot be null.');
+    }
+    constraints.validate(normalized, entityType: entityType, fieldName: name);
+    return normalized;
   }
 }
 

@@ -194,6 +194,31 @@ Future<EntitySpec?> parseEntityAsset(
     );
   }
   final ownerType = arguments.last;
+  final coIdentityClassNames = <String>[];
+  for (final targetValue in annotation.read('coIdentityWith').listValue) {
+    final targetType = targetValue.toTypeValue();
+    final targetElement = targetType?.element;
+    final targetName = targetElement?.name;
+    if (targetType == null ||
+        targetElement is! ClassElement ||
+        targetName == null ||
+        targetName.startsWith('_') ||
+        targetName == classElement.name) {
+      throw InvalidGenerationSourceError(
+        'Entity.coIdentityWith requires a different public entity class.',
+        element: classElement,
+      );
+    }
+    if (coIdentityClassNames.contains(targetName)) {
+      throw InvalidGenerationSourceError(
+        'Entity.coIdentityWith may list `$targetName` only once.',
+        element: classElement,
+      );
+    }
+    coIdentityClassNames.add(targetName);
+    _collectTypeImports(targetType, typeImports);
+  }
+  coIdentityClassNames.sort();
   String? activitySubjectClassName;
   String? activityActorClassName;
   if (activityEntryTypes case [final activityEntryType]) {
@@ -526,6 +551,12 @@ Future<EntitySpec?> parseEntityAsset(
       enumElement,
       scalarValue: scalarValue,
     );
+    final normalization = _parseFieldNormalization(
+      persisted,
+      field,
+      dartType: dartType,
+      nullable: nullable,
+    );
     final transitions = _parseAllowedTransitions(
       persisted,
       field,
@@ -547,6 +578,10 @@ Future<EntitySpec?> parseEntityAsset(
         );
       }
     }
+    final defaultValue =
+        configuredDefault ??
+        _inferDefaultValue(field, initializers[field.name]);
+    _validateNormalizedDefault(field, normalization, defaultValue);
     fields.add(
       FieldSpec(
         name: field.name!,
@@ -555,9 +590,7 @@ Future<EntitySpec?> parseEntityAsset(
         sqlType: sqlType,
         nullable: nullable,
         isFinal: field.isFinal,
-        defaultValue:
-            configuredDefault ??
-            _inferDefaultValue(field, initializers[field.name]),
+        defaultValue: defaultValue,
         conflict: persisted == null
             ? ConflictStrategy.serverWins
             : _readEnum(persisted.read('conflict'), ConflictStrategy.values),
@@ -571,6 +604,7 @@ Future<EntitySpec?> parseEntityAsset(
             ? null
             : persisted!.read('maxLength').intValue,
         allowWhitespace: persisted?.peek('allowWhitespace')?.boolValue ?? false,
+        normalization: normalization,
         minValue: persisted?.peek('minValue')?.isNull ?? true
             ? null
             : persisted!.read('minValue').intValue,
@@ -1157,6 +1191,7 @@ Future<EntitySpec?> parseEntityAsset(
     persistedVariants: persistedVariants,
     exclusiveFieldGroups: exclusiveFieldGroups,
     compoundIndexes: compoundIndexes,
+    coIdentityClassNames: coIdentityClassNames,
     typeImports: typeImports.toList()..sort(),
     orderScopeFieldNames: orderScopeFieldNames,
     syncModeOverride: syncMode,
@@ -1537,6 +1572,57 @@ List<RlsPrincipal> _parseFieldUpdatePrincipals(
     );
   }
   return List.unmodifiable(principals);
+}
+
+FieldNormalization _parseFieldNormalization(
+  ConstantReader? persisted,
+  FieldElement field, {
+  required String dartType,
+  required bool nullable,
+}) {
+  final normalization = persisted == null
+      ? FieldNormalization.none
+      : _readEnum(persisted.read('normalization'), FieldNormalization.values);
+  if (normalization == FieldNormalization.none) return normalization;
+  if (dartType.replaceAll('?', '') != 'String') {
+    throw InvalidGenerationSourceError(
+      'Field normalization is supported only for persisted String fields.',
+      element: field,
+    );
+  }
+  if (persisted?.read('allowWhitespace').boolValue == true) {
+    throw InvalidGenerationSourceError(
+      'A normalized String cannot also set allowWhitespace: true.',
+      element: field,
+    );
+  }
+  if (normalization == FieldNormalization.trimToNull && !nullable) {
+    throw InvalidGenerationSourceError(
+      'FieldNormalization.trimToNull requires a nullable String field.',
+      element: field,
+    );
+  }
+  return normalization;
+}
+
+void _validateNormalizedDefault(
+  FieldElement field,
+  FieldNormalization normalization,
+  Object? value,
+) {
+  if (normalization == FieldNormalization.none || value == null) return;
+  if (value is! String || value != value.trim()) {
+    throw InvalidGenerationSourceError(
+      'A normalized String default must already be trimmed.',
+      element: field,
+    );
+  }
+  if (normalization == FieldNormalization.trimToNull && value.isEmpty) {
+    throw InvalidGenerationSourceError(
+      'A trimToNull default cannot be empty; omit it to use null.',
+      element: field,
+    );
+  }
 }
 
 void _validateTransitionPrincipals(
@@ -2609,6 +2695,19 @@ FieldSpec _parsePersistedVariantComponent(
       : persisted!.read('column').stringValue;
   _validateSqlIdentifier(columnName, field, label: 'column');
   final transitions = _parseAllowedTransitions(persisted, field, enumElement);
+  final normalization = _parseFieldNormalization(
+    persisted,
+    field,
+    dartType: componentDartType,
+    nullable: componentType.nullabilitySuffix == NullabilitySuffix.question,
+  );
+  if (normalization != FieldNormalization.none) {
+    throw InvalidGenerationSourceError(
+      'Persisted-variant components must normalize inside their typed value '
+      'constructor; field normalization applies to ordinary String fields.',
+      element: field,
+    );
+  }
   return FieldSpec(
     name: field.name!,
     columnName: columnName,
@@ -2630,6 +2729,7 @@ FieldSpec _parsePersistedVariantComponent(
         ? null
         : persisted!.read('maxLength').intValue,
     allowWhitespace: persisted?.peek('allowWhitespace')?.boolValue ?? false,
+    normalization: normalization,
     minValue: persisted?.peek('minValue')?.isNull ?? true
         ? null
         : persisted!.read('minValue').intValue,
@@ -2863,6 +2963,25 @@ EntityGraphSpec _resolveEntityGraph({
   final syncByEntity = {
     for (final binding in syncBindings) binding.entity.className: binding,
   };
+  final resolvedByClass = {
+    for (final entity in resolvedEntities) entity.className: entity,
+  };
+  for (final source in resolvedEntities) {
+    for (final targetName in source.coIdentityClassNames) {
+      final target = resolvedByClass[targetName]!;
+      final sourceBinding = syncByEntity[source.className]!;
+      final targetBinding = syncByEntity[target.className]!;
+      if (sourceBinding.mode != targetBinding.mode ||
+          sourceBinding.target?.stableIdentity !=
+              targetBinding.target?.stableIdentity) {
+        throw InvalidGenerationSourceError(
+          '${source.className} and its co-identity `${target.className}` must '
+          'use the same sync mode and target.',
+          element: element,
+        );
+      }
+    }
+  }
   for (final tracking in resolveActivityTrackings(resolvedEntities)) {
     final sourceBinding = syncByEntity[tracking.source.className]!;
     final entryBinding = syncByEntity[tracking.entry.className]!;
@@ -3024,6 +3143,26 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
   final entitiesByClass = {
     for (final entity in entities) entity.className: entity,
   };
+  for (final source in entities) {
+    for (final targetName in source.coIdentityClassNames) {
+      final target = entitiesByClass[targetName];
+      if (target == null) {
+        throw InvalidGenerationSourceError(
+          '${source.className} declares CoIdentifiedWith<$targetName>, but '
+          'that target is not an entity in this graph.',
+          element: element,
+        );
+      }
+      if (source.ownership != Ownership.identity ||
+          target.ownership != Ownership.identity) {
+        throw InvalidGenerationSourceError(
+          'Co-identity requires both `${source.className}` and `$targetName` '
+          'to use Ownership.identity.',
+          element: element,
+        );
+      }
+    }
+  }
   final activityEntriesBySubject = <String, List<EntitySpec>>{};
   for (final entry in entities.where((entity) => entity.isActivityEntry)) {
     (activityEntriesBySubject[entry.activitySubjectClassName!] ??= []).add(

@@ -44,6 +44,12 @@ String emitSupabaseSql(
         'default now()'
       else if (field.defaultValue != null)
         'default ${_sqlDefaultLiteral(field)}',
+      if (field.normalization == FieldNormalization.trim)
+        field.nullable
+            ? 'check (${field.columnName} is null or ${field.columnName} = btrim(${field.columnName}))'
+            : 'check (${field.columnName} = btrim(${field.columnName}))',
+      if (field.normalization == FieldNormalization.trimToNull)
+        'check (${field.columnName} is null or (${field.columnName} = btrim(${field.columnName}) and char_length(${field.columnName}) > 0))',
       if (field.minLength != null)
         "check (char_length(${field.allowWhitespace ? field.columnName : 'btrim(${field.columnName})'}) >= ${field.minLength})",
       if (field.maxLength != null)

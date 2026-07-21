@@ -25,10 +25,19 @@ abstract class Task
   @Reference(onDelete: ReferenceDeleteAction.setNull)
   abstract final LocalId<TaskProject>? projectId;
 
-  @Persisted(minLength: 1, maxLength: 160, conflict: ConflictStrategy.localWins)
+  @Persisted(
+    minLength: 1,
+    maxLength: 160,
+    conflict: ConflictStrategy.localWins,
+    normalization: FieldNormalization.trim,
+  )
   abstract final String title;
 
-  @Persisted(maxLength: 1000, conflict: ConflictStrategy.localWins)
+  @Persisted(
+    maxLength: 1000,
+    conflict: ConflictStrategy.localWins,
+    normalization: FieldNormalization.trimToNull,
+  )
   abstract final String? description;
 
   @Persisted(

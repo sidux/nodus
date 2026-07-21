@@ -62,6 +62,7 @@ Map<String, Object?> _entitySchema(EntitySpec entity) => {
         'minLength': field.minLength,
         'maxLength': field.maxLength,
         'allowWhitespace': field.allowWhitespace,
+        'normalization': field.normalization.name,
         'minValue': field.minValue,
         'maxValue': field.maxValue,
         'allowedValues': field.allowedValues,

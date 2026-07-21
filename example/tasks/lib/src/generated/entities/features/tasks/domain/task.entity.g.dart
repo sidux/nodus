@@ -51,6 +51,8 @@ class TaskRows extends Table {
       integer().named('server_version').withDefault(const Constant(0))();
   @override
   List<String> get customConstraints => [
+    'CHECK (title = trim(title))',
+    'CHECK (description IS NULL OR (description = trim(description) AND length(description) > 0))',
     'CHECK (length(trim(title)) >= 1)',
     'CHECK (length(title) <= 160)',
     'CHECK (length(description) <= 1000)',
@@ -1084,12 +1086,12 @@ final class TaskRecord extends Task
     final candidatePriority = TaskFields.priority.decode(candidate['priority']);
     final baseDueAt = TaskFields.dueAt.decode(base['dueAt']);
     final candidateDueAt = TaskFields.dueAt.decode(candidate['dueAt']);
-    final nextTitle = candidateTitle;
+    final nextTitle = (candidateTitle).trim();
     final titleDraftChanged = baseTitle != nextTitle;
     final titleCurrentChanged = baseTitle != _titleStore.value;
     final titleChanged = titleDraftChanged && _titleStore.value != nextTitle;
     final titleOverlaps = titleChanged && titleCurrentChanged;
-    final nextDescription = candidateDescription;
+    final nextDescription = normalizeTrimmedStringToNull(candidateDescription);
     final descriptionDraftChanged = baseDescription != nextDescription;
     final descriptionCurrentChanged =
         baseDescription != _descriptionStore.value;
@@ -1615,6 +1617,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final id = PersistedEqualityEntityField<Task, LocalId<Task>>(
@@ -1635,6 +1638,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final ownerId = PersistedEqualityEntityField<Task, LocalId<Account>>(
@@ -1655,6 +1659,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: EntityReferenceDescriptor(
       targetEntityType: 'TaskProject',
       onDelete: ReferenceDeleteAction.setNull,
@@ -1680,14 +1685,16 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.trim,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 160),
   );
   static final title = PersistedComparableEntityField<Task, String>(
     persistence: _titlePersistence,
     read: (entity) => entity.title,
-    encode: (value) => value,
-    decode: (source) => (source)! as String,
+    normalize: (value) => (value).trim(),
+    encode: (value) => (value).trim(),
+    decode: (source) => ((source)! as String).trim(),
   );
   static const _descriptionPersistence = EntityFieldDescriptor(
     name: 'description',
@@ -1701,6 +1708,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.trimToNull,
     reference: null,
     constraints: EntityFieldConstraints(maxLength: 1000),
   );
@@ -1708,8 +1716,9 @@ abstract final class TaskFields {
       PersistedNullableComparableEntityField<Task, String>(
         persistence: _descriptionPersistence,
         read: (entity) => entity.description,
-        encode: (value) => value,
-        decode: (source) => source as String?,
+        normalize: (value) => normalizeTrimmedStringToNull(value),
+        encode: (value) => normalizeTrimmedStringToNull(value),
+        decode: (source) => normalizeTrimmedStringToNull(source as String?),
       );
   static const _statusPersistence = EntityFieldDescriptor(
     name: 'status',
@@ -1723,6 +1732,7 @@ abstract final class TaskFields {
     protocolDefault: 'todo',
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
     allowedTransitions: const [
       EntityValueTransition('todo', 'in_progress'),
@@ -1759,6 +1769,7 @@ abstract final class TaskFields {
     protocolDefault: 'normal',
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final priority = PersistedEqualityEntityField<Task, TaskPriority>(
@@ -1788,6 +1799,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final dueAt = PersistedNullableComparableEntityField<Task, DateTime>(
@@ -1809,6 +1821,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final completedAt =
@@ -1831,6 +1844,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final archivedAt =
@@ -1853,6 +1867,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: false,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final createdAt = PersistedComparableEntityField<Task, DateTime>(
@@ -1874,6 +1889,7 @@ abstract final class TaskFields {
         '057896044618658097711785492504343953926634992332820282019728792003956564819967',
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final _orderRank = PersistedComparableEntityField<Task, OrderRank>(
@@ -1895,6 +1911,7 @@ abstract final class TaskFields {
     protocolDefault: null,
     inCreatePayload: false,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final deletedAt =
@@ -1917,6 +1934,7 @@ abstract final class TaskFields {
     protocolDefault: 0,
     inCreatePayload: false,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final serverVersion =

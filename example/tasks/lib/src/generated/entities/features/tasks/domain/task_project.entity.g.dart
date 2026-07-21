@@ -32,6 +32,7 @@ class TaskProjectRows extends Table {
       integer().named('server_version').withDefault(const Constant(0))();
   @override
   List<String> get customConstraints => [
+    'CHECK (title = trim(title))',
     'CHECK (length(trim(title)) >= 1)',
     'CHECK (length(title) <= 80)',
   ];
@@ -456,7 +457,7 @@ final class TaskProjectRecord extends TaskProject
   }) {
     final baseTitle = TaskProjectFields.title.decode(base['title']);
     final candidateTitle = TaskProjectFields.title.decode(candidate['title']);
-    final nextTitle = candidateTitle;
+    final nextTitle = (candidateTitle).trim();
     final titleDraftChanged = baseTitle != nextTitle;
     final titleCurrentChanged = baseTitle != _titleStore.value;
     final titleChanged = titleDraftChanged && _titleStore.value != nextTitle;
@@ -717,6 +718,7 @@ abstract final class TaskProjectFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final id =
@@ -738,6 +740,7 @@ abstract final class TaskProjectFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final ownerId =
@@ -759,14 +762,16 @@ abstract final class TaskProjectFields {
     protocolDefault: null,
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.localWins,
+    normalization: FieldNormalization.trim,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 80),
   );
   static final title = PersistedComparableEntityField<TaskProject, String>(
     persistence: _titlePersistence,
     read: (entity) => entity.title,
-    encode: (value) => value,
-    decode: (source) => (source)! as String,
+    normalize: (value) => (value).trim(),
+    encode: (value) => (value).trim(),
+    decode: (source) => ((source)! as String).trim(),
   );
   static const _orderRankPersistence = EntityFieldDescriptor(
     name: 'orderRank',
@@ -781,6 +786,7 @@ abstract final class TaskProjectFields {
         '057896044618658097711785492504343953926634992332820282019728792003956564819967',
     inCreatePayload: true,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final _orderRank =
@@ -803,6 +809,7 @@ abstract final class TaskProjectFields {
     protocolDefault: null,
     inCreatePayload: false,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final deletedAt =
@@ -825,6 +832,7 @@ abstract final class TaskProjectFields {
     protocolDefault: 0,
     inCreatePayload: false,
     conflictPolicy: FieldConflictPolicy.serverWins,
+    normalization: FieldNormalization.none,
     reference: null,
   );
   static final serverVersion =

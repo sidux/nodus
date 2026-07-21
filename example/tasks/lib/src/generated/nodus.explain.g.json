@@ -12,6 +12,7 @@
       "table": "tasks",
       "ownership": "separate",
       "cardinality": "unbounded",
+      "coIdentityWith": [],
       "sync": {
         "mode": "replicated",
         "target": "supabase"
@@ -32,6 +33,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -44,6 +46,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -56,6 +59,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": "TaskProject",
           "inverseCardinality": "unbounded",
           "source": "entity declaration"
@@ -68,6 +72,7 @@
           "default": null,
           "generated": false,
           "mutable": true,
+          "normalization": "trim",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -80,6 +85,7 @@
           "default": null,
           "generated": false,
           "mutable": true,
+          "normalization": "trimToNull",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -92,6 +98,7 @@
           "default": "todo",
           "generated": false,
           "mutable": true,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -104,6 +111,7 @@
           "default": "normal",
           "generated": false,
           "mutable": true,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -116,6 +124,7 @@
           "default": null,
           "generated": false,
           "mutable": true,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -128,6 +137,7 @@
           "default": null,
           "generated": false,
           "mutable": true,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -140,6 +150,7 @@
           "default": null,
           "generated": false,
           "mutable": true,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -152,6 +163,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -164,6 +176,7 @@
           "default": "057896044618658097711785492504343953926634992332820282019728792003956564819967",
           "generated": true,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "generated convention or capability"
@@ -176,6 +189,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -188,6 +202,7 @@
           "default": "0",
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -288,6 +303,7 @@
       "table": "task_activities",
       "ownership": "separate",
       "cardinality": "unbounded",
+      "coIdentityWith": [],
       "sync": {
         "mode": "replicated",
         "target": "supabase"
@@ -308,6 +324,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -320,6 +337,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -332,6 +350,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -344,6 +363,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -356,6 +376,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -368,6 +389,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -380,6 +402,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -392,6 +415,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -404,6 +428,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -416,6 +441,7 @@
           "default": "0",
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -470,6 +496,7 @@
       "table": "task_projects",
       "ownership": "separate",
       "cardinality": "bounded",
+      "coIdentityWith": [],
       "sync": {
         "mode": "replicated",
         "target": "supabase"
@@ -490,6 +517,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -502,6 +530,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -514,6 +543,7 @@
           "default": null,
           "generated": false,
           "mutable": true,
+          "normalization": "trim",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -526,6 +556,7 @@
           "default": "057896044618658097711785492504343953926634992332820282019728792003956564819967",
           "generated": true,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "generated convention or capability"
@@ -538,6 +569,7 @@
           "default": null,
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"
@@ -550,6 +582,7 @@
           "default": "0",
           "generated": false,
           "mutable": false,
+          "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
           "source": "entity declaration"

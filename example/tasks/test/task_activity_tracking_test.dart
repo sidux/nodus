@@ -123,19 +123,22 @@ void main() {
     () async {
       final graph = await openGraph();
       addTearDown(graph.close);
-      final project = await graph.taskProjects.create(title: 'Draft target');
+      final project = await graph.taskProjects.create(title: '  Draft target ');
+      expect(project.title, 'Draft target');
 
       final createDraft = graph.tasks.beginCreate()
-        ..title = 'Created from one draft'
-        ..description = null
+        ..title = '  Created from one draft '
+        ..description = '   '
         ..priority = TaskPriority.normal
         ..dueAt = null
         ..projectId = null;
       final task = await createDraft.save();
+      expect(task.title, 'Created from one draft');
+      expect(task.description, isNull);
 
       final editDraft = task.beginEdit()
-        ..title = 'Edited from one draft'
-        ..description = 'One save owns both actions.'
+        ..title = ' Edited from one draft  '
+        ..description = '  One save owns both actions. '
         ..priority = TaskPriority.high
         ..dueAt = DateTime.utc(2026, 9, 1)
         ..projectId = project.id;

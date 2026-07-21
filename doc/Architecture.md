@@ -456,6 +456,26 @@ PostgreSQL `bigint`; Dart `double` maps to SQLite `REAL` and PostgreSQL
 `double precision`. Numeric transport values must be finite, integer fields
 reject fractional input, and declared bounds are generated at every boundary.
 
+An ordinary persisted `String` whose surrounding whitespace is not meaningful
+declares that fact once with
+`@Persisted(normalization: FieldNormalization.trim)`. A nullable optional text
+field uses `FieldNormalization.trimToNull` when an empty trimmed value means
+absence. The compiler applies the transform before constraints and uses the
+same canonical value for creation, aggregate/edit drafts, generated actions,
+typed patches and predicates, exact lookups, wire decoding, local storage,
+synchronization, remote materialization, Drift checks, and PostgreSQL checks.
+Generated field capabilities expose `canonicalize(value)` for the exceptional
+case where domain code must key or deduplicate an in-memory collection before
+persistence. Feature operations MUST NOT repeat the declared transform.
+
+Normalization is deterministic field representation, not input repair or a
+general conversion hook. `trimToNull` requires a nullable `String`; a
+non-String field, whitespace-significant field, noncanonical default, or
+persisted-variant component with field-level normalization MUST fail
+generation. A nominal scalar or persisted variant owns any canonicalization in
+its typed constructor so the physical representation remains total and
+unambiguous.
+
 Persisted entity declarations MUST NOT contain `Map`, `List`, `Set`, arbitrary
 object trees, generic JSON wrappers, or a field whose physical representation
 is a JSON array/object. Structure is modeled once instead:
@@ -551,7 +571,9 @@ authorization, an unusual collaboration policy, an unusual index, a generated
 action, a custom codec, a conflict rule, a non-default sync target,
 synchronization-mode override, a typed named source constructor, an
 entity-owned external-process binding, or a secondary projection whose
-existence cannot be derived from the entity alone.
+existence cannot be derived from the entity alone. Deterministic String
+normalization is also explicit because Dart nullability cannot distinguish an
+empty optional value from absence.
 
 Annotations MUST NOT repeat table names, ordinary column names, obvious SQL
 types, default serialization, standard CRUD registration, or relationships
@@ -562,7 +584,7 @@ annotation position, or the argument already supplies that context. The
 canonical vocabulary is `Cardinality`, `Ownership`, `SyncMode`,
 `FieldAuthority`, `@Reference`, `@Composition`, `Component`, `@Action`, and
 `ActionValue`; forms such as
-`EntityCardinality` or `EntityAction` MUST NOT exist as aliases. `Entity`
+  `EntityCardinality` or `EntityAction` MUST NOT exist as aliases. `Entity`
 retains the qualifier because it names the declaration root; `EntityGraph`
 retains it because it names the generated runtime and resolved graph contract.
 Cross-layer runtime types retain it only where it materially disambiguates the
@@ -1592,6 +1614,14 @@ service, provider, or feature-selected adapter.
 One persisted entity ID maps to exactly one live object instance per account
 entity graph. Materialization, local writes, pull merges, query membership
 changes, and acknowledgements update that same identity.
+
+Two identity-owned entity types MAY declare `coIdentityWith: [Other]` only when
+their distinct domain identities deliberately use the same external authority
+UUID. The compiler requires both types to be graph entities with
+`Ownership.identity` and the same synchronization mode and target, then emits
+named nominal `LocalId` conversions in both directions. Co-identity does not
+merge tables, entities, lifecycle, fields, or permissions. Raw `.value`
+round-trips, a generic ID cast, or an undeclared conversion remain forbidden.
 
 Generated sets provide:
 

@@ -13,9 +13,7 @@ final class NewTaskProjectPage extends HookWidget {
     final action = useEntityAction();
 
     Future<void> save() => action.run(() async {
-      final project = await entityGraph.taskProjects.create(
-        title: title.text.trim(),
-      );
+      final project = await entityGraph.taskProjects.create(title: title.text);
       if (!context.mounted) return;
       TaskProjectDetailsRoute(project.id).go(context);
     });

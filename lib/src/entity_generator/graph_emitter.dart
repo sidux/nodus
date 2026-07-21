@@ -83,6 +83,7 @@ String emitEntityGraph(
     }
     buffer.writeln('}');
   }
+  _emitCoIdentityConversions(buffer, graph);
   buffer
     ..writeln()
     ..writeln('@TableIndex.sql(')
@@ -283,6 +284,27 @@ String emitEntityGraph(
   return DartFormatter(
     languageVersion: DartFormatter.latestLanguageVersion,
   ).format(buffer.toString());
+}
+
+void _emitCoIdentityConversions(StringBuffer buffer, EntityGraphSpec graph) {
+  for (final (source, target) in graph.coIdentityPairs) {
+    void emitDirection(EntitySpec from, EntitySpec to) {
+      buffer
+        ..writeln()
+        ..writeln(
+          'extension ${from.className}To${to.className}CoIdentity '
+          'on LocalId<${from.className}> {',
+        )
+        ..writeln(
+          '  LocalId<${to.className}> get as${to.className}Id => '
+          'parseLocalId<${to.className}>(value);',
+        )
+        ..writeln('}');
+    }
+
+    emitDirection(source, target);
+    emitDirection(target, source);
+  }
 }
 
 String emitEntityGraphFacade(

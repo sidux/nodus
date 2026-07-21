@@ -134,6 +134,9 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
         '    conflictPolicy: FieldConflictPolicy.${_conflict(field.conflict)},',
       )
       ..writeln(
+        '    normalization: FieldNormalization.${field.normalization.name},',
+      )
+      ..writeln(
         '    reference: ${field.reference == null ? 'null' : 'EntityReferenceDescriptor(targetEntityType: \'${field.reference!.targetClassName}\', onDelete: ReferenceDeleteAction.${field.reference!.onDelete.name}${field.isComposition ? ', composition: true' : ''}${field.reference!.inverseCardinality == null ? '' : ', inverseCardinality: Cardinality.${field.reference!.inverseCardinality!.name}'})'},',
       );
     if (field.transitions.isNotEmpty) {
@@ -173,6 +176,11 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
       )
       ..writeln('    persistence: _${field.name}Persistence,')
       ..writeln('    read: (entity) => ${_entityRead(spec, field)},')
+      ..write(
+        field.normalization == FieldNormalization.none
+            ? ''
+            : '    normalize: (value) => ${_fieldNormalizationExpression(field, 'value')},\n',
+      )
       ..writeln('    encode: (value) => ${_encodeExpression(field, 'value')},')
       ..writeln(
         '    decode: (source) => ${_decodeExpression(field, 'source')},',
@@ -251,6 +259,14 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
     );
   }
   final checks = <String>[
+    for (final field in spec.fields)
+      if (field.normalization == FieldNormalization.trim)
+        field.nullable
+            ? "'CHECK (${field.columnName} IS NULL OR ${field.columnName} = trim(${field.columnName}))'"
+            : "'CHECK (${field.columnName} = trim(${field.columnName}))'",
+    for (final field in spec.fields)
+      if (field.normalization == FieldNormalization.trimToNull)
+        "'CHECK (${field.columnName} IS NULL OR (${field.columnName} = trim(${field.columnName}) AND length(${field.columnName}) > 0))'",
     for (final field in spec.fields)
       if (field.minLength != null)
         "'CHECK (length(${field.allowWhitespace ? field.columnName : 'trim(${field.columnName})'}) >= ${field.minLength})'",
@@ -2631,6 +2647,9 @@ String _actionAssignmentExpression(
 };
 
 String _normalizedEntityValueExpression(FieldSpec field, String source) {
+  if (field.normalization != FieldNormalization.none) {
+    return _fieldNormalizationExpression(field, source);
+  }
   if (field.isScalarValue) {
     final type = field.dartType.replaceAll('?', '');
     final normalized = '$type.fromScalar($source.toScalar())';
@@ -4032,7 +4051,10 @@ String _decodeExpression(FieldSpec field, String source) {
         : 'parseLocalId<$entityType>(($source)! as String)';
   }
   return switch (nonNullableType) {
-    'String' => field.nullable ? '$source as String?' : '($source)! as String',
+    'String' => _fieldNormalizationExpression(
+      field,
+      field.nullable ? '$source as String?' : '($source)! as String',
+    ),
     'bool' => field.nullable ? '$source as bool?' : '($source)! as bool',
     'int' =>
       field.nullable
@@ -4066,6 +4088,10 @@ String _checkedRealExpression(FieldSpec field, String source) =>
 
 String _encodeExpression(FieldSpec field, String source) {
   final nonNullableType = field.dartType.replaceAll('?', '');
+  if (nonNullableType == 'String' &&
+      field.normalization != FieldNormalization.none) {
+    return _fieldNormalizationExpression(field, source);
+  }
   if (field.isScalarValue) {
     return field.nullable ? '$source?.toScalar()' : '$source.toScalar()';
   }
@@ -4097,6 +4123,14 @@ String _encodeExpression(FieldSpec field, String source) {
   }
   return source;
 }
+
+String _fieldNormalizationExpression(FieldSpec field, String source) =>
+    switch (field.normalization) {
+      FieldNormalization.none => source,
+      FieldNormalization.trim =>
+        field.nullable ? '($source)?.trim()' : '($source).trim()',
+      FieldNormalization.trimToNull => 'normalizeTrimmedStringToNull($source)',
+    };
 
 String _decodeScalarWireExpression(FieldSpec field, String source) {
   return switch (field.scalarValue!.wireDartType) {

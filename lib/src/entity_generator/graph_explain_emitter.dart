@@ -20,10 +20,11 @@ String emitEntityGraphExplanation(EntityGraphSpec graph) {
           'table': entity.tableName,
           'ownership': entity.ownership.name,
           'cardinality': entity.cardinality.name,
+          'coIdentityWith': entity.coIdentityClassNames,
           'sync': {'mode': bindings[entity.className]!.mode.name, 'target': bindings[entity.className]!.target?.wireName},
           'capabilities': {'archivable': entity.hasArchivableCapability, 'ordered': entity.hasOrderedCapability, 'collaborative': entity.canCollaborate, 'activityTracked': graph.activityTrackings.any((tracking) => tracking.source.className == entity.className), 'component': entity.isComponent},
           'fields': [
-            for (final field in entity.fields) {'name': field.name, 'type': field.dartType, 'column': field.columnName, 'nullable': field.nullable, 'default': field.defaultValue?.toString(), 'generated': field.generatedOnly, 'mutable': entity.isPatchable(field), 'reference': field.reference?.targetClassName, 'inverseCardinality': field.reference == null ? null : entity.inverseCardinalityFor(field).name, 'source': field.generatedOnly ? 'generated convention or capability' : 'entity declaration'},
+            for (final field in entity.fields) {'name': field.name, 'type': field.dartType, 'column': field.columnName, 'nullable': field.nullable, 'default': field.defaultValue?.toString(), 'generated': field.generatedOnly, 'mutable': entity.isPatchable(field), 'normalization': field.normalization.name, 'reference': field.reference?.targetClassName, 'inverseCardinality': field.reference == null ? null : entity.inverseCardinalityFor(field).name, 'source': field.generatedOnly ? 'generated convention or capability' : 'entity declaration'},
           ],
           'indexes': [
             for (final index in entity.compoundIndexes) {'fields': index.fields, 'unique': index.unique, 'scope': index.scope.name, 'keyset': index.keyset, 'activeOnly': index.activeOnly, 'exactLookup': index.exactLookup},

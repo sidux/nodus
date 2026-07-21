@@ -82,14 +82,8 @@ final class _TaskEditorForm extends HookWidget {
           : existing.beginEdit(),
       keys: [entityGraph, existing],
     );
-    final title = useEntityDraftTextField(
-      draft.titleField,
-      normalize: (value) => value.trim(),
-    );
-    final description = useEntityDraftNullableTextField(
-      draft.descriptionField,
-      normalize: _trimmedOrNull,
-    );
+    final title = useEntityDraftTextField(draft.titleField);
+    final description = useEntityDraftNullableTextField(draft.descriptionField);
     final titleFocus = useFocusNode();
     final saveAction = useEntityAction();
     final projectId = useEntityDraftValue(draft.projectIdField);
@@ -303,9 +297,4 @@ String _dateLabel(DateTime value) {
   final month = local.month.toString().padLeft(2, '0');
   final day = local.day.toString().padLeft(2, '0');
   return '${local.year}-$month-$day';
-}
-
-String? _trimmedOrNull(String? value) {
-  final trimmed = value?.trim();
-  return trimmed == null || trimmed.isEmpty ? null : trimmed;
 }
