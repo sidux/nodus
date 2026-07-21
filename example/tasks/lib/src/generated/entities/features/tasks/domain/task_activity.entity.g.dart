@@ -280,15 +280,7 @@ final class TaskActivityRecord extends TaskActivity
   }
 
   @override
-  void validateGeneratedDraft(int expectedRevision) {
-    if (_localRevision != expectedRevision) {
-      throw EntityDraftStateException(
-        entityType: 'TaskActivity',
-        entityId: generatedEntityId,
-        reason: EntityDraftFailureReason.stale,
-        message: 'The entity changed after this draft was created.',
-      );
-    }
+  void validateGeneratedDraft() {
     _mutationSink.validateDraftTarget(this);
   }
 
@@ -335,6 +327,14 @@ final class TaskActivityRecord extends TaskActivity
   final Observable<ServerVersion> _serverVersionStore;
   @override
   ServerVersion get serverVersion => _serverVersionStore.value;
+
+  @override
+  Future<void> applyGeneratedDraft({
+    required TypedEntityPatch<TaskActivity> base,
+    required TypedEntityPatch<TaskActivity> candidate,
+  }) => throw UnsupportedError(
+    'TaskActivity has no ordinary draft-editable fields.',
+  );
 
   @override
   String get generatedEntityType => 'TaskActivity';

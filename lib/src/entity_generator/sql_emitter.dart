@@ -2308,6 +2308,9 @@ void _emitSyncInfrastructure(
         '(entity_type, entity_id, audience_user_id, sequence);',
       )
       ..writeln(
+        'alter table public.local_entity_changes enable row level security;',
+      )
+      ..writeln(
         'revoke all on public.local_entity_changes from anon, authenticated;',
       );
   }

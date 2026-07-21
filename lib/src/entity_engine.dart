@@ -335,7 +335,12 @@ abstract interface class GeneratedEntityAccess<E> {
 
   Future<R> runGeneratedTransaction<R>(Future<R> Function() body);
 
-  void validateGeneratedDraft(int expectedRevision);
+  void validateGeneratedDraft();
+
+  Future<void> applyGeneratedDraft({
+    required TypedEntityPatch<E> base,
+    required TypedEntityPatch<E> candidate,
+  });
 
   Future<void> awaitGeneratedLocalCommit(int expectedRevision);
 }

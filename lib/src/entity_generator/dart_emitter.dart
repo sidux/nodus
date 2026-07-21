@@ -17,6 +17,9 @@ String _entityRead(FieldSpec field, {String entity = 'entity'}) =>
 String _recordRead(FieldSpec field) =>
     field.generatedOnly ? 'generatedOrderRank' : field.name;
 
+String _nullableType(String dartType) =>
+    dartType.endsWith('?') ? dartType : '$dartType?';
+
 const _driftTableMemberNames = <String>{
   'tableName',
   'withoutRowId',
@@ -694,6 +697,7 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
   final usesClock =
       spec.actions.isNotEmpty ||
       spec.commands.isNotEmpty ||
+      spec.draftEditableFields.isNotEmpty ||
       spec.fields.any((field) => field.isMutable && !spec.isCommandOnly(field));
   buffer
     ..writeln(
@@ -816,17 +820,7 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
     ..writeln('    return _generatedMutationCompletion(_generatedLocalCommit);')
     ..writeln('  }')
     ..writeln('  @override')
-    ..writeln('  void validateGeneratedDraft(int expectedRevision) {')
-    ..writeln('    if (_localRevision != expectedRevision) {')
-    ..writeln('      throw EntityDraftStateException(')
-    ..writeln("        entityType: '${spec.className}',")
-    ..writeln('        entityId: generatedEntityId,')
-    ..writeln('        reason: EntityDraftFailureReason.stale,')
-    ..writeln(
-      "        message: 'The entity changed after this draft was created.',",
-    )
-    ..writeln('      );')
-    ..writeln('    }')
+    ..writeln('  void validateGeneratedDraft() {')
     ..writeln('    _mutationSink.validateDraftTarget(this);')
     ..writeln('  }')
     ..writeln('  @override')
@@ -911,6 +905,7 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
   for (final command in spec.commands) {
     _emitCommand(buffer, spec, command);
   }
+  _emitGeneratedDraftMutation(buffer, spec);
   if (spec.canCollaborate) {
     _emitRecordCollaborationApi(buffer, spec);
   }
@@ -1018,26 +1013,231 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
     ..writeln();
 }
 
+void _emitGeneratedDraftMutation(StringBuffer buffer, EntitySpec spec) {
+  final fields = spec.draftEditableFields;
+  if (fields.isEmpty) {
+    buffer
+      ..writeln()
+      ..writeln('  @override')
+      ..writeln('  Future<void> applyGeneratedDraft({')
+      ..writeln('    required TypedEntityPatch<${spec.className}> base,')
+      ..writeln('    required TypedEntityPatch<${spec.className}> candidate,')
+      ..writeln('  }) => throw UnsupportedError(')
+      ..writeln(
+        "    '${spec.className} has no ordinary draft-editable fields.',",
+      )
+      ..writeln('  );');
+    return;
+  }
+  final autoUpdated = spec.fields
+      .where((field) => field.autoUpdated)
+      .firstOrNull;
+
+  buffer
+    ..writeln()
+    ..writeln('  @override')
+    ..writeln('  Future<void> applyGeneratedDraft({')
+    ..writeln('    required TypedEntityPatch<${spec.className}> base,')
+    ..writeln('    required TypedEntityPatch<${spec.className}> candidate,')
+    ..writeln('  }) {');
+  for (final field in fields) {
+    buffer
+      ..writeln(
+        '    final base${field.capitalizedName} = '
+        "${_fieldReference(spec, field)}.decode(base['${field.name}']);",
+      )
+      ..writeln(
+        '    final candidate${field.capitalizedName} = '
+        "${_fieldReference(spec, field)}.decode(candidate['${field.name}']);",
+      );
+  }
+  for (final field in fields) {
+    buffer
+      ..writeln(
+        '    final next${field.capitalizedName} = '
+        '${_normalizedEntityValueExpression(field, 'candidate${field.capitalizedName}')};',
+      )
+      ..writeln(
+        '    final ${field.name}DraftChanged = '
+        '${_entityValueChangedExpression(field, 'base${field.capitalizedName}', 'next${field.capitalizedName}')};',
+      )
+      ..writeln(
+        '    final ${field.name}CurrentChanged = '
+        '${_entityValueChangedExpression(field, 'base${field.capitalizedName}', '_${field.name}Store.value')};',
+      )
+      ..writeln(
+        '    final ${field.name}Changed = ${field.name}DraftChanged && '
+        '${_entityValueChangedExpression(field, '_${field.name}Store.value', 'next${field.capitalizedName}')};',
+      )
+      ..writeln(
+        '    final ${field.name}Overlaps = ${field.name}Changed && '
+        '${field.name}CurrentChanged;',
+      );
+  }
+  final overlaps = fields.map((field) => '${field.name}Overlaps').join(' || ');
+  final changed = fields.map((field) => '${field.name}Changed').join(' || ');
+  buffer
+    ..writeln('    if ($overlaps) {')
+    ..writeln('      throw EntityDraftFieldConflictException(')
+    ..writeln("        entityType: '${spec.className}',")
+    ..writeln('        entityId: generatedEntityId,')
+    ..writeln('        fields: [');
+  for (final field in fields) {
+    buffer.writeln("          if (${field.name}Overlaps) '${field.name}',");
+  }
+  buffer
+    ..writeln('        ],')
+    ..writeln('      );')
+    ..writeln('    }')
+    ..writeln('    if (!($changed)) return Future.value();');
+  if (spec.fields.any(
+    (field) => field.name == EntityConventions.deletedAtFieldName,
+  )) {
+    _emitDeletedMutationGuard(buffer, spec, fieldName: 'draft');
+  }
+  for (final field in fields.where(_hasValidation)) {
+    buffer.writeln('    if (${field.name}Changed) {');
+    _emitFieldValidation(
+      buffer,
+      spec,
+      field,
+      valueExpression: 'next${field.capitalizedName}',
+      indent: '      ',
+    );
+    buffer.writeln('    }');
+  }
+  final fieldNames = fields.map((field) => field.name).toSet();
+  _emitCrossFieldValidations(
+    buffer,
+    spec,
+    valueFor: (field) => fieldNames.contains(field.name)
+        ? '${field.name}Changed ? next${field.capitalizedName} : ${_recordRead(field)}'
+        : _recordRead(field),
+    indent: '    ',
+  );
+  for (final field in fields) {
+    _emitMutationAuthorization(
+      buffer,
+      spec,
+      field,
+      operation: RlsOperation.update,
+      oldValueExpression: '_${field.name}Store.value',
+      newValueExpression: 'next${field.capitalizedName}',
+      changedExpression: '${field.name}Changed',
+      indent: '    ',
+    );
+  }
+  buffer.writeln('    final mutationTime = _clock.nowUtc();');
+  for (final field in fields) {
+    buffer.writeln(
+      '    final old${field.capitalizedName} = _${field.name}Store.value;',
+    );
+  }
+  if (autoUpdated != null) {
+    buffer.writeln('    final oldUpdatedAt = _${autoUpdated.name}Store.value;');
+  }
+  buffer
+    ..writeln('    final previousRevision = _localRevision;')
+    ..writeln('    final mutationRevision = ++_localRevision;')
+    ..writeln('    runInAction(() {');
+  for (final field in fields) {
+    buffer
+      ..writeln('      if (${field.name}Changed) {')
+      ..writeln(
+        '        _${field.name}Store.value = next${field.capitalizedName};',
+      )
+      ..writeln('      }');
+  }
+  if (autoUpdated != null) {
+    buffer.writeln('      _${autoUpdated.name}Store.value = mutationTime;');
+  }
+  buffer
+    ..writeln('    });')
+    ..writeln(
+      '    var generatedDraftPatch = '
+      'TypedEntityPatch<${spec.className}>.empty();',
+    );
+  for (final field in fields) {
+    buffer
+      ..writeln('    if (${field.name}Changed) {')
+      ..writeln(
+        '      final fieldPatch = ${_fieldReference(spec, field)}'
+        '.patch(next${field.capitalizedName});',
+      )
+      ..writeln(
+        '      generatedDraftPatch = generatedDraftPatch.merge(fieldPatch);',
+      )
+      ..writeln('    }');
+  }
+  buffer
+    ..writeln('    final syncPatch = generatedDraftPatch;')
+    ..writeln(
+      '    _generatedLocalCommit = '
+      '_mutationSink.recordEntityMutation<${spec.className}>(',
+    )
+    ..writeln('      entity: this,')
+    ..writeln(
+      autoUpdated == null
+          ? '      patch: syncPatch,'
+          : '      patch: syncPatch.merge(${_fieldReference(spec, autoUpdated)}.patch(mutationTime)),',
+    )
+    ..writeln('      syncPatch: syncPatch,')
+    ..writeln('      occurredAt: mutationTime,');
+  if (spec.hasActivityTrackedCapability) {
+    buffer.writeln(
+      "      activityOperation: ActivityOperation.action('edit'),",
+    );
+  }
+  buffer
+    ..writeln('      rollbackIfCurrent: () {')
+    ..writeln('        if (_localRevision != mutationRevision) return;')
+    ..writeln('        _localRevision = previousRevision;');
+  for (final field in fields) {
+    buffer
+      ..writeln('        if (${field.name}Changed) {')
+      ..writeln(
+        '          _${field.name}Store.value = old${field.capitalizedName};',
+      )
+      ..writeln('        }');
+  }
+  if (autoUpdated != null) {
+    buffer.writeln('        _${autoUpdated.name}Store.value = oldUpdatedAt;');
+  }
+  buffer
+    ..writeln('      },')
+    ..writeln('    );')
+    ..writeln('    return _generatedMutationCompletion(_generatedLocalCommit);')
+    ..writeln('  }');
+}
+
 void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
-  final edits = spec.actions
-      .where((action) => action.methodName == 'edit')
-      .toList(growable: false);
-  final edit = edits.firstOrNull;
+  final editableFields = spec.draftEditableFields;
   final transfer = spec.orderScopeTransferAction;
-  if (!spec.canCreatePublicly && edit == null && transfer == null) return;
+  if (!spec.canCreatePublicly && editableFields.isEmpty && transfer == null) {
+    return;
+  }
 
   final draftName = '${spec.className}MutationDraft';
   final fields = <String, String>{};
   for (final field in spec.createParameters) {
     fields[field.name] = field.dartType;
   }
-  for (final action in [edit, transfer].whereType<ActionSpec>()) {
+  for (final field in editableFields) {
+    fields[field.name] = field.dartType;
+  }
+  for (final action in [transfer].whereType<ActionSpec>()) {
     for (final parameter in action.parameters) {
       fields[parameter.name] = parameter.dartType;
     }
   }
 
-  if (edit != null || transfer != null) {
+  final editFields = <FieldSpec>[
+    ...editableFields,
+    for (final field in spec.orderScopeTransferFields)
+      if (!editableFields.contains(field)) field,
+  ];
+  final editFieldNames = editFields.map((field) => field.name).toSet();
+  if (editFields.isNotEmpty) {
     buffer
       ..writeln(
         'extension ${spec.className}GeneratedEditing on ${spec.className} {',
@@ -1053,8 +1253,12 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
   if (spec.canCreatePublicly) {
     buffer
       ..writeln('  $draftName.create(this._set)')
-      ..writeln('      : _entity = null,')
-      ..writeln('        _baseRevision = null${entries.isEmpty ? ';' : ','}');
+      ..writeln(
+        '      : _entity = null${entries.isEmpty && editFields.isEmpty ? ';' : ','}',
+      );
+    for (final field in editFields) {
+      buffer.writeln('        _base${field.capitalizedName} = null,');
+    }
     for (var index = 0; index < entries.length; index++) {
       final entry = entries[index];
       final field = spec.createParameters
@@ -1071,28 +1275,38 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
       buffer.writeln('        _${entry.key}Field = $initializer$suffix');
     }
   }
-  if (edit != null || transfer != null) {
+  if (editFields.isNotEmpty) {
     buffer
       ..writeln('  $draftName.edit(${spec.className} entity)')
       ..writeln('      : _set = null,')
-      ..writeln('        _entity = entity,')
-      ..writeln(
-        '        _baseRevision = entity.generatedAccess.generatedLocalRevision${entries.isEmpty ? ';' : ','}',
+      ..writeln('        _entity = entity,');
+    for (final field in editFields) {
+      buffer.writeln(
+        '        _base${field.capitalizedName} = entity.${field.name},',
       );
+    }
     for (var index = 0; index < entries.length; index++) {
       final entry = entries[index];
       final suffix = index == entries.length - 1 ? ';' : ',';
+      final writable = editFieldNames.contains(entry.key)
+          ? ''
+          : ', writable: false';
       buffer.writeln(
         '        _${entry.key}Field = EntityDraftField<${entry.value}>.value('
-        'entity.${entry.key})$suffix',
+        'entity.${entry.key}$writable)$suffix',
       );
     }
   }
   buffer
     ..writeln()
     ..writeln('  final ${spec.className}Set? _set;')
-    ..writeln('  final ${spec.className}? _entity;')
-    ..writeln('  final int? _baseRevision;')
+    ..writeln('  final ${spec.className}? _entity;');
+  for (final field in editFields) {
+    buffer.writeln(
+      '  final ${_nullableType(field.dartType)} _base${field.capitalizedName};',
+    );
+  }
+  buffer
     ..writeln('  bool _consumed = false;')
     ..writeln()
     ..writeln('  bool get isCreating => _entity == null;')
@@ -1151,15 +1365,73 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
       )
       ..writeln('    }');
   }
-  buffer
-    ..writeln(
-      '    current.generatedAccess.validateGeneratedDraft(_baseRevision!);',
-    )
-    ..writeln(
-      '    await current.generatedAccess.runGeneratedTransaction(() async {',
+  buffer.writeln('    current.generatedAccess.validateGeneratedDraft();');
+  if (transfer != null) {
+    final transferFields = spec.orderScopeTransferFields;
+    final overlaps = transferFields
+        .map(
+          (field) =>
+              '${_entityValueChangedExpression(field, '_base${field.capitalizedName}', field.name)} && '
+              '${_entityValueChangedExpression(field, '_base${field.capitalizedName}', 'current.${field.name}')} && '
+              '${_entityValueChangedExpression(field, 'current.${field.name}', field.name)}',
+        )
+        .join(' || ');
+    buffer
+      ..writeln('    if ($overlaps) {')
+      ..writeln('      throw EntityDraftFieldConflictException(')
+      ..writeln("        entityType: '${spec.className}',")
+      ..writeln('        entityId: current.id.value,')
+      ..writeln('        fields: [');
+    for (final field in transferFields) {
+      final overlap =
+          '${_entityValueChangedExpression(field, '_base${field.capitalizedName}', field.name)} && '
+          '${_entityValueChangedExpression(field, '_base${field.capitalizedName}', 'current.${field.name}')} && '
+          '${_entityValueChangedExpression(field, 'current.${field.name}', field.name)}';
+      buffer.writeln("          if ($overlap) '${field.name}',");
+    }
+    buffer
+      ..writeln('        ],')
+      ..writeln('      );')
+      ..writeln('    }');
+  }
+  buffer.writeln(
+    '    await current.generatedAccess.runGeneratedTransaction(() async {',
+  );
+  if (editableFields.isNotEmpty) {
+    final first = editableFields.first;
+    final firstBase = first.nullable
+        ? '_base${first.capitalizedName}'
+        : '_base${first.capitalizedName} as ${first.dartType}';
+    buffer.writeln(
+      '      final generatedDraftBase = ${_fieldReference(spec, first)}'
+      '.patch($firstBase)',
     );
-  if (edit case final action?) {
-    _emitDraftActionInvocation(buffer, spec, action, indent: '      ');
+    for (final field in editableFields.skip(1)) {
+      final base = field.nullable
+          ? '_base${field.capitalizedName}'
+          : '_base${field.capitalizedName} as ${field.dartType}';
+      buffer.writeln(
+        '          .merge(${_fieldReference(spec, field)}'
+        '.patch($base))',
+      );
+    }
+    buffer.writeln('          ;');
+    buffer.writeln(
+      '      final generatedDraftCandidate = ${_fieldReference(spec, first)}'
+      '.patch(${first.name})',
+    );
+    for (final field in editableFields.skip(1)) {
+      buffer.writeln(
+        '          .merge(${_fieldReference(spec, field)}'
+        '.patch(${field.name}))',
+      );
+    }
+    buffer
+      ..writeln('          ;')
+      ..writeln('      await current.generatedAccess.applyGeneratedDraft(')
+      ..writeln('        base: generatedDraftBase,')
+      ..writeln('        candidate: generatedDraftCandidate,')
+      ..writeln('      );');
   }
   if (transfer case final action?) {
     final changed = action.parameters
@@ -2250,9 +2522,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   buffer
     ..writeln('  final $engineType _engine;')
     ..writeln('  final LocalEntityQueryCache<${spec.className}> _queries;');
-  final hasEditDraft = spec.actions.any(
-    (action) => action.methodName == 'edit',
-  );
+  final hasEditDraft = spec.draftEditableFields.isNotEmpty;
   if (spec.canCreatePublicly ||
       hasEditDraft ||
       spec.orderScopeTransferAction != null) {

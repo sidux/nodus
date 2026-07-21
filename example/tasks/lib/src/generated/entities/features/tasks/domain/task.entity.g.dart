@@ -144,10 +144,6 @@ final class TaskDescriptor
   ActionPolicy get actionPolicy => const ActionPolicy(
     actions: [
       ActionDefinition(
-        fieldNames: const ['title', 'description', 'priority', 'dueAt'],
-        assignments: [],
-      ),
-      ActionDefinition(
         fieldNames: const ['status', 'completedAt'],
         assignments: [
           ActionAssignment.literal('status', 'in_progress'),
@@ -396,15 +392,7 @@ final class TaskRecord extends Task
   }
 
   @override
-  void validateGeneratedDraft(int expectedRevision) {
-    if (_localRevision != expectedRevision) {
-      throw EntityDraftStateException(
-        entityType: 'Task',
-        entityId: generatedEntityId,
-        reason: EntityDraftFailureReason.stale,
-        message: 'The entity changed after this draft was created.',
-      );
-    }
+  void validateGeneratedDraft() {
     _mutationSink.validateDraftTarget(this);
   }
 
@@ -554,118 +542,6 @@ final class TaskRecord extends Task
       }
       rethrow;
     }
-  }
-
-  @override
-  Future<void> edit({
-    required String title,
-    required String? description,
-    required TaskPriority priority,
-    required DateTime? dueAt,
-  }) {
-    final _generatedActionTime = _clock.nowUtc();
-    final oldTitle = _titleStore.value;
-    final nextTitle = title;
-    final titleChanged = oldTitle != nextTitle;
-    final oldDescription = _descriptionStore.value;
-    final nextDescription = description;
-    final descriptionChanged = oldDescription != nextDescription;
-    final oldPriority = _priorityStore.value;
-    final nextPriority = priority;
-    final priorityChanged = oldPriority != nextPriority;
-    final oldDueAt = _dueAtStore.value;
-    final nextDueAt = dueAt?.toUtc();
-    final dueAtChanged = oldDueAt != nextDueAt;
-    if (!(titleChanged ||
-        descriptionChanged ||
-        priorityChanged ||
-        dueAtChanged))
-      return Future.value();
-    if (_deletedAtStore.value != null) {
-      throw const EntityValidationException(
-        entityType: 'Task',
-        field: 'edit',
-        message: 'Deleted entities cannot be changed.',
-      );
-    }
-    if (nextTitle.trim().length < 1) {
-      throw const EntityValidationException(
-        entityType: 'Task',
-        field: 'title',
-        message: 'Must contain at least 1 non-whitespace character(s).',
-      );
-    }
-    if (nextTitle.length > 160) {
-      throw const EntityValidationException(
-        entityType: 'Task',
-        field: 'title',
-        message: 'Must contain at most 160 character(s).',
-      );
-    }
-    if (nextDescription != null && nextDescription.length > 1000) {
-      throw const EntityValidationException(
-        entityType: 'Task',
-        field: 'description',
-        message: 'Must contain at most 1000 character(s).',
-      );
-    }
-    if (titleChanged) {
-      _mutationSink.validateMutationAuthorization(
-        entity: this,
-        operation: RlsOperation.update,
-        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
-      );
-    }
-    if (descriptionChanged) {
-      _mutationSink.validateMutationAuthorization(
-        entity: this,
-        operation: RlsOperation.update,
-        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
-      );
-    }
-    if (priorityChanged) {
-      _mutationSink.validateMutationAuthorization(
-        entity: this,
-        operation: RlsOperation.update,
-        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
-      );
-    }
-    if (dueAtChanged) {
-      _mutationSink.validateMutationAuthorization(
-        entity: this,
-        operation: RlsOperation.update,
-        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
-      );
-    }
-    final previousRevision = _localRevision;
-    final mutationRevision = ++_localRevision;
-    runInAction(() {
-      _titleStore.value = nextTitle;
-      _descriptionStore.value = nextDescription;
-      _priorityStore.value = nextPriority;
-      _dueAtStore.value = nextDueAt;
-    });
-    final syncPatch = TaskFields.title
-        .patch(nextTitle)
-        .merge(TaskFields.description.patch(nextDescription))
-        .merge(TaskFields.priority.patch(nextPriority))
-        .merge(TaskFields.dueAt.patch(nextDueAt));
-    _generatedLocalCommit = _mutationSink.recordEntityMutation<Task>(
-      entity: this,
-      patch: syncPatch,
-      syncPatch: syncPatch,
-      occurredAt: _generatedActionTime,
-      activityOperation: ActivityOperation.action('edit'),
-      rollbackIfCurrent: () {
-        if (_localRevision != mutationRevision) return;
-        _localRevision = previousRevision;
-        _titleStore.value = oldTitle;
-        _descriptionStore.value = oldDescription;
-        _priorityStore.value = oldPriority;
-        _dueAtStore.value = oldDueAt;
-      },
-    );
-    return _generatedMutationCompletion(_generatedLocalCommit);
   }
 
   @override
@@ -1189,6 +1065,189 @@ final class TaskRecord extends Task
   }
 
   @override
+  Future<void> applyGeneratedDraft({
+    required TypedEntityPatch<Task> base,
+    required TypedEntityPatch<Task> candidate,
+  }) {
+    final baseTitle = TaskFields.title.decode(base['title']);
+    final candidateTitle = TaskFields.title.decode(candidate['title']);
+    final baseDescription = TaskFields.description.decode(base['description']);
+    final candidateDescription = TaskFields.description.decode(
+      candidate['description'],
+    );
+    final basePriority = TaskFields.priority.decode(base['priority']);
+    final candidatePriority = TaskFields.priority.decode(candidate['priority']);
+    final baseDueAt = TaskFields.dueAt.decode(base['dueAt']);
+    final candidateDueAt = TaskFields.dueAt.decode(candidate['dueAt']);
+    final nextTitle = candidateTitle;
+    final titleDraftChanged = baseTitle != nextTitle;
+    final titleCurrentChanged = baseTitle != _titleStore.value;
+    final titleChanged = titleDraftChanged && _titleStore.value != nextTitle;
+    final titleOverlaps = titleChanged && titleCurrentChanged;
+    final nextDescription = candidateDescription;
+    final descriptionDraftChanged = baseDescription != nextDescription;
+    final descriptionCurrentChanged =
+        baseDescription != _descriptionStore.value;
+    final descriptionChanged =
+        descriptionDraftChanged && _descriptionStore.value != nextDescription;
+    final descriptionOverlaps = descriptionChanged && descriptionCurrentChanged;
+    final nextPriority = candidatePriority;
+    final priorityDraftChanged = basePriority != nextPriority;
+    final priorityCurrentChanged = basePriority != _priorityStore.value;
+    final priorityChanged =
+        priorityDraftChanged && _priorityStore.value != nextPriority;
+    final priorityOverlaps = priorityChanged && priorityCurrentChanged;
+    final nextDueAt = candidateDueAt?.toUtc();
+    final dueAtDraftChanged = baseDueAt != nextDueAt;
+    final dueAtCurrentChanged = baseDueAt != _dueAtStore.value;
+    final dueAtChanged = dueAtDraftChanged && _dueAtStore.value != nextDueAt;
+    final dueAtOverlaps = dueAtChanged && dueAtCurrentChanged;
+    if (titleOverlaps ||
+        descriptionOverlaps ||
+        priorityOverlaps ||
+        dueAtOverlaps) {
+      throw EntityDraftFieldConflictException(
+        entityType: 'Task',
+        entityId: generatedEntityId,
+        fields: [
+          if (titleOverlaps) 'title',
+          if (descriptionOverlaps) 'description',
+          if (priorityOverlaps) 'priority',
+          if (dueAtOverlaps) 'dueAt',
+        ],
+      );
+    }
+    if (!(titleChanged ||
+        descriptionChanged ||
+        priorityChanged ||
+        dueAtChanged))
+      return Future.value();
+    if (_deletedAtStore.value != null) {
+      throw const EntityValidationException(
+        entityType: 'Task',
+        field: 'draft',
+        message: 'Deleted entities cannot be changed.',
+      );
+    }
+    if (titleChanged) {
+      if (nextTitle.trim().length < 1) {
+        throw const EntityValidationException(
+          entityType: 'Task',
+          field: 'title',
+          message: 'Must contain at least 1 non-whitespace character(s).',
+        );
+      }
+      if (nextTitle.length > 160) {
+        throw const EntityValidationException(
+          entityType: 'Task',
+          field: 'title',
+          message: 'Must contain at most 160 character(s).',
+        );
+      }
+    }
+    if (descriptionChanged) {
+      if (nextDescription != null && nextDescription.length > 1000) {
+        throw const EntityValidationException(
+          entityType: 'Task',
+          field: 'description',
+          message: 'Must contain at most 1000 character(s).',
+        );
+      }
+    }
+    if (titleChanged) {
+      _mutationSink.validateMutationAuthorization(
+        entity: this,
+        operation: RlsOperation.update,
+        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
+      );
+    }
+    if (descriptionChanged) {
+      _mutationSink.validateMutationAuthorization(
+        entity: this,
+        operation: RlsOperation.update,
+        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
+      );
+    }
+    if (priorityChanged) {
+      _mutationSink.validateMutationAuthorization(
+        entity: this,
+        operation: RlsOperation.update,
+        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
+      );
+    }
+    if (dueAtChanged) {
+      _mutationSink.validateMutationAuthorization(
+        entity: this,
+        operation: RlsOperation.update,
+        principals: const [RlsPrincipal.owner, RlsPrincipal.collaborator],
+      );
+    }
+    final mutationTime = _clock.nowUtc();
+    final oldTitle = _titleStore.value;
+    final oldDescription = _descriptionStore.value;
+    final oldPriority = _priorityStore.value;
+    final oldDueAt = _dueAtStore.value;
+    final previousRevision = _localRevision;
+    final mutationRevision = ++_localRevision;
+    runInAction(() {
+      if (titleChanged) {
+        _titleStore.value = nextTitle;
+      }
+      if (descriptionChanged) {
+        _descriptionStore.value = nextDescription;
+      }
+      if (priorityChanged) {
+        _priorityStore.value = nextPriority;
+      }
+      if (dueAtChanged) {
+        _dueAtStore.value = nextDueAt;
+      }
+    });
+    var generatedDraftPatch = TypedEntityPatch<Task>.empty();
+    if (titleChanged) {
+      final fieldPatch = TaskFields.title.patch(nextTitle);
+      generatedDraftPatch = generatedDraftPatch.merge(fieldPatch);
+    }
+    if (descriptionChanged) {
+      final fieldPatch = TaskFields.description.patch(nextDescription);
+      generatedDraftPatch = generatedDraftPatch.merge(fieldPatch);
+    }
+    if (priorityChanged) {
+      final fieldPatch = TaskFields.priority.patch(nextPriority);
+      generatedDraftPatch = generatedDraftPatch.merge(fieldPatch);
+    }
+    if (dueAtChanged) {
+      final fieldPatch = TaskFields.dueAt.patch(nextDueAt);
+      generatedDraftPatch = generatedDraftPatch.merge(fieldPatch);
+    }
+    final syncPatch = generatedDraftPatch;
+    _generatedLocalCommit = _mutationSink.recordEntityMutation<Task>(
+      entity: this,
+      patch: syncPatch,
+      syncPatch: syncPatch,
+      occurredAt: mutationTime,
+      activityOperation: ActivityOperation.action('edit'),
+      rollbackIfCurrent: () {
+        if (_localRevision != mutationRevision) return;
+        _localRevision = previousRevision;
+        if (titleChanged) {
+          _titleStore.value = oldTitle;
+        }
+        if (descriptionChanged) {
+          _descriptionStore.value = oldDescription;
+        }
+        if (priorityChanged) {
+          _priorityStore.value = oldPriority;
+        }
+        if (dueAtChanged) {
+          _dueAtStore.value = oldDueAt;
+        }
+      },
+    );
+    return _generatedMutationCompletion(_generatedLocalCommit);
+  }
+
+  @override
   Future<void> setCollaborator(
     LocalId<Account> collaboratorId, {
     required bool active,
@@ -1382,7 +1441,11 @@ extension TaskGeneratedEditing on Task {
 final class TaskMutationDraft implements EntityMutationDraft<Task> {
   TaskMutationDraft.create(this._set)
     : _entity = null,
-      _baseRevision = null,
+      _baseTitle = null,
+      _baseDescription = null,
+      _basePriority = null,
+      _baseDueAt = null,
+      _baseProjectId = null,
       _projectIdField = EntityDraftField<LocalId<TaskProject>?>.value(null),
       _titleField = EntityDraftField<String>.unset(),
       _descriptionField = EntityDraftField<String?>.value(null),
@@ -1393,7 +1456,11 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
   TaskMutationDraft.edit(Task entity)
     : _set = null,
       _entity = entity,
-      _baseRevision = entity.generatedAccess.generatedLocalRevision,
+      _baseTitle = entity.title,
+      _baseDescription = entity.description,
+      _basePriority = entity.priority,
+      _baseDueAt = entity.dueAt,
+      _baseProjectId = entity.projectId,
       _projectIdField = EntityDraftField<LocalId<TaskProject>?>.value(
         entity.projectId,
       ),
@@ -1404,7 +1471,11 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
 
   final TaskSet? _set;
   final Task? _entity;
-  final int? _baseRevision;
+  final String? _baseTitle;
+  final String? _baseDescription;
+  final TaskPriority? _basePriority;
+  final DateTime? _baseDueAt;
+  final LocalId<TaskProject>? _baseProjectId;
   bool _consumed = false;
 
   bool get isCreating => _entity == null;
@@ -1466,13 +1537,35 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
       _consumed = true;
       return created;
     }
-    current.generatedAccess.validateGeneratedDraft(_baseRevision!);
+    current.generatedAccess.validateGeneratedDraft();
+    if (_baseProjectId != projectId &&
+        _baseProjectId != current.projectId &&
+        current.projectId != projectId) {
+      throw EntityDraftFieldConflictException(
+        entityType: 'Task',
+        entityId: current.id.value,
+        fields: [
+          if (_baseProjectId != projectId &&
+              _baseProjectId != current.projectId &&
+              current.projectId != projectId)
+            'projectId',
+        ],
+      );
+    }
     await current.generatedAccess.runGeneratedTransaction(() async {
-      await current.edit(
-        title: title,
-        description: description,
-        priority: priority,
-        dueAt: dueAt,
+      final generatedDraftBase = TaskFields.title
+          .patch(_baseTitle as String)
+          .merge(TaskFields.description.patch(_baseDescription))
+          .merge(TaskFields.priority.patch(_basePriority as TaskPriority))
+          .merge(TaskFields.dueAt.patch(_baseDueAt));
+      final generatedDraftCandidate = TaskFields.title
+          .patch(title)
+          .merge(TaskFields.description.patch(description))
+          .merge(TaskFields.priority.patch(priority))
+          .merge(TaskFields.dueAt.patch(dueAt));
+      await current.generatedAccess.applyGeneratedDraft(
+        base: generatedDraftBase,
+        candidate: generatedDraftCandidate,
       );
       if (projectId != current.projectId) {
         await current.moveToProject(projectId: projectId);

@@ -151,6 +151,52 @@ void main() {
   );
 
   test(
+    'Given concurrent drafts, When they change different fields, Then the later save merges over current state',
+    () async {
+      final graph = await openGraph();
+      addTearDown(graph.close);
+      final task = await graph.tasks.create(title: 'Concurrent draft');
+      final titleDraft = task.beginEdit()..title = 'Renamed concurrently';
+      final descriptionDraft = task.beginEdit()
+        ..description = 'Merged without replacing the title.';
+
+      await titleDraft.save();
+      await descriptionDraft.save();
+
+      expect(task.title, 'Renamed concurrently');
+      expect(task.description, 'Merged without replacing the title.');
+    },
+  );
+
+  test(
+    'Given concurrent drafts, When both change one field differently, Then the stale field is rejected and no-op saves stay inert',
+    () async {
+      final graph = await openGraph();
+      addTearDown(graph.close);
+      final task = await graph.tasks.create(title: 'Conflict base');
+      final first = task.beginEdit()..title = 'First writer';
+      final second = task.beginEdit()..title = 'Second writer';
+
+      await first.save();
+      await expectLater(
+        second.save(),
+        throwsA(
+          isA<EntityDraftFieldConflictException>().having(
+            (error) => error.fields,
+            'fields',
+            ['title'],
+          ),
+        ),
+      );
+      expect(task.title, 'First writer');
+
+      final revision = task.generatedAccess.generatedLocalRevision;
+      await task.beginEdit().save();
+      expect(task.generatedAccess.generatedLocalRevision, revision);
+    },
+  );
+
+  test(
     'Given a task owner, When setCollaborator is called directly, Then access and activity are durable',
     () async {
       final graph = await openGraph();

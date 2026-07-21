@@ -15,6 +15,11 @@
 - Enforces immutable persisted declarations and routes durable changes through
   typed actions or mutation drafts; JSON/object and collection persistence are
   rejected in favor of native scalar fields and normalized relationships.
+- Infers ordinary edit-draft fields without a catch-all action, merges
+  non-overlapping concurrent drafts over current state, reports overlapping
+  fields through a typed conflict, and treats unchanged saves as durable no-ops.
+- Enables row-level security on the generated internal remote change log in
+  addition to revoking direct API-role privileges.
 - Removes the legacy handwritten `@EntityGraph` setup path. Package discovery
   plus tool-owned `nodus.lock` is the sole graph declaration contract.
 - Allows same-coordinator nested transactions to join safely while rejecting

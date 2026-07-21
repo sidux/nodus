@@ -334,6 +334,25 @@ final class EntityDraftStateException implements Exception {
   String toString() => '$entityType `$entityId`: $message';
 }
 
+/// Typed conflict raised when an edit draft and a newer mutation changed the
+/// same persisted fields to different values.
+final class EntityDraftFieldConflictException implements Exception {
+  EntityDraftFieldConflictException({
+    required this.entityType,
+    required this.entityId,
+    required List<String> fields,
+  }) : fields = List.unmodifiable(fields);
+
+  final String entityType;
+  final String entityId;
+  final List<String> fields;
+
+  @override
+  String toString() =>
+      '$entityType `$entityId`: the draft overlaps newer changes to '
+      '${fields.map((field) => '`$field`').join(', ')}.';
+}
+
 /// Mutable, typed input owned by one generated create/edit draft.
 ///
 /// A field can be genuinely unset, which lets creation forms distinguish a
@@ -341,12 +360,17 @@ final class EntityDraftStateException implements Exception {
 /// drafts turn an unset required field into the same field-addressable
 /// [EntityValidationException] used by entity actions.
 final class EntityDraftField<T> {
-  EntityDraftField.unset() : _value = _unsetDraftValue;
+  EntityDraftField.unset({bool writable = true})
+    : _value = _unsetDraftValue,
+      _writable = writable;
 
-  EntityDraftField.value(T value) : _value = value;
+  EntityDraftField.value(T value, {bool writable = true})
+    : _value = value,
+      _writable = writable;
 
   static const Object _unsetDraftValue = Object();
   Object? _value;
+  final bool _writable;
 
   bool get isSet => !identical(_value, _unsetDraftValue);
 
@@ -359,9 +383,21 @@ final class EntityDraftField<T> {
     return _value as T;
   }
 
-  set value(T value) => _value = value;
+  set value(T value) {
+    _ensureWritable();
+    _value = value;
+  }
 
-  void clear() => _value = _unsetDraftValue;
+  void clear() {
+    _ensureWritable();
+    _value = _unsetDraftValue;
+  }
+
+  void _ensureWritable() {
+    if (!_writable) {
+      throw StateError('This field is available only while creating.');
+    }
+  }
 
   T requireValue({required String entityType, required String field}) {
     if (!isSet) {
@@ -2795,6 +2831,8 @@ abstract final class EntityConventions {
   static const updatedAtColumnName = 'updated_at';
   static const deletedAtFieldName = 'deletedAt';
   static const deletedAtColumnName = 'deleted_at';
+  static const archivedAtFieldName = 'archivedAt';
+  static const archivedAtColumnName = 'archived_at';
   static const serverVersionFieldName = 'serverVersion';
   static const serverVersionColumnName = 'server_version';
   static const orderRankFieldName = 'orderRank';
@@ -2847,6 +2885,8 @@ final class _WireEntityPatch extends EntityPatch {
 /// A field/value patch nominally bound to one domain entity type.
 final class TypedEntityPatch<E> extends EntityPatch {
   TypedEntityPatch._(super.values) : super._();
+
+  factory TypedEntityPatch.empty() => TypedEntityPatch<E>._(const {});
 
   TypedEntityPatch<E> merge(TypedEntityPatch<E> other) =>
       TypedEntityPatch<E>._({..._values, ...other._values});

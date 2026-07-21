@@ -1,7 +1,7 @@
 {
   "graph": "TasksExample",
   "package": "tasks_example",
-  "schemaVersion": 2,
+  "schemaVersion": 4,
   "targets": [
     "supabase"
   ],
@@ -203,37 +203,6 @@
         }
       ],
       "actions": [
-        {
-          "name": "edit",
-          "parameters": [
-            {
-              "name": "title",
-              "type": "String",
-              "named": true
-            },
-            {
-              "name": "description",
-              "type": "String?",
-              "named": true
-            },
-            {
-              "name": "priority",
-              "type": "TaskPriority",
-              "named": true
-            },
-            {
-              "name": "dueAt",
-              "type": "DateTime?",
-              "named": true
-            }
-          ],
-          "fields": [
-            "title",
-            "description",
-            "priority",
-            "dueAt"
-          ]
-        },
         {
           "name": "moveToProject",
           "parameters": [

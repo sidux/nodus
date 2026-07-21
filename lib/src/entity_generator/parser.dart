@@ -609,6 +609,9 @@ Future<EntitySpec?> parseEntityAsset(
         isOwnerReference: isOwnerReference,
         transitions: transitions,
         updatePrincipals: updatePrincipals,
+        draftEditableOverride: persisted?.peek('editable')?.isNull ?? true
+            ? null
+            : persisted!.read('editable').boolValue,
       ),
     );
   }
@@ -1086,7 +1089,7 @@ Future<EntitySpec?> parseEntityAsset(
   final inputImport = 'package:$packageName/$relativePath';
   typeImports.remove(inputImport);
   typeImports.removeWhere((uri) => uri.startsWith('package:nodus/'));
-  return EntitySpec(
+  final spec = EntitySpec(
     className: classElement.name!,
     packageName: packageName,
     inputImport: inputImport,
@@ -1117,6 +1120,20 @@ Future<EntitySpec?> parseEntityAsset(
     syncModeOverride: syncMode,
     syncTargetOverride: syncTarget,
   );
+  final invalidDraftOverride = fields
+      .where((field) => field.draftEditableOverride == true)
+      .where((field) => !spec.isDraftEditable(field))
+      .firstOrNull;
+  if (invalidDraftOverride != null) {
+    throw InvalidGenerationSourceError(
+      '`${invalidDraftOverride.name}` cannot be draft-editable. Identity, '
+      'ownership, infrastructure, lifecycle, transition, relationship, and '
+      'action-owned fields must change through their generated capability or '
+      'action.',
+      element: classElement,
+    );
+  }
+  return spec;
 }
 
 List<String>? _parseOrderScope(
@@ -1221,7 +1238,6 @@ List<String>? _parseOrderScope(
       );
     }
     if (transferableNames.isEmpty ||
-        action.methodName == 'edit' ||
         action.assignments.isNotEmpty ||
         action.targetFields.toSet().length != transferableNames.length ||
         !action.targetFields.toSet().containsAll(transferableNames)) {
@@ -1521,7 +1537,19 @@ void _validateFieldUpdatePrincipals(
   for (final field in fields.where(
     (candidate) => candidate.updatePrincipals.isNotEmpty,
   )) {
-    if ((!field.isMutable && !actionTargets.contains(field.name)) ||
+    final ordinaryDraftField =
+        field.draftEditableOverride != false &&
+        field.inCreatePayload &&
+        field.reference == null &&
+        field.transitions.isEmpty &&
+        !const {
+          EntityConventions.idFieldName,
+          EntityConventions.ownerFieldName,
+          EntityConventions.deletedAtFieldName,
+          EntityConventions.archivedAtFieldName,
+          EntityConventions.orderRankFieldName,
+        }.contains(field.name);
+    if ((!ordinaryDraftField && !actionTargets.contains(field.name)) ||
         field.serverGenerated ||
         field.isServerManaged) {
       throw InvalidGenerationSourceError(
@@ -2871,15 +2899,7 @@ ReferenceSpec _parseReference(
     target,
     ownership: targetOwnership,
   );
-  final targetHasAuthoredMutation =
-      target.fields.any(
-        (candidate) =>
-            !candidate.isStatic &&
-            !candidate.isOriginGetterSetter &&
-            !_transientChecker.hasAnnotationOf(candidate) &&
-            !candidate.isFinal,
-      ) ||
-      target.methods.any(_actionChecker.hasAnnotationOf);
+  final targetHasClientMutation = _hasClientMutationSurface(target);
   final targetOwnedByType = target.allSupertypes
       .where((type) => _ownedByChecker.isExactlyType(type))
       .firstOrNull;
@@ -3033,10 +3053,51 @@ ReferenceSpec _parseReference(
         .map((grant) => grant.operation)
         .where(
           (operation) =>
-              operation != RlsOperation.update || targetHasAuthoredMutation,
+              operation != RlsOperation.update || targetHasClientMutation,
         )
         .toList(growable: false),
   );
+}
+
+bool _hasClientMutationSurface(ClassElement target) {
+  if (target.methods.any(_actionChecker.hasAnnotationOf)) return true;
+  if (target.allSupertypes.any(
+    (type) => _isNodusCapability(type, 'ActivityOf'),
+  )) {
+    return false;
+  }
+  return target.fields.any((field) {
+    if (field.isStatic ||
+        field.isOriginGetterSetter ||
+        _transientChecker.hasAnnotationOf(field) ||
+        !field.isFinal ||
+        _referenceChecker.hasAnnotationOf(field) ||
+        _compositionChecker.hasAnnotationOf(field) ||
+        const {
+          EntityConventions.idFieldName,
+          EntityConventions.ownerFieldName,
+          EntityConventions.createdAtFieldName,
+          EntityConventions.updatedAtFieldName,
+          EntityConventions.deletedAtFieldName,
+          EntityConventions.archivedAtFieldName,
+          EntityConventions.orderRankFieldName,
+          EntityConventions.serverVersionFieldName,
+        }.contains(field.name)) {
+      return false;
+    }
+    final object = _persistedChecker.firstAnnotationOf(field);
+    if (object == null) return true;
+    final persisted = ConstantReader(object);
+    final editable = persisted.peek('editable');
+    if (editable != null && !editable.isNull && !editable.boolValue) {
+      return false;
+    }
+    if (_readEnum(persisted.read('authority'), FieldAuthority.values) ==
+        FieldAuthority.server) {
+      return false;
+    }
+    return persisted.read('transitions').listValue.isEmpty;
+  });
 }
 
 bool _isLowerCamelDartIdentifier(String value) =>
@@ -3051,10 +3112,26 @@ List<ActionSpec> _parseActions(
   final declarationsByName = {
     for (final field in classElement.fields) field.name: field,
   };
+  final reservedBeginEdit = classElement.methods
+      .where((method) => method.name == 'beginEdit')
+      .firstOrNull;
+  if (reservedBeginEdit != null) {
+    throw InvalidGenerationSourceError(
+      '`beginEdit` is reserved for the generated typed edit draft.',
+      element: reservedBeginEdit,
+    );
+  }
   final actions = <ActionSpec>[];
   for (final method in classElement.methods) {
     final object = _actionChecker.firstAnnotationOf(method);
     if (object == null) continue;
+    if (method.name == 'edit') {
+      throw InvalidGenerationSourceError(
+        '`edit` is not a semantic action name. Use the generated `beginEdit` '
+        'draft for ordinary fields, or name the action for its domain meaning.',
+        element: method,
+      );
+    }
     if (method.isStatic ||
         method.isPrivate ||
         !method.isAbstract ||
@@ -3072,16 +3149,6 @@ List<ActionSpec> _parseActions(
         element: method,
       );
     }
-    if (method.name == 'edit' &&
-        classElement.methods.any(
-          (candidate) => candidate.name == 'beginEdit',
-        )) {
-      throw InvalidGenerationSourceError(
-        '`beginEdit` is reserved for the generated typed edit draft.',
-        element: method,
-      );
-    }
-
     final parameters = <ActionParameterSpec>[];
     final targets = <String>{};
     for (final parameter in method.formalParameters) {
@@ -3110,14 +3177,6 @@ List<ActionSpec> _parseActions(
           'Entity action parameter `$name` type `$parameterType` must match '
           'persisted field type `${field.dartType}` or safely narrow its '
           'nullability.',
-          element: parameter,
-        );
-      }
-      if (method.name == 'edit' && parameterType != field.dartType) {
-        throw InvalidGenerationSourceError(
-          'An `edit` action generates a draft initialized from the entity, so '
-          'parameter `$name` must exactly match persisted field type '
-          '`${field.dartType}`.',
           element: parameter,
         );
       }
@@ -3175,14 +3234,6 @@ List<ActionSpec> _parseActions(
           kind: kind,
           literal: literal,
         ),
-      );
-    }
-    if (method.name == 'edit' &&
-        (parameters.isEmpty || assignments.isNotEmpty)) {
-      throw InvalidGenerationSourceError(
-        'An `edit` action must contain one or more field parameters and no '
-        'fixed assignments so it can generate a complete typed draft.',
-        element: method,
       );
     }
     if (targets.isEmpty) {
@@ -3822,6 +3873,9 @@ SecuritySpec _parseSecurity(
   final isComponent = element.allSupertypes.any(
     _componentChecker.isExactlyType,
   );
+  final isActivityEntry = element.allSupertypes.any(
+    (type) => _isNodusCapability(type, 'ActivityOf'),
+  );
   final grants = configuredGrants == null || configuredGrants.isNull
       ? _inferSecurityGrants(
           ownership: ownership,
@@ -3831,6 +3885,7 @@ SecuritySpec _parseSecurity(
           hasCollaboration: hasCollaboration,
           hasAccessReference: hasAccessReference,
           isComponent: isComponent,
+          isActivityEntry: isActivityEntry,
         )
       : configuredGrants.listValue
             .map((object) {
@@ -4044,18 +4099,34 @@ List<GrantSpec> _inferSecurityGrants({
   required bool hasCollaboration,
   required bool hasAccessReference,
   required bool isComponent,
+  required bool isActivityEntry,
 }) {
-  final actionTargets = actions
-      ?.expand((action) => action.targetFields)
-      .toSet();
+  final actionTargets =
+      actions?.expand((action) => action.targetFields).toSet() ??
+      const <String>{};
+  final commandTargets =
+      commands?.map((command) => command.targetField).toSet() ??
+      const <String>{};
   final hasMutableFields =
-      fields?.any(
-        (field) =>
-            (field.isMutable ||
-                (actionTargets?.contains(field.name) ?? false)) &&
-            !field.serverGenerated,
-      ) ??
-      true;
+      !isActivityEntry &&
+      (fields?.any(
+            (field) =>
+                !field.isId &&
+                !field.generatedOnly &&
+                field.name != EntityConventions.ownerFieldName &&
+                field.name != EntityConventions.deletedAtFieldName &&
+                field.name != EntityConventions.archivedAtFieldName &&
+                field.name != EntityConventions.orderRankFieldName &&
+                field.inCreatePayload &&
+                !field.isServerManaged &&
+                (actionTargets.contains(field.name) ||
+                    (field.draftEditableOverride != false &&
+                        field.reference == null &&
+                        field.transitions.isEmpty &&
+                        !commandTargets.contains(field.name) &&
+                        !actionTargets.contains(field.name))),
+          ) ??
+          true);
   if (isComponent) {
     return [
       const GrantSpec(

@@ -58,14 +58,6 @@ abstract class Task
   String get activityLabel => title;
 
   @Action()
-  Future<void> edit({
-    required String title,
-    required String? description,
-    required TaskPriority priority,
-    required DateTime? dueAt,
-  });
-
-  @Action()
   Future<void> moveToProject({required LocalId<TaskProject>? projectId});
 
   @Action(

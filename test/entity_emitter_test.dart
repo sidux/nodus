@@ -104,7 +104,7 @@ void main() {
         dartType: 'String',
         sqlType: SqlType.text,
         nullable: false,
-        isFinal: false,
+        isFinal: true,
         defaultValue: null,
         conflict: ConflictStrategy.localWins,
         minLength: 1,
@@ -121,7 +121,7 @@ void main() {
         dartType: 'int',
         sqlType: SqlType.integer,
         nullable: false,
-        isFinal: false,
+        isFinal: true,
         defaultValue: 0,
         conflict: ConflictStrategy.serverWins,
         minLength: null,
@@ -309,10 +309,7 @@ void main() {
     expect(first, contains('generatedAccess.recordGeneratedCommand('));
     expect(first, isNot(contains(' as WorkItemRecord')));
     expect(first, contains('recordEntityMutation<WorkItem>('));
-    expect(
-      first,
-      contains('final syncPatch = WorkItemFields.statement.patch(value)'),
-    );
+    expect(first, contains('final syncPatch = generatedDraftPatch;'));
     expect(first, contains('patch: syncPatch'));
     expect(first, isNot(contains("patch: {'statement': value}")));
     expect(first, contains('LocalEntityQuery<WorkItem> query'));
@@ -442,8 +439,8 @@ void main() {
     );
     expect(first, contains("'CHECK (sort_order >= 0)'"));
     expect(first, contains("'CHECK (sort_order <= 100)'"));
-    expect(first, contains('if (value < 0)'));
-    expect(first, contains('if (value > 100)'));
+    expect(first, contains('if (nextSortOrder < 0)'));
+    expect(first, contains('if (nextSortOrder > 100)'));
     expect(
       first.indexOf('remoteStatement ='),
       lessThan(
@@ -499,7 +496,7 @@ void main() {
     expect(output, isNot(contains('WorkItem require(')));
   });
 
-  test('edit actions generate one typed locally durable draft API', () {
+  test('ordinary fields generate one typed locally durable draft API', () {
     final editable = EntitySpec(
       className: spec.className,
       packageName: spec.packageName,
@@ -511,24 +508,6 @@ void main() {
       fields: spec.fields,
       security: spec.security,
       commands: spec.commands,
-      actions: const [
-        ActionSpec(
-          methodName: 'edit',
-          parameters: [
-            ActionParameterSpec(
-              name: 'statement',
-              dartType: 'String',
-              named: true,
-            ),
-            ActionParameterSpec(
-              name: 'sortOrder',
-              dartType: 'int',
-              named: true,
-            ),
-          ],
-          assignments: [],
-        ),
-      ],
     );
 
     final output = emitDart(editable);
@@ -548,13 +527,16 @@ void main() {
     expect(output, contains('Future<WorkItem> save() async'));
     expect(
       output,
-      contains(
-        'current.generatedAccess.validateGeneratedDraft(_baseRevision!);',
-      ),
+      contains('current.generatedAccess.validateGeneratedDraft();'),
     );
-    expect(output, contains('await current.edit('));
-    expect(output, contains('statement: statement,'));
-    expect(output, contains('sortOrder: sortOrder'));
+    expect(
+      output,
+      contains('await current.generatedAccess.applyGeneratedDraft('),
+    );
+    expect(output, contains('WorkItemFields.statement.patch('));
+    expect(output, contains('_baseStatement as String'));
+    expect(output, contains('WorkItemFields.sortOrder.patch(sortOrder)'));
+    expect(output, contains('EntityDraftFieldConflictException'));
     expect(output, contains('EntityDraftFailureReason.consumed'));
     expect(output, contains('principals: const [RlsPrincipal.owner],'));
     expect(
@@ -854,6 +836,18 @@ void main() {
     expect(
       'create table if not exists public.local_entity_changes'.allMatches(sql),
       hasLength(1),
+    );
+    expect(
+      sql,
+      contains(
+        'alter table public.local_entity_changes enable row level security;',
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        'revoke all on public.local_entity_changes from anon, authenticated;',
+      ),
     );
     expect(sql, contains('changes.audience_user_id is null'));
     expect(sql, contains('or changes.audience_user_id = auth.uid()'));

@@ -352,13 +352,6 @@ abstract class Goal implements OwnedBy<Goal, Account> {
   Future<void> reopen();
 
   @Action()
-  Future<void> edit({
-    required String title,
-    required String? description,
-    required int priority,
-  });
-
-  @Action()
   Future<void> recordReview({required DateTime reviewedAt});
 }
 
@@ -374,9 +367,7 @@ final class Account {}
           allOf([
             contains('Future<void> complete()'),
             contains('Future<void> reopen()'),
-            contains('Future<void> edit({'),
-            contains('required String? description,'),
-            contains('required int priority,'),
+            isNot(contains('Future<void> edit({')),
             contains(
               'Future<void> recordReview({required DateTime reviewedAt})',
             ),
@@ -417,6 +408,73 @@ final class Account {}
           ]),
         ),
       },
+    );
+  });
+
+  test(
+    'infers ordinary drafts and keeps explicit creation facts read-only',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Note implements OwnedBy<Note, Account> {
+  abstract final String title;
+
+  @Persisted(editable: false)
+  abstract final String importedSource;
+}
+
+final class Account {}
+''';
+
+      await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(source),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/note.entity.g.dart': decodedMatches(
+            allOf([
+              contains('NoteMutationDraft beginEdit()'),
+              contains('final String? _baseTitle;'),
+              isNot(contains('_baseImportedSource')),
+              contains('entity.importedSource,'),
+              contains('writable: false'),
+              contains("name: 'importedSource'"),
+              contains('mutable: false'),
+            ]),
+          ),
+        },
+      );
+    },
+  );
+
+  test('rejects draft editability on action-owned fields', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Note implements OwnedBy<Note, Account> {
+  @Persisted(editable: true)
+  abstract final String title;
+
+  @Action()
+  Future<void> rename({required String title});
+}
+
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+    );
+
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains('`title` cannot be draft-editable'),
     );
   });
 
@@ -516,19 +574,14 @@ final class Account {}
         'must be an abstract, non-generic Future<void> method',
       ),
       (
-        'abstract final String? title;\n  @Action()\n  Future<void> edit({required String title});',
-        'must exactly match persisted field type `String?`',
-      ),
-      (
-        'abstract final String title;\n  abstract final DateTime? archivedAt;\n  '
-            '@Action(values: [ActionValue.clockNow(#archivedAt)])\n  '
-            'Future<void> edit({required String title});',
-        'must contain one or more field parameters and no fixed assignments',
-      ),
-      (
         'abstract final String title;\n  void beginEdit();\n  '
-            '@Action()\n  Future<void> edit({required String title});',
+            '@Action()\n  Future<void> rename({required String title});',
         '`beginEdit` is reserved for the generated typed edit draft',
+      ),
+      (
+        'abstract final String title;\n  '
+            '@Action()\n  Future<void> edit({required String title});',
+        '`edit` is not a semantic action name',
       ),
     ];
 
@@ -1193,8 +1246,6 @@ abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(minValue: 1, maxValue: 10)
   abstract final int? optionalRank;
 
-  @Action()
-  Future<void> edit({required int minute, required int? optionalRank});
 }
 
 final class Account {}
@@ -1230,8 +1281,6 @@ abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(minValue: 0, maxValue: 100)
   abstract final double? optionalScore;
 
-  @Action()
-  Future<void> edit({required double score, required double? optionalScore});
 }
 
 final class Account {}
@@ -1292,8 +1341,6 @@ abstract class TimeBlock implements OwnedBy<TimeBlock, Account>, SoftDeletable {
   @Persisted(greaterThan: #startMinutes)
   abstract final int endMinutes;
 
-  @Action()
-  Future<void> edit({required int startMinutes, required int endMinutes});
 }
 
 final class Account {}
@@ -1308,7 +1355,12 @@ final class Account {}
           allOf([
             contains("'CHECK (end_minutes > start_minutes)'"),
             contains('if ((endMinutes) <= (startMinutes))'),
-            contains('if ((nextEndMinutes) <= (nextStartMinutes))'),
+            contains(
+              'if ((endMinutesChanged ? nextEndMinutes : endMinutes) <=',
+            ),
+            contains(
+              '(startMinutesChanged ? nextStartMinutes : startMinutes))',
+            ),
             contains('hasEndMinutes ? remoteEndMinutes : endMinutes'),
             contains('hasStartMinutes ? remoteStartMinutes : startMinutes'),
           ]),
@@ -1330,8 +1382,6 @@ abstract class NumericRange implements OwnedBy<NumericRange, Account>, SoftDelet
   @Persisted(greaterThanOrEqual: #minimum)
   abstract final double? maximum;
 
-  @Action()
-  Future<void> edit({required double? minimum, required double? maximum});
 }
 
 final class Account {}
@@ -1389,8 +1439,6 @@ abstract class TimeBlock implements OwnedBy<TimeBlock, Account>, SoftDeletable {
   @Persisted(greaterThan: #startMinutes, requires: #startMinutes)
   abstract final int? endMinutes;
 
-  @Action()
-  Future<void> edit({required int? startMinutes, required int? endMinutes});
 }
 
 final class Account {}
@@ -1786,8 +1834,6 @@ abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   @Persisted(minValue: 0, maxValue: 1000000)
   abstract final Money? estimate;
 
-  @Action()
-  Future<void> edit({required Money budget, required Money? estimate});
 }
 
 final class Account {}
@@ -2218,8 +2264,6 @@ import 'package:nodus/account.dart';
 abstract class Document implements OwnedBy<Document, Account>, Component {
   abstract final String body;
 
-  @Action()
-  Future<void> edit({required String body});
 }
 ''';
 
@@ -3731,7 +3775,7 @@ final class Account {}
     );
   });
 
-  test('rejects field update principals on immutable state', () async {
+  test('infers an update grant for an ordinary draft field', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
@@ -3749,11 +3793,7 @@ final class Account {}
       _sources(source),
       rootPackage: 'nodus',
     );
-    expect(result.succeeded, isFalse);
-    expect(
-      result.errors.join('\n'),
-      contains('is not a client-updatable field or entity-action target'),
-    );
+    expect(result.succeeded, isTrue);
   });
 
   test('requires a single inferred initial state for transitions', () async {
@@ -4391,8 +4431,6 @@ abstract class Note implements OwnedBy<Note, Account> {
   abstract final String body;
   abstract final DateTime updatedAt;
 
-  @Action()
-  Future<void> edit({required String body});
 }
 
 final class Account {}
@@ -4406,10 +4444,10 @@ final class Account {}
           'nodus|lib/note.entity.g.dart': decodedMatches(
             allOf([
               contains(
-                'syncPatch.merge(NoteFields.updatedAt.patch(_generatedActionTime))',
+                'syncPatch.merge(NoteFields.updatedAt.patch(mutationTime))',
               ),
               contains('syncPatch: syncPatch'),
-              contains('_updatedAtStore.value = _generatedActionTime'),
+              contains('_updatedAtStore.value = mutationTime'),
               contains('_updatedAtStore.value = oldUpdatedAt'),
               isNot(contains('set updatedAt(')),
               isNot(contains('required DateTime updatedAt,\n  }) {')),
@@ -6446,8 +6484,6 @@ import 'package:nodus/membership_status.dart';
 abstract class Task implements OwnedBy<Task, Account> {
   abstract final String title;
 
-  @Action()
-  Future<void> edit({required String title});
 }
 ''';
       final sources = _sources(taskSource, fileName: 'task.dart')

@@ -1056,6 +1056,14 @@ A draft MUST be:
 - discardable with no side effects;
 - free of raw maps and duplicate serialization.
 
+Draft editability is inferred for client-authoritative, non-reference scalar
+fields on an update-capable entity. Fields owned by identity, ownership,
+timestamps, lifecycle capabilities, transitions, relationships, commands, or
+declared actions are excluded. A creation-time scalar fact on an otherwise
+editable entity uses `@Persisted(editable: false)`; a catch-all `edit(...)`
+action is forbidden boilerplate and action method names never affect draft
+generation.
+
 For a creation draft, `await draft.save()` validates every required field and
 delegates to the generated set's canonical `create(...)` operation. For an edit
 draft it MUST:
@@ -2135,6 +2143,11 @@ Authenticated identity is inferred by the database wherever possible; clients
 do not repeat trusted owner identity in writable payloads. Generated functions
 use explicit search paths, qualified objects, least privilege, and no default
 `PUBLIC` execution.
+
+Every generated table in an exposed SQL schema enables row-level security,
+including internal change logs, receipts, and ordering metadata. Revoking API
+role privileges remains required but is not a substitute for RLS defense in
+depth.
 
 Migration acceptance verifies effective privileges with ordinary database
 roles after replay; reviewing declarative `GRANT`/`REVOKE` text alone is not

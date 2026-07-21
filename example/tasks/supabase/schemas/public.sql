@@ -90,6 +90,7 @@ create table if not exists public.local_entity_changes (
 );
 create index if not exists local_entity_changes_type_sequence_idx on public.local_entity_changes (entity_type, sequence);
 create index if not exists local_entity_changes_identity_idx on public.local_entity_changes (entity_type, entity_id, audience_user_id, sequence);
+alter table public.local_entity_changes enable row level security;
 revoke all on public.local_entity_changes from anon, authenticated;
 
 create or replace function public.capture_task_projects_change()
@@ -1039,24 +1040,8 @@ begin
      and not ((p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'in_progress' and p_patch -> 'completedAt' = 'null'::jsonb) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'done' and p_patch -> 'completedAt' <> 'null'::jsonb and (current_row.completed_at is null or current_row.completed_at is not distinct from ((p_patch -> 'completedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'todo' and p_patch -> 'completedAt' = 'null'::jsonb)) then
     raise exception 'Patch does not match a declared entity action' using errcode = '22023';
   end if;
-  if p_operation = 'patch' and p_patch ? 'description'
-     and not ((p_patch ?& array['title', 'description', 'priority', 'dueAt']::text[])) then
-    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
-  end if;
-  if p_operation = 'patch' and p_patch ? 'dueAt'
-     and not ((p_patch ?& array['title', 'description', 'priority', 'dueAt']::text[])) then
-    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
-  end if;
-  if p_operation = 'patch' and p_patch ? 'priority'
-     and not ((p_patch ?& array['title', 'description', 'priority', 'dueAt']::text[])) then
-    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
-  end if;
   if p_operation = 'patch' and p_patch ? 'status'
      and not ((p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'in_progress' and p_patch -> 'completedAt' = 'null'::jsonb) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'done' and p_patch -> 'completedAt' <> 'null'::jsonb and (current_row.completed_at is null or current_row.completed_at is not distinct from ((p_patch -> 'completedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'todo' and p_patch -> 'completedAt' = 'null'::jsonb)) then
-    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
-  end if;
-  if p_operation = 'patch' and p_patch ? 'title'
-     and not ((p_patch ?& array['title', 'description', 'priority', 'dueAt']::text[])) then
     raise exception 'Patch does not match a declared entity action' using errcode = '22023';
   end if;
   if p_operation = 'patch' and p_patch ? 'status'

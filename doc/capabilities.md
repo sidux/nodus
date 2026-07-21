@@ -54,9 +54,6 @@ abstract class Task
   @Persisted(defaultValue: TaskStatus.todo)
   abstract final TaskStatus status;
 
-  @Action()
-  Future<void> edit({required String title});
-
   @Action(values: [ActionValue(#status, TaskStatus.done)])
   Future<void> complete();
 }
@@ -499,25 +496,35 @@ patches; the generated action descriptor applies the same contract in the
 deterministic in-memory transport. Fields assigned a constant, clock, or clear
 value take their safe initial value during creation rather than becoming
 constructor escape hatches. Parameter-only action fields retain their ordinary
-typed create arguments, allowing concise atomic edit APIs without losing valid
-initial data. A nullable clock target is stamped only while null, which makes
-lifecycle actions idempotent until another declared action clears it.
-An `@Action()` named `edit` additionally generates `entity.beginEdit()` and the
-set generates `beginCreate()`. Both return one typed `<Entity>MutationDraft`.
-The draft snapshots the editable fields or holds typed creation defaults and
-unset required values; it remains a plain, non-observable value until `save()`.
-Saving rejects consumed, stale, detached, or disposed targets, invokes the same
-generated action and invariant checks, and resolves only after that exact
-mutation has atomically reached Drift and the durable synchronization queue.
+typed create arguments, allowing concise atomic domain actions without losing
+valid initial data. A nullable clock target is stamped only while null, which
+makes lifecycle actions idempotent until another declared action clears it.
+Ordinary client-authoritative scalar fields on an update-capable entity infer
+`entity.beginEdit()`, while the set generates `beginCreate()`. Both return one
+typed `<Entity>MutationDraft`; no catch-all action is declared. Identity,
+ownership, generated timestamps, lifecycle, transitions, references, commands,
+and semantic-action targets remain behind their owning generated APIs. A
+creation-time scalar fact that must stay immutable uses
+`@Persisted(editable: false)`.
+The draft snapshots the inferred edit fields or holds typed creation defaults
+and unset required values; it remains a plain, non-observable value until
+`save()`. Saving rejects consumed, detached, account-switched, or disposed
+targets. If newer work changed only other fields, the draft merges over the
+latest entity. A different concurrent value for the same field raises
+`EntityDraftFieldConflictException` with the overlapping field names. The
+complete merged candidate receives field, cross-field, and authorization
+validation before that exact mutation atomically reaches Drift and the durable
+synchronization queue.
 When an ordered scope field changes with ordinary edit fields, the draft runs
-the declared entity actions in one graph transaction; the feature does not add
-a transaction wrapper.
+the declared scope-transfer action in the same graph transaction; the feature
+does not add a transaction wrapper.
 It does not flush unrelated work or wait for the network. An unchanged draft
 is consumed as a true no-op; a persistence failure rolls the stable MobX entity
 back and rethrows the original error. `discard()` consumes the draft without
-changing the entity. The generator reserves `beginEdit`, requires exact field
-types (including nullability), and rejects fixed action assignments in `edit`
-so form state cannot silently omit or invent persisted values.
+changing the entity. The generator reserves `beginEdit`; action method names do
+not influence draft inference or generation. An `@Action` named `edit` is
+rejected because it expresses no domain meaning and duplicates the generated
+draft surface.
 Mutable or action-managed enum fields may declare typed `AllowedTransition`
 edges. The generator rejects cross-enum, nullable, unreachable, duplicate, and
 no-op declarations.

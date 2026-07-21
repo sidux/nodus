@@ -476,6 +476,7 @@ final class Persisted {
     this.renamedFrom,
     this.transitions = const [],
     this.updateBy = const [],
+    this.editable,
   });
 
   final String? column;
@@ -528,6 +529,15 @@ final class Persisted {
 
   /// Payload key used by the immediately preceding retained protocol.
   final String? renamedFrom;
+
+  /// Overrides whether this field participates in the generated edit draft.
+  ///
+  /// Nodus normally infers ordinary editable fields from client-authoritative
+  /// scalar fields on an update-capable entity. Use `false` for a creation-time
+  /// fact that must remain immutable even though sibling fields can change.
+  /// Infrastructure, lifecycle, transition, and relationship fields remain
+  /// action-owned and cannot be made draft-editable with this override.
+  final bool? editable;
 
   /// Allowed client-originated edges for a mutable persisted enum field.
   ///
@@ -687,6 +697,8 @@ final class OwnerReference {
 /// name. Constant, clock-derived, and null assignments cover lifecycle actions
 /// whose values do not come from callers. Every target field must be declared
 /// `abstract final`, making the generated action its only public mutation path.
+/// Name the action for its domain meaning; the generic name `edit` is reserved
+/// for ordinary generated draft behavior.
 final class Action {
   const Action({this.values = const []});
 

@@ -153,6 +153,32 @@ final class EntitySpec {
     ),
   );
 
+  /// Ordinary scalar fields edited by the generated mutation draft.
+  ///
+  /// Domain transitions and relationships stay behind their generated actions.
+  /// An explicit `editable: false` keeps a creation-time fact immutable without
+  /// requiring a no-op semantic action merely to communicate that policy.
+  List<FieldSpec> get draftEditableFields {
+    if (!canUpdate || isActivityEntry) return const [];
+    return fields.where(isDraftEditable).toList(growable: false);
+  }
+
+  bool isDraftEditable(FieldSpec field) {
+    if (!canUpdate || isActivityEntry) return false;
+    if (field.draftEditableOverride == false) return false;
+    return !field.isId &&
+        !field.generatedOnly &&
+        field != ownerField &&
+        field.inCreatePayload &&
+        field.reference == null &&
+        field.transitions.isEmpty &&
+        !isCommandOnly(field) &&
+        !isActionTarget(field) &&
+        field.name != EntityConventions.deletedAtFieldName &&
+        field.name != EntityConventions.archivedAtFieldName &&
+        field.name != EntityConventions.orderRankFieldName;
+  }
+
   /// Persisted fields initialized by generated set creation.
   ///
   /// Keeping this derivation on the entity specification lets graph-level
@@ -187,7 +213,7 @@ final class EntitySpec {
   bool isPatchable(FieldSpec field) =>
       !isCommandOnly(field) &&
       !isOrderScopeTransferTarget(field) &&
-      (field.isMutable || isActionTarget(field));
+      (isDraftEditable(field) || isActionTarget(field));
 
   /// The canonical ordering scope derived once for every generated adapter.
   ///
@@ -1197,6 +1223,7 @@ final class FieldSpec {
     this.enumTypeImport,
     this.scalarValue,
     this.generatedOnly = false,
+    this.draftEditableOverride,
   });
 
   final String name;
@@ -1246,6 +1273,7 @@ final class FieldSpec {
   final String? enumTypeImport;
   final ScalarValueSpec? scalarValue;
   final bool generatedOnly;
+  final bool? draftEditableOverride;
 
   FieldSpec withReference(ReferenceSpec value) => FieldSpec(
     name: name,
@@ -1292,6 +1320,7 @@ final class FieldSpec {
     enumTypeImport: enumTypeImport,
     scalarValue: scalarValue,
     generatedOnly: generatedOnly,
+    draftEditableOverride: draftEditableOverride,
   );
 
   bool get isServerManaged => authority == FieldAuthority.server;

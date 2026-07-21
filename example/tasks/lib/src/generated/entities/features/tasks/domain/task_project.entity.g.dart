@@ -263,15 +263,7 @@ final class TaskProjectRecord extends TaskProject
   }
 
   @override
-  void validateGeneratedDraft(int expectedRevision) {
-    if (_localRevision != expectedRevision) {
-      throw EntityDraftStateException(
-        entityType: 'TaskProject',
-        entityId: generatedEntityId,
-        reason: EntityDraftFailureReason.stale,
-        message: 'The entity changed after this draft was created.',
-      );
-    }
+  void validateGeneratedDraft() {
     _mutationSink.validateDraftTarget(this);
   }
 
@@ -522,6 +514,14 @@ final class TaskProjectRecord extends TaskProject
   }
 
   @override
+  Future<void> applyGeneratedDraft({
+    required TypedEntityPatch<TaskProject> base,
+    required TypedEntityPatch<TaskProject> candidate,
+  }) => throw UnsupportedError(
+    'TaskProject has no ordinary draft-editable fields.',
+  );
+
+  @override
   String get generatedEntityType => 'TaskProject';
   @override
   String get generatedEntityId => id.value;
@@ -617,12 +617,10 @@ final class TaskProjectMutationDraft
     implements EntityMutationDraft<TaskProject> {
   TaskProjectMutationDraft.create(this._set)
     : _entity = null,
-      _baseRevision = null,
       _titleField = EntityDraftField<String>.unset();
 
   final TaskProjectSet? _set;
   final TaskProject? _entity;
-  final int? _baseRevision;
   bool _consumed = false;
 
   bool get isCreating => _entity == null;
@@ -658,7 +656,7 @@ final class TaskProjectMutationDraft
       _consumed = true;
       return created;
     }
-    current.generatedAccess.validateGeneratedDraft(_baseRevision!);
+    current.generatedAccess.validateGeneratedDraft();
     await current.generatedAccess.runGeneratedTransaction(() async {});
     _consumed = true;
     return current;
