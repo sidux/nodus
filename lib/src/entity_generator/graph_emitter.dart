@@ -867,6 +867,7 @@ void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
       buffer,
       source: collection.linkEntity,
       relationship: collection.relationship,
+      cardinalityResolution: collection.cardinalityResolution,
       entityGraphName: entityGraphName,
     );
   }
@@ -1032,6 +1033,7 @@ void _emitActiveRelationship(
   StringBuffer buffer, {
   required EntitySpec source,
   required ActiveRelationshipSpec relationship,
+  required RelationshipCardinalityResolution cardinalityResolution,
   required String entityGraphName,
 }) {
   final className = '${source.className}Relationship';
@@ -1039,6 +1041,8 @@ void _emitActiveRelationship(
   final targetField = relationship.targetReference;
   final activeField = relationship.activeField;
   final targetIdType = targetField.dartType;
+  final sourceEntityType = localIdTypeArgument(ownerField.dartType);
+  final targetEntityType = localIdTypeArgument(targetField.dartType);
   final deletedAt = source.fields.singleWhere(
     (field) => field.name == EntityConventions.deletedAtFieldName,
   );
@@ -1107,6 +1111,176 @@ void _emitActiveRelationship(
     ..writeln('        });')
     ..writeln('      });')
     ..writeln();
+  if (cardinalityResolution.cardinality == Cardinality.bounded) {
+    buffer
+      ..writeln(
+        '  Future<void> replace(Iterable<$targetIdType> targetIds) async {',
+      )
+      ..writeln('    final requested = targetIds.toList(growable: false);')
+      ..writeln('    if (requested.toSet().length != requested.length) {')
+      ..writeln('      throw const EntityValidationException(')
+      ..writeln("        entityType: '${source.className}',")
+      ..writeln("        field: '${targetField.name}',")
+      ..writeln(
+        "        message: 'A relationship target may appear only once.',",
+      )
+      ..writeln('      );')
+      ..writeln('    }')
+      ..writeln('    await _entityGraph.${source.setAccessor}')
+      ..writeln('        .query(')
+      ..writeln('          where:')
+      ..writeln('              $activePredicate,')
+      ..writeln('        )')
+      ..writeln('        .useAll((existing) async {')
+      ..writeln(
+        '          final byTarget = <$targetIdType, ${source.className}>{};',
+      )
+      ..writeln('          for (final link in existing) {')
+      ..writeln('            if (byTarget[link.${targetField.name}] != null) {')
+      ..writeln('              throw StateError(')
+      ..writeln(
+        "                'Duplicate ${source.className} rows violate generated uniqueness.',",
+      )
+      ..writeln('              );')
+      ..writeln('            }')
+      ..writeln('            byTarget[link.${targetField.name}] = link;')
+      ..writeln('          }')
+      ..writeln(
+        '          final baseActive = existing.where((link) => link.${activeField.name}).toList(growable: false);',
+      );
+    if (source.hasOrderedCapability) {
+      buffer
+        ..writeln('          if (baseActive.length == requested.length &&')
+        ..writeln('              baseActive.indexed.every((entry) =>')
+        ..writeln(
+          '                  entry.\$2.${targetField.name} == requested[entry.\$1])) {',
+        )
+        ..writeln('            return;')
+        ..writeln('          }');
+    } else {
+      buffer
+        ..writeln(
+          '          final activeTargets = baseActive.map((link) => link.${targetField.name}).toSet();',
+        )
+        ..writeln('          if (activeTargets.length == requested.length &&')
+        ..writeln('              activeTargets.containsAll(requested)) {')
+        ..writeln('            return;')
+        ..writeln('          }');
+    }
+    buffer
+      ..writeln('          late final List<${source.className}> active;')
+      ..writeln(
+        '          await _entityGraph._coordinator.replaceActiveRelationship(',
+      )
+      ..writeln('            applyLocalProjection: () async {')
+      ..writeln('              active = <${source.className}>[];')
+      ..writeln('            for (final targetId in requested) {')
+      ..writeln('              final current = byTarget[targetId];')
+      ..writeln('              if (current == null) {')
+      ..writeln('                active.add(')
+      ..writeln(
+        '                  await _entityGraph.${source.setAccessor}.create(',
+      )
+      ..writeln('                    ${ownerField.name}: _${ownerField.name},')
+      ..writeln('                    ${targetField.name}: targetId,')
+      ..writeln('                  ),')
+      ..writeln('                );')
+      ..writeln('              } else {')
+      ..writeln('                if (!current.${activeField.name}) {')
+      ..writeln('                  await current.activate();')
+      ..writeln('                }')
+      ..writeln('                active.add(current);')
+      ..writeln('              }')
+      ..writeln('            }')
+      ..writeln('            final requestedSet = requested.toSet();')
+      ..writeln('            for (final current in existing) {')
+      ..writeln('              if (current.${activeField.name} &&')
+      ..writeln(
+        '                  !requestedSet.contains(current.${targetField.name})) {',
+      )
+      ..writeln('                await current.deactivate();')
+      ..writeln('              }')
+      ..writeln('            }');
+    if (source.hasOrderedCapability) {
+      buffer
+        ..writeln('            if (active.isNotEmpty) {')
+        ..writeln('              final ranks = GeneratedOrderRanks.allocate(')
+        ..writeln('                count: active.length,')
+        ..writeln('              )!;')
+        ..writeln(
+          '              final changes = <GeneratedOrderStateChange<${source.className}>>[];',
+        )
+        ..writeln('              try {')
+        ..writeln(
+          '                for (final (index, link) in active.indexed) {',
+        )
+        ..writeln(
+          '                  final change = link.generatedAccess.generatedOrderAccess!',
+        )
+        ..writeln(
+          '                      .prepareGeneratedOrderRank(ranks[index]);',
+        )
+        ..writeln('                  if (change != null) changes.add(change);')
+        ..writeln('                }')
+        ..writeln('              } catch (_) {')
+        ..writeln('                for (final change in changes.reversed) {')
+        ..writeln('                  change.rollbackIfCurrent();')
+        ..writeln('                }')
+        ..writeln('                rethrow;')
+        ..writeln('              }')
+        ..writeln('              final target = active.first;')
+        ..writeln(
+          '              await target.generatedAccess.generatedOrderAccess!',
+        )
+        ..writeln('                  .recordGeneratedExactOrder(')
+        ..writeln('                    changes: changes,')
+        ..writeln('                    command: ReorderOrderedCommand(')
+        ..writeln(
+          '                      orderedIds: active.map((link) => link.id),',
+        )
+        ..writeln('                      scopeBaseVersion: _entityGraph')
+        ..writeln(
+          '                          ._${_lowerCamel(source.className)}Engine',
+        )
+        ..writeln('                          .orderScopeVersionFor(')
+        ..writeln('                            target.generatedAccess')
+        ..writeln('                                .generatedOrderAccess!')
+        ..writeln('                                .generatedOrderScopeKey,')
+        ..writeln('                          ),')
+        ..writeln('                    ),')
+        ..writeln('                  );')
+        ..writeln('            }');
+    }
+    buffer
+      ..writeln('            },')
+      ..writeln('            recordSemanticCommand: () {')
+      ..writeln(
+        '              final anchor = active.firstOrNull ?? baseActive.first;',
+      )
+      ..writeln(
+        '              return anchor.generatedAccess.recordGeneratedCommand(',
+      )
+      ..writeln(
+        '                ReplaceActiveRelationshipCommand<${source.className}, $sourceEntityType, $targetEntityType>(',
+      )
+      ..writeln('                  sourceId: _${ownerField.name},')
+      ..writeln(
+        '                  baseActiveLinkIds: baseActive.map((link) => link.id),',
+      )
+      ..writeln('                  activeMembers: active.map(')
+      ..writeln('                    (link) => ActiveRelationshipMember(')
+      ..writeln('                      linkId: link.id,')
+      ..writeln('                      targetId: link.${targetField.name},')
+      ..writeln('                    ),')
+      ..writeln('                  ),')
+      ..writeln('                ),')
+      ..writeln('              );')
+      ..writeln('            },')
+      ..writeln('          );')
+      ..writeln('        });')
+      ..writeln('  }')
+      ..writeln();
+  }
   if (source.hasOrderedCapability) {
     buffer
       ..writeln('  Future<void> moveFirst($targetIdType targetId) =>')

@@ -1,5 +1,13 @@
 part of '../nodus.dart';
 
+bool _sameStringList(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
 /// Deterministic in-memory transport for tests and offline demonstrations.
 ///
 /// It follows the same idempotency, optimistic concurrency, change-log, and
@@ -66,6 +74,15 @@ final class InMemorySyncBackend
     final versionField = EntityConventions.serverVersionFieldName;
     final serverVersion = parseServerVersion(existing[versionField] ?? 0);
     if (operation case CommandPushOperation(:final command)) {
+      if (command
+          is ReplaceActiveRelationshipCommand<dynamic, dynamic, dynamic>) {
+        return _replaceActiveRelationship(
+          item: item,
+          operation: operation,
+          descriptor: descriptor,
+          command: command,
+        );
+      }
       if (command is ReorderOrderedCommand<dynamic>) {
         final orderedRecord = records[entityId];
         final orderedDescriptor = switch (descriptor) {
@@ -692,6 +709,247 @@ final class InMemorySyncBackend
       relatedChanges: orderedCreateRelatedChanges,
       orderScopeVersions: _receiptOrderScopeVersions[operationId] ?? const [],
     );
+  }
+
+  PushResult _replaceActiveRelationship({
+    required PushSyncWorkItem item,
+    required CommandPushOperation operation,
+    required EntityDescriptorBase descriptor,
+    required ReplaceActiveRelationshipCommand<dynamic, dynamic, dynamic>
+    command,
+  }) {
+    final relationship = definition.relationships
+        .where(
+          (candidate) =>
+              candidate.linkEntityType == descriptor.entityType &&
+              candidate.cardinality == Cardinality.bounded,
+        )
+        .firstOrNull;
+    if (relationship == null) {
+      throw const RejectedSyncException.validation(
+        code: 'unsupported_command',
+        message: 'Exact replacement requires a bounded relationship.',
+      );
+    }
+    final sourceId = command.sourceId.value;
+    final source = _recordsFor(relationship.sourceEntityType)[sourceId];
+    if (source == null) {
+      throw const RejectedSyncException.notFound(
+        code: 'relationship_source_not_found',
+        message: 'The relationship source does not exist.',
+      );
+    }
+    final records = _recordsFor(relationship.linkEntityType);
+    final targetRecords = _recordsFor(relationship.targetEntityType);
+    final sourceMembers = records.entries
+        .where(
+          (entry) =>
+              entry.value[relationship.sourceFieldName] == sourceId &&
+              entry.value[EntityConventions.deletedAtFieldName] == null,
+        )
+        .toList(growable: false);
+    if (relationship.ordered) {
+      sourceMembers.sort((left, right) {
+        final leftRank = OrderRank.parse(
+          left.value[EntityConventions.orderRankFieldName]! as String,
+        );
+        final rightRank = OrderRank.parse(
+          right.value[EntityConventions.orderRankFieldName]! as String,
+        );
+        final compared = leftRank.compareTo(rightRank);
+        return compared == 0 ? left.key.compareTo(right.key) : compared;
+      });
+    }
+    final activeMembers = sourceMembers
+        .where((entry) => entry.value[relationship.activeFieldName] == true)
+        .toList(growable: false);
+    final currentActiveIds = activeMembers
+        .map((entry) => entry.key)
+        .toList(growable: false);
+    final baseActiveIds = command.baseActiveLinkIds
+        .map((id) => id.value)
+        .toList(growable: false);
+    final baseMatches = relationship.ordered
+        ? _sameStringList(currentActiveIds, baseActiveIds)
+        : currentActiveIds.toSet().length == baseActiveIds.length &&
+              currentActiveIds.toSet().containsAll(baseActiveIds);
+    if (!baseMatches) {
+      throw const VersionConflictException(
+        'Exact relationship membership changed on the server.',
+      );
+    }
+
+    final byTarget = <String, MapEntry<String, JsonMap>>{};
+    for (final entry in sourceMembers) {
+      final targetId = entry.value[relationship.targetFieldName]! as String;
+      if (byTarget[targetId] != null) {
+        throw StateError(
+          '${relationship.linkEntityType} contains duplicate target pairs.',
+        );
+      }
+      byTarget[targetId] = entry;
+    }
+    final desiredIds = <String>{};
+    for (final member in command.activeMembers) {
+      final linkId = member.linkId.value;
+      final targetId = member.targetId.value;
+      if (!targetRecords.containsKey(targetId)) {
+        throw const RejectedSyncException.notFound(
+          code: 'relationship_target_not_found',
+          message: 'A relationship target does not exist.',
+        );
+      }
+      final current = byTarget[targetId];
+      if (current != null && current.key != linkId) {
+        throw const VersionConflictException(
+          'A relationship pair already has another canonical identity.',
+        );
+      }
+      final occupied = records[linkId];
+      if (current == null && occupied != null) {
+        throw const VersionConflictException(
+          'A new relationship link identity is already occupied.',
+        );
+      }
+      desiredIds.add(linkId);
+    }
+
+    final ranks = relationship.ordered && command.activeMembers.isNotEmpty
+        ? GeneratedOrderRanks.allocate(count: command.activeMembers.length)!
+        : const <OrderRank>[];
+    final changes = <RemoteEntityChange>[];
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final (index, member) in command.activeMembers.indexed) {
+      final linkId = member.linkId.value;
+      final targetId = member.targetId.value;
+      final current = byTarget[targetId]?.value;
+      final next = current == null
+          ? _newRelationshipRecord(
+              descriptor: descriptor,
+              relationship: relationship,
+              linkId: linkId,
+              sourceId: sourceId,
+              source: source,
+              targetId: targetId,
+              now: now,
+            )
+          : <String, Object?>{...current};
+      final nextVersion = ServerVersion(
+        parseServerVersion(
+              current?[EntityConventions.serverVersionFieldName] ?? 0,
+            ).value +
+            1,
+      );
+      next[relationship.activeFieldName] = true;
+      if (relationship.ordered) {
+        next[EntityConventions.orderRankFieldName] = ranks[index].value;
+      }
+      next[EntityConventions.serverVersionFieldName] = nextVersion.value;
+      if (descriptor.fields.any((field) => field.autoUpdated)) {
+        next[EntityConventions.updatedAtFieldName] = now;
+      }
+      records[linkId] = next;
+      changes.add(
+        _appendChange(
+          descriptor: descriptor,
+          entityId: linkId,
+          serverVersion: nextVersion,
+          fields: next,
+          operationId: operation.operationId,
+        ),
+      );
+    }
+    for (final entry in activeMembers) {
+      if (desiredIds.contains(entry.key)) continue;
+      final nextVersion = ServerVersion(
+        parseServerVersion(
+              entry.value[EntityConventions.serverVersionFieldName],
+            ).value +
+            1,
+      );
+      final next = <String, Object?>{
+        ...entry.value,
+        relationship.activeFieldName: false,
+        EntityConventions.serverVersionFieldName: nextVersion.value,
+        if (descriptor.fields.any((field) => field.autoUpdated))
+          EntityConventions.updatedAtFieldName: now,
+      };
+      records[entry.key] = next;
+      changes.add(
+        _appendChange(
+          descriptor: descriptor,
+          entityId: entry.key,
+          serverVersion: nextVersion,
+          fields: next,
+          operationId: operation.operationId,
+        ),
+      );
+    }
+    final canonicalChange = changes.singleWhere(
+      (change) => change.identity.rawId == operation.identity.rawId,
+    );
+    final relatedChanges = changes
+        .where((change) => !identical(change, canonicalChange))
+        .toList(growable: false);
+    final scopeVersions = <OrderScopeVersionReceipt>[];
+    if (relationship.ordered) {
+      final scopeKey = '${relationship.linkEntityType}\u0000$sourceId';
+      final nextScopeVersion = OrderScopeVersion(
+        (_orderScopeVersions[scopeKey] ?? OrderScopeVersion.zero).value + 1,
+      );
+      _orderScopeVersions[scopeKey] = nextScopeVersion;
+      final orderedDescriptor = descriptor as OrderedDescriptor;
+      scopeVersions.add(
+        _scopeVersionReceipt(
+          orderedDescriptor,
+          records[canonicalChange.identity.rawId]!,
+          nextScopeVersion,
+        ),
+      );
+    }
+    _receipts[operation.operationId] = canonicalChange;
+    _receiptRelatedChanges[operation.operationId] = relatedChanges;
+    _receiptOrderScopeVersions[operation.operationId] = scopeVersions;
+    if (!_disposed) _remoteChanges.add(null);
+    return _pushResult(
+      item,
+      canonicalChange,
+      relatedChanges: relatedChanges,
+      orderScopeVersions: scopeVersions,
+    );
+  }
+
+  JsonMap _newRelationshipRecord({
+    required EntityDescriptorBase descriptor,
+    required RelationshipDefinition relationship,
+    required String linkId,
+    required String sourceId,
+    required JsonMap source,
+    required String targetId,
+    required String now,
+  }) {
+    final result = <String, Object?>{};
+    for (final field in descriptor.fields) {
+      result[field.name] = switch (field.name) {
+        EntityConventions.idFieldName => linkId,
+        EntityConventions.ownerFieldName =>
+          source[EntityConventions.ownerFieldName] ?? sourceId,
+        final name when name == relationship.sourceFieldName => sourceId,
+        final name when name == relationship.targetFieldName => targetId,
+        final name when name == relationship.activeFieldName => true,
+        EntityConventions.serverVersionFieldName => 0,
+        EntityConventions.createdAtFieldName ||
+        EntityConventions.updatedAtFieldName => now,
+        EntityConventions.deletedAtFieldName => null,
+        _ when field.hasProtocolDefault => field.protocolDefault,
+        _ when field.nullable => null,
+        _ => throw StateError(
+          '${relationship.linkEntityType}.${field.name} cannot be derived '
+          'for relationship replacement.',
+        ),
+      };
+    }
+    return result;
   }
 
   void _validateInMemoryTransferReferences({

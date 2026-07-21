@@ -141,6 +141,102 @@ void main() {
     });
   });
 
+  group('ReplaceActiveRelationshipCommand', () {
+    test('round-trips exact base membership and typed active pairs', () {
+      const source = 'a0000000-0000-7000-8000-000000000001';
+      const firstLink = 'a0000000-0000-7000-8000-000000000002';
+      const secondLink = 'a0000000-0000-7000-8000-000000000003';
+      const firstTarget = 'a0000000-0000-7000-8000-000000000004';
+      const secondTarget = 'a0000000-0000-7000-8000-000000000005';
+      final command =
+          ReplaceActiveRelationshipCommand<
+            _RelationshipLink,
+            _RelationshipSource,
+            _RelationshipTarget
+          >(
+            sourceId: parseLocalId(source),
+            baseActiveLinkIds: [parseLocalId(firstLink)],
+            activeMembers: [
+              ActiveRelationshipMember(
+                linkId: parseLocalId(firstLink),
+                targetId: parseLocalId(firstTarget),
+              ),
+              ActiveRelationshipMember(
+                linkId: parseLocalId(secondLink),
+                targetId: parseLocalId(secondTarget),
+              ),
+            ],
+          );
+
+      final decoded =
+          ReplaceActiveRelationshipCommand<
+            _RelationshipLink,
+            _RelationshipSource,
+            _RelationshipTarget
+          >.fromWire(
+            command.toWire(),
+            parseLinkId: parseLocalId,
+            parseSourceId: parseLocalId,
+            parseTargetId: parseLocalId,
+          );
+
+      expect(decoded.sourceId, command.sourceId);
+      expect(decoded.baseActiveLinkIds, command.baseActiveLinkIds);
+      expect(
+        decoded.activeMembers.map((member) => member.toWire()),
+        command.activeMembers.map((member) => member.toWire()),
+      );
+    });
+
+    test('rejects duplicate pairs and malformed payloads', () {
+      const source = 'a0000000-0000-7000-8000-000000000001';
+      const link = 'a0000000-0000-7000-8000-000000000002';
+      const target = 'a0000000-0000-7000-8000-000000000003';
+      expect(
+        () =>
+            ReplaceActiveRelationshipCommand<
+              _RelationshipLink,
+              _RelationshipSource,
+              _RelationshipTarget
+            >(
+              sourceId: parseLocalId(source),
+              baseActiveLinkIds: const [],
+              activeMembers: [
+                ActiveRelationshipMember(
+                  linkId: parseLocalId(link),
+                  targetId: parseLocalId(target),
+                ),
+                ActiveRelationshipMember(
+                  linkId: parseLocalId(link),
+                  targetId: parseLocalId(target),
+                ),
+              ],
+            ),
+        throwsArgumentError,
+      );
+      expect(
+        () =>
+            ReplaceActiveRelationshipCommand<
+              _RelationshipLink,
+              _RelationshipSource,
+              _RelationshipTarget
+            >.fromWire(
+              const {
+                'sourceId': source,
+                'baseActiveLinkIds': [],
+                'activeMembers': [
+                  {'linkId': link},
+                ],
+              },
+              parseLinkId: parseLocalId,
+              parseSourceId: parseLocalId,
+              parseTargetId: parseLocalId,
+            ),
+        throwsFormatException,
+      );
+    });
+  });
+
   group('OrderedCreateIntent', () {
     test('round-trips a boundary placement and scope version', () {
       final intent = OrderedCreateIntent(
@@ -179,5 +275,11 @@ void main() {
 }
 
 final class _OrderedItem {}
+
+final class _RelationshipLink {}
+
+final class _RelationshipSource {}
+
+final class _RelationshipTarget {}
 
 String _repeat(String value, int count) => List.filled(count, value).join();

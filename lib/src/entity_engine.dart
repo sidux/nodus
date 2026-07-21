@@ -1,5 +1,7 @@
 part of '../nodus.dart';
 
+final Object _relationshipOutboundSuppressionZoneKey = Object();
+
 enum EntityFieldKind { text, uuid, boolean, integer, real, date, timestamp }
 
 @TableIndex.sql(
@@ -2486,6 +2488,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       activityOperation: activityOperation,
       orderedCreate: orderedCreate,
       persistsEntityState: persistsEntityState,
+      suppressOutboundIntent:
+          Zone.current[_relationshipOutboundSuppressionZoneKey] ==
+          graphCoordinator,
       scopeStatePatches: scopeStatePatches,
     );
     return _scheduleMutation(mutation, rollbackIfCurrent: rollbackIfCurrent);
@@ -2726,7 +2731,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     if (mutation.scopeStatePatches.isNotEmpty &&
         mutation.operation == SyncMutationOperation.command) {
       await _updateLocalStatePatches(mutation.scopeStatePatches);
-      await _coalescePushWork(mutation);
+      if (!mutation.suppressOutboundIntent) {
+        await _coalescePushWork(mutation);
+      }
       return;
     }
     final persistsEntityState =
@@ -2752,7 +2759,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     if (mutation.scopeStatePatches.isNotEmpty) {
       await _updateLocalStatePatches(mutation.scopeStatePatches);
     }
-    await _coalescePushWork(mutation);
+    if (!mutation.suppressOutboundIntent) {
+      await _coalescePushWork(mutation);
+    }
   }
 
   Future<void> _updateLocalStatePatches(
@@ -2936,6 +2945,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         descriptor,
         _decodeMap(existing.read<String>('payload')),
       ),
+      definition: graphCoordinator.definition,
     );
     final mergedPatch = <String, Object?>{
       ...existingOperation.patch.toWire(),
@@ -3163,7 +3173,18 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     if (row == null) return null;
     final acceptedJson = row.readNullable<String>('accepted_snapshot');
     if (acceptedJson == null) {
-      if (operation is! CreatePushOperation) return null;
+      final relationshipCreate = operation is CommandPushOperation
+          ? operation.scopeStatePatches
+                .where(
+                  (statePatch) =>
+                      statePatch.identity.rawId == entityId &&
+                      statePatch.operation == LocalEntityStateOperation.create,
+                )
+                .firstOrNull
+          : null;
+      if (operation is! CreatePushOperation && relationshipCreate == null) {
+        return null;
+      }
       await database.customStatement(
         "update local_entity_sync_work set status = 'rejected', "
         "attempt_count = attempt_count + 1, lease_until = null, "
@@ -3903,6 +3924,115 @@ final class LocalEntityGraphCoordinator
     return result;
   }
 
+  /// Commits the local mechanics of one exact relationship replacement while
+  /// exposing only its final graph-scope command to writable sync targets.
+  ///
+  /// Generated link creation, activation, deactivation, and rank updates still
+  /// use their ordinary validated mutation paths. Their individual outbound
+  /// intents are suppressed only inside [applyLocalProjection];
+  /// [recordSemanticCommand] then records the one durable remote operation in
+  /// the same graph transaction.
+  Future<void> replaceActiveRelationship({
+    required Future<void> Function() applyLocalProjection,
+    required Future<void> Function() recordSemanticCommand,
+  }) => transaction(() async {
+    final pending = _transactionBuffer!;
+    final savepoint = pending.length;
+    await runZoned(
+      applyLocalProjection,
+      zoneValues: {_relationshipOutboundSuppressionZoneKey: this},
+    );
+    final localMechanics = pending.sublist(savepoint);
+    if (localMechanics.isEmpty ||
+        localMechanics.any(
+          (candidate) => !candidate.mutation.suppressOutboundIntent,
+        )) {
+      throw StateError(
+        'A relationship replacement must produce only generated local '
+        'mechanics before its semantic command.',
+      );
+    }
+    await recordSemanticCommand();
+    if (pending.length != savepoint + localMechanics.length + 1) {
+      throw StateError(
+        'A relationship replacement must record exactly one semantic command.',
+      );
+    }
+    final commandPending = pending.last;
+    final commandMutation = commandPending.mutation;
+    if (commandMutation.suppressOutboundIntent ||
+        commandMutation.operation != SyncMutationOperation.command ||
+        commandMutation.semanticCommand
+            is! ReplaceActiveRelationshipCommand<dynamic, dynamic, dynamic>) {
+      throw StateError(
+        'A relationship replacement ended without its exact graph command.',
+      );
+    }
+
+    final identities = <String, EntityIdentity<dynamic>>{};
+    final revisions = <String, int>{};
+    final operations = <String, LocalEntityStateOperation>{};
+    final patches = <String, JsonMap>{};
+    void mergeState(LocalEntityStatePatch state) {
+      final id = state.identity.rawId;
+      identities[id] = state.identity;
+      revisions[id] = state.localRevision;
+      if (state.operation == LocalEntityStateOperation.create) {
+        operations[id] = LocalEntityStateOperation.create;
+      } else {
+        operations.putIfAbsent(id, () => LocalEntityStateOperation.patch);
+      }
+      (patches[id] ??= <String, Object?>{}).addAll(state.patch.toWire());
+    }
+
+    for (final candidate in localMechanics) {
+      final mutation = candidate.mutation;
+      final persistsDirectState =
+          mutation.kind != PushSyncWorkKind.semanticCommand ||
+          mutation.persistsEntityState;
+      if (persistsDirectState) {
+        mergeState(
+          LocalEntityStatePatch(
+            identity: mutation.identity,
+            localRevision: mutation.localRevision,
+            patch: mutation.patch,
+            operation: mutation.operation == SyncMutationOperation.create
+                ? LocalEntityStateOperation.create
+                : LocalEntityStateOperation.patch,
+          ),
+        );
+      }
+      for (final state in mutation.scopeStatePatches) {
+        mergeState(state);
+      }
+    }
+    final statePatches = [
+      for (final id in patches.keys)
+        LocalEntityStatePatch(
+          identity: identities[id]!,
+          localRevision: revisions[id]!,
+          patch: EntityPatch.fromWire(patches[id]!),
+          operation: operations[id]!,
+        ),
+    ];
+    commandPending.mutation = LocalEntityMutation(
+      operationId: commandMutation.operationId,
+      identity: commandMutation.identity,
+      baseServerVersion: commandMutation.baseServerVersion,
+      localRevision: commandMutation.localRevision,
+      patch: commandMutation.patch,
+      syncPatch: commandMutation.syncPatch,
+      createdAt: commandMutation.createdAt,
+      operation: commandMutation.operation,
+      kind: commandMutation.kind,
+      semanticCommand: commandMutation.semanticCommand,
+      activityOperation: commandMutation.activityOperation,
+      orderedCreate: commandMutation.orderedCreate,
+      persistsEntityState: commandMutation.persistsEntityState,
+      scopeStatePatches: statePatches,
+    );
+  });
+
   bool get _ownsCurrentTransaction =>
       _transactionBuffer != null &&
       identical(Zone.current[this], _transactionOwnerToken);
@@ -4008,6 +4138,7 @@ final class LocalEntityGraphCoordinator
         row,
         _descriptorFor,
         _targetForWire,
+        definition,
         status: SyncWorkStatus.processing,
       );
       if (item case PushSyncWorkItem pushItem) {
@@ -4188,7 +4319,14 @@ final class LocalEntityGraphCoordinator
         .get();
     if (request != _syncWorkRefreshRequest || _closed) return;
     final items = rows
-        .map((row) => _syncWorkItemFromRow(row, _descriptorFor, _targetForWire))
+        .map(
+          (row) => _syncWorkItemFromRow(
+            row,
+            _descriptorFor,
+            _targetForWire,
+            definition,
+          ),
+        )
         .toList(growable: false);
     runInAction(() {
       _syncWork
@@ -4834,7 +4972,8 @@ final class LocalEntityGraphCoordinator
 SyncWorkItem _syncWorkItemFromRow(
   QueryRow row,
   EntityDescriptorBase Function(String entityType) descriptorFor,
-  SyncTargetId Function(String wireName) targetForWire, {
+  SyncTargetId Function(String wireName) targetForWire,
+  EntityGraphDefinition definition, {
   SyncWorkStatus? status,
 }) {
   final direction = SyncDirection.values.byName(row.read<String>('direction'));
@@ -4858,6 +4997,7 @@ SyncWorkItem _syncWorkItemFromRow(
     SyncDirection.push => _decodePushWorkItem(
       row: row,
       descriptor: descriptorFor(_requiredWorkText(row, 'entity_type')),
+      definition: definition,
       id: id,
       target: target,
       operationId: operationId,
@@ -4894,6 +5034,7 @@ SyncWorkItem _syncWorkItemFromRow(
 PushSyncWorkItem _decodePushWorkItem({
   required QueryRow row,
   required EntityDescriptorBase descriptor,
+  required EntityGraphDefinition definition,
   required int id,
   required SyncTargetId target,
   required SyncOperationId operationId,
@@ -4907,6 +5048,7 @@ PushSyncWorkItem _decodePushWorkItem({
   final operation = _decodePushOperation(
     descriptor,
     _decodeMap(row.read<String>('payload')),
+    definition: definition,
   );
   if (operation.operationId != operationId) {
     throw const FormatException(
@@ -4955,8 +5097,9 @@ SyncWorkFailure? _syncWorkFailureFromRow(QueryRow row, SyncWorkStatus status) {
 
 PushOperation _decodePushOperation(
   EntityDescriptorBase descriptor,
-  JsonMap payload,
-) {
+  JsonMap payload, {
+  EntityGraphDefinition? definition,
+}) {
   String requiredText(String key) {
     final value = payload[key];
     if (value is! String || value.isEmpty) {
@@ -5049,10 +5192,16 @@ PushOperation _decodePushOperation(
       baseServerVersion: baseServerVersion,
       localRevision: localRevision,
       protocolVersion: protocolVersion,
-      command: descriptor.decodeSemanticCommand(
-        requiredText('commandName'),
-        patch.toWire(),
-      ),
+      command: definition == null
+          ? descriptor.decodeSemanticCommand(
+              requiredText('commandName'),
+              patch.toWire(),
+            )
+          : definition.decodeSemanticCommand(
+              descriptor: descriptor,
+              name: requiredText('commandName'),
+              payload: patch.toWire(),
+            ),
       storesEntityState: payload['persistsEntityState'] == true,
       statePatch: persistedStatePatch,
       scopeStatePatches: _decodeLocalStatePatches(descriptor, payload),
@@ -5176,11 +5325,18 @@ List<LocalEntityStatePatch> _decodeLocalStatePatches(
     final entityType = item['entityType'];
     final entityId = item['entityId'];
     final localRevision = item['localRevision'];
+    final rawOperation = item['operation'] ?? 'patch';
+    final operation = rawOperation is String
+        ? LocalEntityStateOperation.values
+              .where((candidate) => candidate.name == rawOperation)
+              .firstOrNull
+        : null;
     if (entityType != descriptor.entityType ||
         entityId is! String ||
         entityId.isEmpty ||
         localRevision is! int ||
-        localRevision < 0) {
+        localRevision < 0 ||
+        operation == null) {
       throw const FormatException('Invalid local ordered state patch.');
     }
     if (!identities.add(entityId)) {
@@ -5192,6 +5348,7 @@ List<LocalEntityStatePatch> _decodeLocalStatePatches(
       LocalEntityStatePatch(
         identity: descriptor.parseIdentity(entityId),
         localRevision: localRevision,
+        operation: operation,
         patch: _decodeEntityPatch(descriptor, _decodeMap(item['patch'])),
       ),
     );

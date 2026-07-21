@@ -3241,16 +3241,142 @@ final class ReorderOrderedCommand<E> implements EntitySemanticCommand<E> {
   };
 }
 
+/// One active member in an exact normalized relationship replacement.
+final class ActiveRelationshipMember<L, T> {
+  const ActiveRelationshipMember({
+    required this.linkId,
+    required this.targetId,
+  });
+
+  final LocalId<L> linkId;
+  final LocalId<T> targetId;
+
+  JsonMap toWire() => {'linkId': linkId.value, 'targetId': targetId.value};
+}
+
+/// Exact active membership and order for one proved-bounded relationship.
+///
+/// Link identities are explicit so an inactive pair is reactivated rather than
+/// recreated and a newly linked pair keeps the identity allocated locally.
+/// [baseActiveLinkIds] is the complete active membership observed by the
+/// caller. A backend compares it with its serialized canonical scope before
+/// applying the replacement, turning concurrent membership or ordering changes
+/// into one typed conflict instead of silently overwriting them.
+final class ReplaceActiveRelationshipCommand<L, S, T>
+    implements EntitySemanticCommand<L> {
+  ReplaceActiveRelationshipCommand({
+    required this.sourceId,
+    required Iterable<LocalId<L>> baseActiveLinkIds,
+    required Iterable<ActiveRelationshipMember<L, T>> activeMembers,
+  }) : baseActiveLinkIds = List.unmodifiable(baseActiveLinkIds),
+       activeMembers = List.unmodifiable(activeMembers) {
+    if (this.baseActiveLinkIds.toSet().length !=
+        this.baseActiveLinkIds.length) {
+      throw ArgumentError.value(
+        this.baseActiveLinkIds,
+        'baseActiveLinkIds',
+        'Relationship base membership cannot contain duplicate links.',
+      );
+    }
+    final linkIds = this.activeMembers.map((member) => member.linkId).toList();
+    final targetIds = this.activeMembers
+        .map((member) => member.targetId)
+        .toList();
+    if (linkIds.toSet().length != linkIds.length ||
+        targetIds.toSet().length != targetIds.length) {
+      throw ArgumentError.value(
+        this.activeMembers,
+        'activeMembers',
+        'Relationship replacement requires unique link and target identities.',
+      );
+    }
+  }
+
+  factory ReplaceActiveRelationshipCommand.fromWire(
+    JsonMap payload, {
+    required LocalId<L> Function(String source) parseLinkId,
+    required LocalId<S> Function(String source) parseSourceId,
+    required LocalId<T> Function(String source) parseTargetId,
+  }) {
+    if (payload.length != 3 ||
+        !payload.containsKey('sourceId') ||
+        !payload.containsKey('baseActiveLinkIds') ||
+        !payload.containsKey('activeMembers')) {
+      throw const FormatException(
+        'replaceRelationship requires only sourceId, baseActiveLinkIds, and '
+        'activeMembers.',
+      );
+    }
+    final rawSourceId = payload['sourceId'];
+    final rawBaseIds = payload['baseActiveLinkIds'];
+    final rawMembers = payload['activeMembers'];
+    if (rawSourceId is! String ||
+        rawBaseIds is! List ||
+        rawBaseIds.any((id) => id is! String) ||
+        rawMembers is! List) {
+      throw const FormatException(
+        'replaceRelationship has invalid field types.',
+      );
+    }
+    final members = <ActiveRelationshipMember<L, T>>[];
+    for (final rawMember in rawMembers) {
+      final member = canonicalJsonObject(
+        rawMember,
+        field: 'replaceRelationship.activeMembers',
+      );
+      if (member.length != 2 ||
+          member['linkId'] is! String ||
+          member['targetId'] is! String) {
+        throw const FormatException(
+          'Each active relationship member requires only linkId and targetId.',
+        );
+      }
+      members.add(
+        ActiveRelationshipMember(
+          linkId: parseLinkId(member['linkId']! as String),
+          targetId: parseTargetId(member['targetId']! as String),
+        ),
+      );
+    }
+    try {
+      return ReplaceActiveRelationshipCommand(
+        sourceId: parseSourceId(rawSourceId),
+        baseActiveLinkIds: rawBaseIds.cast<String>().map(parseLinkId),
+        activeMembers: members,
+      );
+    } on ArgumentError catch (error) {
+      throw FormatException(error.message?.toString() ?? error.toString());
+    }
+  }
+
+  final LocalId<S> sourceId;
+  final List<LocalId<L>> baseActiveLinkIds;
+  final List<ActiveRelationshipMember<L, T>> activeMembers;
+
+  @override
+  String get name => 'replaceRelationship';
+
+  @override
+  JsonMap toWire() => {
+    'sourceId': sourceId.value,
+    'baseActiveLinkIds': [for (final id in baseActiveLinkIds) id.value],
+    'activeMembers': [for (final member in activeMembers) member.toWire()],
+  };
+}
+
 /// Local-only optimistic state associated with one semantic scope command.
 ///
 /// It is stored in the durable queue for merge and rollback, but is excluded
 /// from [PushOperation.toRemoteWire]. The remote protocol receives only the
 /// semantic command and derives canonical storage fields itself.
+enum LocalEntityStateOperation { create, patch }
+
 final class LocalEntityStatePatch {
   LocalEntityStatePatch({
     required this.identity,
     required this.localRevision,
     required this.patch,
+    this.operation = LocalEntityStateOperation.patch,
   }) {
     if (localRevision < 0) {
       throw RangeError.value(
@@ -3271,11 +3397,13 @@ final class LocalEntityStatePatch {
   final EntityIdentity<dynamic> identity;
   final int localRevision;
   final EntityPatch patch;
+  final LocalEntityStateOperation operation;
 
   JsonMap toWire() => {
     'entityType': identity.entityType,
     'entityId': identity.rawId,
     'localRevision': localRevision,
+    'operation': operation.name,
     'patch': patch.toWire(),
   };
 }
@@ -3483,6 +3611,7 @@ final class LocalEntityMutation {
     this.activityOperation,
     this.orderedCreate,
     this.persistsEntityState = false,
+    this.suppressOutboundIntent = false,
     Iterable<LocalEntityStatePatch> scopeStatePatches = const [],
   }) : scopeStatePatches = List<LocalEntityStatePatch>.unmodifiable(
          scopeStatePatches,
@@ -3501,6 +3630,7 @@ final class LocalEntityMutation {
   final ActivityOperation? activityOperation;
   final OrderedCreateIntent? orderedCreate;
   final bool persistsEntityState;
+  final bool suppressOutboundIntent;
   final List<LocalEntityStatePatch> scopeStatePatches;
 
   String get entityType => identity.entityType;
@@ -4298,6 +4428,39 @@ final class EntityGraphDefinition {
   SyncBindingDefinition syncBindingFor(String entityType) =>
       syncBindings.singleWhere((binding) => binding.entityType == entityType);
 
+  EntitySemanticCommand<dynamic> decodeSemanticCommand({
+    required EntityDescriptorBase descriptor,
+    required String name,
+    required JsonMap payload,
+  }) {
+    if (name == 'replaceRelationship') {
+      final relationship = relationships
+          .where(
+            (candidate) =>
+                candidate.linkEntityType == descriptor.entityType &&
+                candidate.cardinality == Cardinality.bounded,
+          )
+          .firstOrNull;
+      if (relationship == null) {
+        throw const RejectedSyncException.validation(
+          code: 'unsupported_command',
+          message: 'Exact replacement is unavailable for this relationship.',
+        );
+      }
+      return ReplaceActiveRelationshipCommand<
+        dynamic,
+        dynamic,
+        dynamic
+      >.fromWire(
+        payload,
+        parseLinkId: parseLocalId<dynamic>,
+        parseSourceId: parseLocalId<dynamic>,
+        parseTargetId: parseLocalId<dynamic>,
+      );
+    }
+    return descriptor.decodeSemanticCommand(name, payload);
+  }
+
   Set<SyncTargetId> get syncTargets =>
       Set.unmodifiable({for (final binding in syncBindings) ?binding.target});
 
@@ -4935,7 +5098,7 @@ typedef PersistMutationBatch =
 final class _PendingMutation {
   _PendingMutation(this.mutation, this.rollbackIfCurrent, {this.onSettled});
 
-  final LocalEntityMutation mutation;
+  LocalEntityMutation mutation;
   final void Function() rollbackIfCurrent;
   final void Function()? onSettled;
   final Completer<LocalMutationCommitResult> _completion = Completer();

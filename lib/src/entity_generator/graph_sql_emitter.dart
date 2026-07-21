@@ -83,6 +83,9 @@ String emitEntityGraphSupabaseSql(EntityGraphSpec graph) {
       emitSupabaseSql(
         entity,
         activitySource: activitySource,
+        activeRelationship: graph.relationships
+            .where((relationship) => relationship.linkEntity == entity)
+            .firstOrNull,
         includeSharedTables: index == 0,
         includeOrderScopeTable: index == 0 && hasOrderedEntity,
         includeEntityPull: false,

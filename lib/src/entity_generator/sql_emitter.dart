@@ -9,6 +9,7 @@ const supabaseApiRoles = 'public, anon, authenticated, service_role';
 String emitSupabaseSql(
   EntitySpec spec, {
   EntitySpec? activitySource,
+  ActiveRelationshipCollectionSpec? activeRelationship,
   bool includeSharedTables = true,
   bool? includeOrderScopeTable,
   bool includeEntityPull = true,
@@ -218,6 +219,7 @@ String emitSupabaseSql(
     buffer,
     spec,
     activitySource: activitySource,
+    activeRelationship: activeRelationship,
     includePull: includeEntityPull,
   );
   return buffer.toString();
@@ -1049,6 +1051,7 @@ String _orderTransferJsonTypeCheck(FieldSpec field) {
 String _pushOperationRoutingSql(
   EntitySpec spec, {
   EntitySpec? activitySource,
+  ActiveRelationshipCollectionSpec? activeRelationship,
   required String createColumns,
   required String createValues,
   required String createFieldNames,
@@ -1145,10 +1148,10 @@ ${[_initialStateValidationSql(spec, "current_operation -> 'patch'", indent: '   
       values ($createValues) returning * into canonical;${createOrderScopeAdvance.isEmpty ? '' : '\n$createOrderScopeAdvance'}''',
     ));
   }
-  if (spec.canCommand) {
+  if (spec.canCommand || activeRelationship != null) {
     branches.add((
       "current_operation ->> 'operation' = 'command'",
-      _semanticCommandSql(spec),
+      _semanticCommandSql(spec, activeRelationship: activeRelationship),
     ));
   }
   if (spec.hasStateMutations) {
@@ -1576,8 +1579,13 @@ loop
 end loop;''';
 }
 
-String _semanticCommandSql(EntitySpec spec) {
-  if (spec.canCollaborate && !spec.hasOrderedCapability) {
+String _semanticCommandSql(
+  EntitySpec spec, {
+  ActiveRelationshipCollectionSpec? activeRelationship,
+}) {
+  if (spec.canCollaborate &&
+      !spec.hasOrderedCapability &&
+      activeRelationship == null) {
     return _collaborationCommandSql(spec);
   }
   final branches = <String>[];
@@ -1606,6 +1614,13 @@ String _semanticCommandSql(EntitySpec spec) {
       );
     }
   }
+  if (activeRelationship != null) {
+    branches.add(
+      "${branches.isEmpty ? 'if' : 'elsif'} current_operation ->> "
+      "'commandName' = 'replaceRelationship' then\n"
+      '${_indentSql(_relationshipReplaceCommandSql(activeRelationship), 2)}',
+    );
+  }
   if (branches.isEmpty) {
     return "      raise exception 'Entity has no semantic commands' using errcode = '22023';";
   }
@@ -1614,6 +1629,269 @@ String _semanticCommandSql(EntitySpec spec) {
       else
         raise exception 'Unsupported command' using errcode = '22023';
       end if;''';
+}
+
+String _relationshipReplaceCommandSql(
+  ActiveRelationshipCollectionSpec collection,
+) {
+  final spec = collection.linkEntity;
+  final source = collection.sourceEntity;
+  final target = collection.targetEntity;
+  final relationship = collection.relationship;
+  final sourceField = relationship.ownerReference;
+  final targetField = relationship.targetReference;
+  final activeField = relationship.activeField;
+  final deletedAt = spec.deletedAtField!;
+  final updatedAt = spec.fields.where((field) => field.autoUpdated).firstOrNull;
+  final id = spec.idField;
+  final owner = spec.ownerField;
+  final version = spec.serverVersionField;
+  final rank = spec.orderRankField;
+  final ordered = collection.linkEntity.hasOrderedCapability;
+  final memberOrder = ordered
+      ? 'member.${rank!.columnName}, member.${id.columnName}'
+      : 'member.${id.columnName}';
+  final baseComparison = ordered
+      ? '''coalesce((
+    select array_agg(member.${id.columnName} order by $memberOrder)
+    from public.${spec.tableName} member
+    where member.${sourceField.columnName} =
+      (current_operation -> 'patch' ->> 'sourceId')::uuid
+      and member.${activeField.columnName}
+      and member.${deletedAt.columnName} is null
+  ), array[]::uuid[]) <> array(
+    select value::uuid
+    from jsonb_array_elements_text(
+      current_operation -> 'patch' -> 'baseActiveLinkIds'
+    )
+  )'''
+      : '''exists (
+    with current_members as (
+      select member.${id.columnName} as link_id
+      from public.${spec.tableName} member
+      where member.${sourceField.columnName} =
+        (current_operation -> 'patch' ->> 'sourceId')::uuid
+        and member.${activeField.columnName}
+        and member.${deletedAt.columnName} is null
+    ), base_members as (
+      select value::uuid as link_id
+      from jsonb_array_elements_text(
+        current_operation -> 'patch' -> 'baseActiveLinkIds'
+      )
+    )
+    select 1 from current_members
+    full outer join base_members using (link_id)
+    where current_members.link_id is null or base_members.link_id is null
+  )''';
+  final sourceId = "(current_operation -> 'patch' ->> 'sourceId')::uuid";
+  final requestedCte = '''requested as (
+    select
+      (member ->> 'linkId')::uuid as link_id,
+      (member ->> 'targetId')::uuid as target_id,
+      ordinality::numeric as position,
+      jsonb_array_length(
+        current_operation -> 'patch' -> 'activeMembers'
+      )::numeric as scope_size
+    from jsonb_array_elements(
+      current_operation -> 'patch' -> 'activeMembers'
+    ) with ordinality as entries(member, ordinality)
+  )''';
+  final rankValue = ordered
+      ? "lpad(trunc((${GeneratedOrderRanks.upperBoundaryValue}::numeric * requested.position) / (requested.scope_size + 1))::text, 78, '0')"
+      : null;
+  final updateAssignments = <String>[
+    '${activeField.columnName} = true',
+    if (rank != null) '${rank.columnName} = $rankValue',
+    if (updatedAt != null) '${updatedAt.columnName} = now()',
+    '${version.columnName} = member.${version.columnName} + 1',
+  ].join(',\n    ');
+  final insertColumns = <String>[
+    id.columnName,
+    owner.columnName,
+    sourceField.columnName,
+    targetField.columnName,
+    activeField.columnName,
+    if (rank != null) rank.columnName,
+    version.columnName,
+  ];
+  final insertValues = <String>[
+    'requested.link_id',
+    'source.${source.ownerField.columnName}',
+    sourceId,
+    'requested.target_id',
+    'true',
+    if (rank != null) rankValue!,
+    '1',
+  ];
+  final createPatch =
+      '''jsonb_build_object(
+          '${id.name}', requested.link_id::text,
+          '${owner.name}', source.${source.ownerField.columnName}::text,
+          '${sourceField.name}', $sourceId::text,
+          '${targetField.name}', requested.target_id::text,
+          '${activeField.name}', true
+        )''';
+  final createAuthorization = _createAuthorizationExpression(spec, createPatch);
+  final existingAuthorization = _rpcAuthorizationExpression(
+    spec,
+    RlsOperation.update,
+    'member.${id.columnName}',
+  );
+  final orderScopeSql = !ordered
+      ? ''
+      : '''
+insert into public.local_entity_order_scopes (entity_type, scope_key)
+values ('${spec.className}', $sourceId::text)
+on conflict (entity_type, scope_key) do nothing;
+update public.local_entity_order_scopes scope
+set version = scope.version + 1
+where scope.entity_type = '${spec.className}'
+  and scope.scope_key = $sourceId::text
+returning scope.version into current_order_scope_version;''';
+
+  return '''
+if exists (
+  select 1 from jsonb_object_keys(current_operation -> 'patch') key
+  where not (key = any(array['sourceId', 'baseActiveLinkIds', 'activeMembers']::text[]))
+) or not ((current_operation -> 'patch') ?&
+    array['sourceId', 'baseActiveLinkIds', 'activeMembers']) then
+  raise exception 'Relationship replacement has invalid fields'
+    using errcode = '22023';
+end if;
+if jsonb_typeof(current_operation -> 'patch' -> 'sourceId') <> 'string'
+   or jsonb_typeof(current_operation -> 'patch' -> 'baseActiveLinkIds') <> 'array'
+   or jsonb_typeof(current_operation -> 'patch' -> 'activeMembers') <> 'array'
+   or exists (
+     select 1 from jsonb_array_elements(
+       current_operation -> 'patch' -> 'baseActiveLinkIds'
+     ) item where jsonb_typeof(item) <> 'string'
+   )
+   or exists (
+     select 1 from jsonb_array_elements(
+       current_operation -> 'patch' -> 'activeMembers'
+     ) item
+     where jsonb_typeof(item) <> 'object'
+        or (select count(*) from jsonb_object_keys(item)) <> 2
+        or not (item ?& array['linkId', 'targetId'])
+        or jsonb_typeof(item -> 'linkId') <> 'string'
+        or jsonb_typeof(item -> 'targetId') <> 'string'
+   ) then
+  raise exception 'Relationship replacement has invalid field types'
+    using errcode = '22023';
+end if;
+if (select count(distinct value) from jsonb_array_elements_text(
+      current_operation -> 'patch' -> 'baseActiveLinkIds')) <>
+    jsonb_array_length(current_operation -> 'patch' -> 'baseActiveLinkIds')
+   or (select count(distinct member ->> 'linkId') from jsonb_array_elements(
+      current_operation -> 'patch' -> 'activeMembers') member) <>
+    jsonb_array_length(current_operation -> 'patch' -> 'activeMembers')
+   or (select count(distinct member ->> 'targetId') from jsonb_array_elements(
+      current_operation -> 'patch' -> 'activeMembers') member) <>
+    jsonb_array_length(current_operation -> 'patch' -> 'activeMembers') then
+  raise exception 'Relationship replacement identities must be unique'
+    using errcode = '22023';
+end if;
+if not exists (
+  select 1 from public.${source.tableName} source
+  where source.${source.idField.columnName} = $sourceId
+) then
+  raise exception 'Relationship source not found' using errcode = 'P0002';
+end if;
+perform pg_advisory_xact_lock(
+  hashtextextended('${spec.className}:relationship:' || $sourceId::text, 0)
+);
+perform 1 from public.${spec.tableName} member
+where member.${sourceField.columnName} = $sourceId
+for update;
+if $baseComparison then
+  raise exception 'Exact relationship membership changed'
+    using errcode = '40001';
+end if;
+if exists (
+  with $requestedCte
+  select 1 from requested
+  where not exists (
+    select 1 from public.${target.tableName} target
+    where target.${target.idField.columnName} = requested.target_id
+  )
+) then
+  raise exception 'Relationship target not found' using errcode = 'P0002';
+end if;
+if exists (
+  with $requestedCte
+  select 1 from requested
+  join public.${spec.tableName} member
+    on member.${sourceField.columnName} = $sourceId
+   and member.${targetField.columnName} = requested.target_id
+  where member.${id.columnName} <> requested.link_id
+) or exists (
+  with $requestedCte
+  select 1 from requested
+  join public.${spec.tableName} occupied
+    on occupied.${id.columnName} = requested.link_id
+  where occupied.${sourceField.columnName} <> $sourceId
+     or occupied.${targetField.columnName} <> requested.target_id
+) then
+  raise exception 'Relationship pair identity changed' using errcode = '40001';
+end if;
+if exists (
+  select 1 from public.${spec.tableName} member
+  where member.${sourceField.columnName} = $sourceId
+    and member.${deletedAt.columnName} is null
+    and not ($existingAuthorization)
+) then
+  raise exception 'Relationship access denied' using errcode = '42501';
+end if;
+if exists (
+  with $requestedCte
+  select 1
+  from requested
+  cross join public.${source.tableName} source
+  where source.${source.idField.columnName} = $sourceId
+    and not exists (
+      select 1 from public.${spec.tableName} existing
+      where existing.${sourceField.columnName} = $sourceId
+        and existing.${targetField.columnName} = requested.target_id
+    )
+    and not ($createAuthorization)
+) then
+  raise exception 'Relationship create access denied' using errcode = '42501';
+end if;
+update public.${spec.tableName} member
+set ${activeField.columnName} = false,
+    ${updatedAt == null ? '' : '${updatedAt.columnName} = now(),\n    '}${version.columnName} = member.${version.columnName} + 1
+where member.${sourceField.columnName} = $sourceId
+  and member.${activeField.columnName}
+  and member.${deletedAt.columnName} is null
+  and not exists (
+    select 1 from jsonb_array_elements(
+      current_operation -> 'patch' -> 'activeMembers'
+    ) requested
+    where (requested ->> 'linkId')::uuid = member.${id.columnName}
+  );
+with $requestedCte
+update public.${spec.tableName} member
+set $updateAssignments
+from requested
+where member.${id.columnName} = requested.link_id
+  and member.${sourceField.columnName} = $sourceId
+  and member.${targetField.columnName} = requested.target_id
+  and member.${deletedAt.columnName} is null;
+with $requestedCte
+insert into public.${spec.tableName} (${insertColumns.join(', ')})
+select ${insertValues.join(', ')}
+from requested
+cross join public.${source.tableName} source
+where source.${source.idField.columnName} = $sourceId
+  and not exists (
+    select 1 from public.${spec.tableName} existing
+    where existing.${id.columnName} = requested.link_id
+  );$orderScopeSql
+select * into canonical from public.${spec.tableName}
+where ${id.columnName} = (current_operation ->> 'entityId')::uuid;
+if not found then
+  raise exception 'Relationship command anchor not found' using errcode = 'P0002';
+end if;''';
 }
 
 String _orderedTransferCommandSql(EntitySpec spec) {
@@ -2363,8 +2641,13 @@ void _emitEntityFunctions(
   StringBuffer buffer,
   EntitySpec spec, {
   EntitySpec? activitySource,
+  ActiveRelationshipCollectionSpec? activeRelationship,
   required bool includePull,
 }) {
+  final supportsRelationshipReplace =
+      activeRelationship?.cardinality == Cardinality.bounded;
+  final hasMultiRowCommand =
+      spec.hasOrderedCapability || supportsRelationshipReplace;
   final mutable = spec.fields.where(
     (field) => !field.isId && spec.isPatchable(field),
   );
@@ -2412,7 +2695,7 @@ void _emitEntityFunctions(
   final supportedOperations = [
     if (spec.canCreate) 'create',
     ...stateOperations,
-    if (spec.canCommand) 'command',
+    if (spec.canCommand || supportsRelationshipReplace) 'command',
   ];
   final stateOperationSql = stateOperations.map((name) => "'$name'").join(', ');
   final supportedOperationSql = supportedOperations
@@ -2542,6 +2825,11 @@ void _emitEntityFunctions(
                   '  related_changes jsonb;\n'
             : '',
       )
+      ..write(
+        !spec.hasOrderedCapability && supportsRelationshipReplace
+            ? '  related_changes jsonb;\n'
+            : '',
+      )
       ..writeln('  change_sequence bigint;')
       ..writeln("  results jsonb := '[]'::jsonb;")
       ..writeln('begin')
@@ -2626,6 +2914,9 @@ void _emitEntityFunctions(
         _pushOperationRoutingSql(
           spec,
           activitySource: activitySource,
+          activeRelationship: supportsRelationshipReplace
+              ? activeRelationship
+              : null,
           createColumns: createColumns,
           createValues: createValues,
           createFieldNames: createFieldNames,
@@ -2635,7 +2926,7 @@ void _emitEntityFunctions(
       ..writeln(
         '    select changes.sequence into change_sequence from '
         'public.local_entity_changes changes where '
-        'changes.operation_id = operation_uuid${spec.hasOrderedCapability ? " and changes.entity_type = '${spec.className}' and changes.entity_id = canonical.${spec.idField.columnName}" : ''} '
+        'changes.operation_id = operation_uuid${hasMultiRowCommand ? " and changes.entity_type = '${spec.className}' and changes.entity_id = canonical.${spec.idField.columnName}" : ''} '
         'order by changes.sequence desc '
         'limit 1;',
       )
@@ -2646,7 +2937,7 @@ void _emitEntityFunctions(
       )
       ..writeln('    end if;')
       ..write(
-        spec.hasOrderedCapability
+        hasMultiRowCommand
             ? "    select coalesce(jsonb_agg(jsonb_build_object("
                   "'entityType', changes.entity_type, "
                   "'record', changes.record, "
@@ -2675,13 +2966,13 @@ void _emitEntityFunctions(
             : '',
       )
       ..writeln(
-        spec.hasOrderedCapability
+        hasMultiRowCommand
             ? "    receipt_result := jsonb_build_object("
                   "'record', to_jsonb(canonical), 'sequence', change_sequence, "
                   "'operationId', operation_uuid, "
                   "'${EntityConventions.serverVersionFieldName}', "
                   'canonical.${spec.serverVersionField.columnName}, '
-                  "'scopeVersions', order_scope_versions, "
+                  "${spec.hasOrderedCapability ? "'scopeVersions', order_scope_versions, " : ''}"
                   "'relatedChanges', related_changes);"
             : "    receipt_result := jsonb_build_object("
                   "'record', to_jsonb(canonical), 'sequence', change_sequence, "
