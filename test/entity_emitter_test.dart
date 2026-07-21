@@ -479,6 +479,9 @@ void main() {
     expect(output, isNot(contains('ReadOnlyObservableList<WorkItem> get all')));
     expect(output, contains('EntityLookup<WorkItem> lookup('));
     expect(output, contains('}) => EntityLookup('));
+    expect(output, contains('EntityExistence<WorkItem> exists('));
+    expect(output, contains('EntityFirst<WorkItem> first('));
+    expect(output, contains('required EntityOrder<WorkItem> orderBy'));
     expect(output, contains('WorkItemFields.id.equals(id)'));
     expect(output, contains('Future<EntityLookupLease<WorkItem>?> loadById('));
     expect(output, contains('Future<R> useById<R>('));

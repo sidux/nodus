@@ -162,6 +162,7 @@ Map<String, Object?> _indexSchema(EntitySpec entity, IndexSpec index) => {
   'ownerScoped': index.ownerScoped,
   'unordered': index.unordered,
   'activeOnly': index.activeOnly,
+  'exactLookup': index.exactLookup,
   'condition': switch (index.condition) {
     final condition? => {'field': condition.field, 'values': condition.values},
     null => null,

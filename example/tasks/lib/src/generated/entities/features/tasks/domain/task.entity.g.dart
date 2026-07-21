@@ -1444,23 +1444,30 @@ extension TaskGeneratedEditing on Task {
 }
 
 final class TaskMutationDraft implements EntityMutationDraft<Task> {
-  TaskMutationDraft.create(this._set)
-    : _entity = null,
-      _baseTitle = null,
-      _baseDescription = null,
-      _basePriority = null,
-      _baseDueAt = null,
-      _baseProjectId = null,
-      _projectIdField = EntityDraftField<LocalId<TaskProject>?>.value(null),
-      _titleField = EntityDraftField<String>.unset(),
-      _descriptionField = EntityDraftField<String?>.value(null),
-      _priorityField = EntityDraftField<TaskPriority>.value(
-        TaskPriority.normal,
-      ),
-      _dueAtField = EntityDraftField<DateTime?>.value(null);
+  TaskMutationDraft.create(
+    this._set, {
+    LocalId<Task>? id,
+    OrderedPlacement placement = OrderedPlacement.last,
+  }) : _entity = null,
+       _createId = id ?? _set!.allocateId(),
+       _createPlacement = placement,
+       _baseTitle = null,
+       _baseDescription = null,
+       _basePriority = null,
+       _baseDueAt = null,
+       _baseProjectId = null,
+       _projectIdField = EntityDraftField<LocalId<TaskProject>?>.value(null),
+       _titleField = EntityDraftField<String>.unset(),
+       _descriptionField = EntityDraftField<String?>.value(null),
+       _priorityField = EntityDraftField<TaskPriority>.value(
+         TaskPriority.normal,
+       ),
+       _dueAtField = EntityDraftField<DateTime?>.value(null);
   TaskMutationDraft.edit(Task entity)
     : _set = null,
       _entity = entity,
+      _createId = null,
+      _createPlacement = null,
       _baseTitle = entity.title,
       _baseDescription = entity.description,
       _basePriority = entity.priority,
@@ -1476,6 +1483,8 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
 
   final TaskSet? _set;
   final Task? _entity;
+  final LocalId<Task>? _createId;
+  final OrderedPlacement? _createPlacement;
   final String? _baseTitle;
   final String? _baseDescription;
   final TaskPriority? _basePriority;
@@ -1485,6 +1494,7 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
 
   bool get isCreating => _entity == null;
   Task? get entity => _entity;
+  LocalId<Task> get id => _entity?.id ?? _createId!;
   @override
   bool get isConsumed => _consumed;
   final EntityDraftField<LocalId<TaskProject>?> _projectIdField;
@@ -1523,7 +1533,9 @@ final class TaskMutationDraft implements EntityMutationDraft<Task> {
     }
     final current = _entity;
     if (current == null) {
-      final created = await _set!.create(
+      final created = await _set!.createAt(
+        id: _createId,
+        placement: _createPlacement!,
         projectId: _projectIdField.requireValue(
           entityType: 'Task',
           field: 'projectId',
@@ -1585,7 +1597,7 @@ extension TaskGeneratedRelationships on Task {
   TaskProject? get project {
     return generatedAccess.resolveGeneratedReference(
       const TaskProjectDescriptor(),
-      projectId?.value,
+      this.projectId?.value,
     );
   }
 }
@@ -1943,7 +1955,10 @@ final class TaskSet {
       );
   final LocalEntityEngine<Task, TaskRecord> _engine;
   final LocalEntityQueryCache<Task> _queries;
-  TaskMutationDraft beginCreate() => TaskMutationDraft.create(this);
+  TaskMutationDraft beginCreate({
+    LocalId<Task>? id,
+    OrderedPlacement placement = OrderedPlacement.last,
+  }) => TaskMutationDraft.create(this, id: id, placement: placement);
   TaskMutationDraft beginEdit(Task entity) => entity.beginEdit();
   final LocalId<Account> _ownerId;
   Future<EntityLookupLease<Task>?> loadById(
@@ -1972,6 +1987,56 @@ final class TaskSet {
       archives: archives,
       pageSize: 1,
     ),
+  );
+  EntityExistence<Task> exists({
+    required EntityPredicate<Task> where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    ArchiveVisibility archives = ArchiveVisibility.exclude,
+  }) => EntityExistence(
+    query(
+      where: where,
+      tombstones: tombstones,
+      archives: archives,
+      pageSize: 1,
+    ),
+  );
+  EntityFirst<Task> first({
+    EntityPredicate<Task>? where,
+    required EntityOrder<Task> orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    ArchiveVisibility archives = ArchiveVisibility.exclude,
+  }) => EntityFirst(
+    query(
+      where: where,
+      orderBy: orderBy,
+      tombstones: tombstones,
+      archives: archives,
+      pageSize: 1,
+    ),
+  );
+  EntityExistence<Task> existsOwned({
+    EntityPredicate<Task>? where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    ArchiveVisibility archives = ArchiveVisibility.exclude,
+  }) => exists(
+    where:
+        TaskFields.ownerId.equals(_ownerId) &
+        (where ?? EntityPredicate<Task>.all()),
+    tombstones: tombstones,
+    archives: archives,
+  );
+  EntityFirst<Task> firstOwned({
+    EntityPredicate<Task>? where,
+    required EntityOrder<Task> orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    ArchiveVisibility archives = ArchiveVisibility.exclude,
+  }) => first(
+    where:
+        TaskFields.ownerId.equals(_ownerId) &
+        (where ?? EntityPredicate<Task>.all()),
+    orderBy: orderBy,
+    tombstones: tombstones,
+    archives: archives,
   );
   LocalEntityQuery<Task> query({
     EntityPredicate<Task>? where,
@@ -2083,6 +2148,34 @@ final class TaskSet {
     priority: priority,
     dueAt: dueAt,
   );
+  Future<Task> createAt({
+    LocalId<Task>? id,
+    OrderedPlacement placement = OrderedPlacement.last,
+    LocalId<TaskProject>? projectId,
+    required String title,
+    String? description,
+    TaskPriority priority = TaskPriority.normal,
+    DateTime? dueAt,
+  }) {
+    if (placement != OrderedPlacement.first &&
+        placement != OrderedPlacement.last) {
+      throw const EntityValidationException(
+        entityType: 'Task',
+        field: 'order',
+        message: 'Ordered creation supports only first or last placement.',
+      );
+    }
+    return _create(
+      first: placement == OrderedPlacement.first,
+      id: id,
+      projectId: projectId,
+      title: title,
+      description: description,
+      priority: priority,
+      dueAt: dueAt,
+    );
+  }
+
   Future<Task> _create({
     required bool first,
     LocalId<Task>? id,

@@ -109,6 +109,14 @@ final class EntitySpec {
 
   bool get hasStateMutations => canUpdate || canDelete;
 
+  Cardinality inverseCardinalityFor(FieldSpec field) {
+    final reference = field.reference;
+    if (reference == null) {
+      throw ArgumentError.value(field.name, 'field', 'Expected a reference.');
+    }
+    return reference.inverseCardinality ?? cardinality;
+  }
+
   bool get syncAuthenticatedReads => switch (authenticatedReadSync) {
     AuthenticatedReadSync.inferred => cardinality == Cardinality.bounded,
     AuthenticatedReadSync.onDemand => false,
@@ -196,6 +204,15 @@ final class EntitySpec {
 
   List<PersistedVariantSpec> get draftEditableVariants =>
       canUpdate && !isActivityEntry ? persistedVariants : const [];
+
+  /// Whether callers may open a root edit draft even when the entity has no
+  /// ordinary scalar fields of its own.
+  ///
+  /// A fieldless aggregate/component can still own child collections. Its
+  /// no-op root draft gives aggregate generation one uniform lifecycle and
+  /// validation surface without inventing a feature-specific wrapper.
+  bool get canBeginMutationDraftEdit =>
+      !isActivityEntry && (canUpdate || canCreatePublicly);
 
   bool isDraftEditable(FieldSpec field) {
     if (!canUpdate || isActivityEntry) return false;
@@ -314,6 +331,7 @@ final class EntitySpec {
               ownerScoped: field.indexScope == IndexScope.owner,
               unordered: false,
               activeOnly: false,
+              exactLookup: field.unique && !field.nullable,
             ),
         for (final index in compoundIndexes)
           IndexSpec(
@@ -333,7 +351,8 @@ final class EntitySpec {
             unique: index.unique,
             ownerScoped: index.scope == IndexScope.owner,
             unordered: index.unordered,
-            activeOnly: index.unordered && canDelete,
+            activeOnly: index.activeOnly || (index.unordered && canDelete),
+            exactLookup: index.exactLookup,
             condition: index.condition,
           ),
       ];
@@ -353,6 +372,7 @@ final class EntitySpec {
       ownerScoped: false,
       unordered: false,
       activeOnly: false,
+      exactLookup: false,
     );
   }
 
@@ -765,6 +785,8 @@ final class CompoundIndexSpec {
     this.keyset = false,
     this.condition,
     this.unordered = false,
+    this.activeOnly = false,
+    this.exactLookup = false,
   });
 
   final List<String> fields;
@@ -773,6 +795,8 @@ final class CompoundIndexSpec {
   final bool keyset;
   final IndexConditionSpec? condition;
   final bool unordered;
+  final bool activeOnly;
+  final bool exactLookup;
 }
 
 final class IndexSpec {
@@ -783,6 +807,7 @@ final class IndexSpec {
     this.condition,
     this.unordered = false,
     this.activeOnly = false,
+    this.exactLookup = false,
   });
 
   final List<String> fieldNames;
@@ -791,6 +816,7 @@ final class IndexSpec {
   final IndexConditionSpec? condition;
   final bool unordered;
   final bool activeOnly;
+  final bool exactLookup;
 }
 
 final class IndexConditionSpec {
@@ -1193,6 +1219,9 @@ List<ActiveRelationshipCollectionSpec> _resolveActiveRelationshipCollections(
           relationship: relationship,
           cardinalityResolution: linkEntity.cardinality == Cardinality.bounded
               ? RelationshipCardinalityResolution.boundedByLinkEntity
+              : relationship.ownerReference.reference!.inverseCardinality ==
+                    Cardinality.bounded
+              ? RelationshipCardinalityResolution.boundedByOwnerInverse
               : byClassName[relationship
                             .targetReference
                             .reference!
@@ -1513,6 +1542,8 @@ final class ReferenceSpec {
     required this.accessorName,
     required this.inverseName,
     required this.onDelete,
+    required this.inverseCardinality,
+    required this.aggregateMember,
     required this.targetSelectPrincipals,
     required this.targetOwnerOperations,
     required this.targetOwnerDartType,
@@ -1530,6 +1561,8 @@ final class ReferenceSpec {
   final String accessorName;
   final String inverseName;
   final ReferenceDeleteAction onDelete;
+  final Cardinality? inverseCardinality;
+  final bool aggregateMember;
   final List<RlsPrincipal> targetSelectPrincipals;
   final List<RlsOperation> targetOwnerOperations;
   final String targetOwnerDartType;
@@ -1557,6 +1590,8 @@ final class ReferenceSpec {
       accessorName: accessorName,
       inverseName: inverseName,
       onDelete: onDelete,
+      inverseCardinality: inverseCardinality,
+      aggregateMember: aggregateMember,
       targetSelectPrincipals: targetSelectPrincipals,
       targetOwnerOperations: targetOwnerOperations,
       targetOwnerDartType: targetOwnerDartType,

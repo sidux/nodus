@@ -412,6 +412,8 @@ final class CompoundIndex {
     this.unique = false,
     this.scope = IndexScope.field,
     this.condition,
+    this.activeOnly = false,
+    this.exactLookup = false,
   }) : keyset = false,
        unordered = false,
        unorderedWithOwnerField = null;
@@ -424,6 +426,8 @@ final class CompoundIndex {
   const CompoundIndex.query(this.fields, {this.scope = IndexScope.field})
     : unique = false,
       condition = null,
+      activeOnly = false,
+      exactLookup = false,
       keyset = true,
       unordered = false,
       unorderedWithOwnerField = null;
@@ -438,6 +442,8 @@ final class CompoundIndex {
       unique = true,
       scope = IndexScope.owner,
       condition = null,
+      activeOnly = true,
+      exactLookup = true,
       keyset = false,
       unordered = true;
 
@@ -445,6 +451,13 @@ final class CompoundIndex {
   final bool unique;
   final IndexScope scope;
   final IndexCondition? condition;
+
+  /// Restricts this unique index to entities that have not been soft deleted.
+  final bool activeOnly;
+
+  /// Declares a conditional, active-only, or nullable key as an exact public
+  /// lookup contract. Unconditional non-null unique keys are exact by default.
+  final bool exactLookup;
   final bool keyset;
   final bool unordered;
   final Symbol? unorderedWithOwnerField;
@@ -603,11 +616,33 @@ final class Indexed {
 /// convention. Delete behavior is explicit because it is domain policy and
 /// cannot be inferred safely.
 final class Reference {
-  const Reference({this.inverse, required this.onDelete});
+  const Reference({
+    this.inverse,
+    required this.onDelete,
+    this.inverseCardinality,
+    this.aggregateMember = false,
+  });
 
   /// Domain name of the generated inverse query on the target entity.
   final String? inverse;
   final ReferenceDeleteAction onDelete;
+
+  /// Cardinality of this reference's inverse collection for one target.
+  ///
+  /// This is distinct from the source entity's global [Entity.cardinality]. A
+  /// child table can be unbounded for an account while every parent owns one
+  /// small, complete collection. Omit this to inherit the source entity's
+  /// cardinality. Declare [Cardinality.bounded] only when loading every active
+  /// child for one target is a domain-safe, complete operation.
+  final Cardinality? inverseCardinality;
+
+  /// Whether the referenced target owns this child in its aggregate draft.
+  ///
+  /// Aggregate members require a bounded inverse collection, a non-null
+  /// reference, cascade deletion, and generated create/update/delete behavior.
+  /// This declaration owns editing durability; it does not change independent
+  /// entity identity, synchronization, or reference authorization.
+  final bool aggregateMember;
 }
 
 /// Declares that this entity owns one independently persisted [Component].

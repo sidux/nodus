@@ -2822,6 +2822,33 @@ void main() {
     },
   );
 
+  test(
+    'existence selections permit many rows and release their lease',
+    () async {
+      final existence = EntityExistence<_Item>(
+        LocalEntityQuery<_Item>(
+          source: ReadOnlyObservableList(
+            ObservableList.of([_Item('A'), _Item('B')]),
+          ),
+          pageSize: 1,
+        ),
+      );
+
+      expect(await existence.use((value) => value), isTrue);
+      expect(existence.state.value, isA<EntityQueryDisposed<_Item>>());
+
+      expect(
+        () => EntityExistence<_Item>(
+          LocalEntityQuery<_Item>(
+            source: ReadOnlyObservableList(ObservableList<_Item>()),
+            pageSize: 2,
+          ),
+        ),
+        throwsArgumentError,
+      );
+    },
+  );
+
   test('query record leases preserve types and release every query', () async {
     LocalEntityQuery<_Item> query(String name) => LocalEntityQuery(
       source: ReadOnlyObservableList(ObservableList.of([_Item(name)])),

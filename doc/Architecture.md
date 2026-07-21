@@ -1136,6 +1136,30 @@ discards an abandoned draft, text/value bindings write directly to its typed
 fields, and `useEntityAction` owns action feedback. These hooks MUST NOT create
 a second persisted or query-state authority.
 
+When one bounded domain form owns more than one entity, generation emits a
+typed `<Root>AggregateDraft` in addition to the ordinary entity drafts. The
+aggregate boundary is inferred only from declared non-null compositions,
+references marked as bounded `aggregateMember`s, and bounded active
+relationship collections. Feature code MUST NOT restate that topology in a
+repository, form model, transaction helper, or ID bundle.
+
+An aggregate creation draft allocates stable identities for its complete tree
+before persistence and derives composition IDs, aggregate-member owner
+references, defaults, and relationship source IDs. An edit draft retains the
+component, child-collection, and membership query leases needed to keep every
+loaded identity stable for exactly the draft lifetime. Nested aggregate members
+expose their own aggregate drafts recursively. Archival, removal, restoration,
+canonical order, and active relationship replacement remain staged until the
+aggregate save.
+
+`await aggregate.save()` validates and commits one durability boundary in
+causal order: component roots first, the aggregate root, an optional typed
+post-root business callback, then membership and child trees. It runs in one
+generated graph transaction, consumes the complete draft tree on success or
+failure, and releases every retained lease. It MUST NOT perform external I/O or
+wait for remote synchronization. An ordinary `<Entity>MutationDraft` continues
+to own only one entity; aggregate topology MUST NOT be added to it ad hoc.
+
 ### 6.3 Generated and semantic actions
 
 A declarative action is fully described by typed target fields, values,
@@ -1623,6 +1647,21 @@ lookup until their semantics are declared safely. If durable storage ever
 returns more than one row for a generated lookup, the runtime fails as a schema
 or descriptor inconsistency rather than choosing one arbitrarily.
 
+A partial unique index generates a singular API only when the declaration opts
+into an exact lookup and its complete predicate is representable in Dart,
+Drift, and PostgreSQL. `activeOnly` is the canonical soft-deletion predicate;
+an enum-backed `IndexCondition.oneOf` is the canonical finite condition. The
+same predicate MUST constrain the in-memory computed index, acquired lookup,
+local unique validation, schema index, remote validation, and synchronization.
+Unsupported predicate combinations fail compilation rather than weakening a
+selection or silently choosing the first row. A conditional lookup exposes no
+caller predicate because the safe condition is part of its generated contract.
+
+Existence and ordered-first intent are not uniqueness claims. `EntityExistence`
+loads at most one row and returns a Boolean; `EntityFirst` requires explicit
+ordering and returns the deterministic first identity. Neither walks an
+unbounded set or exposes `pageSize: 1` spelling to feature code.
+
 Generated immutable `<Entity>Query` values describe selections for ownership,
 references, participants, unique indexes, safe compound indexes, and inverse
 relationships. Equivalent values have structural equality and share cached work.
@@ -1708,6 +1747,14 @@ one narrow MobX reaction per visible row is permitted and normally preferred to
 rebuilding an entire list. Virtualization bounds active row reactions, the list
 reaction observes membership and order, and each row reaction observes only the
 fields it renders.
+
+Generated query hooks own their acquired list, lookup, existence, or first-row
+lease for exactly the widget lifetime. Observed wrappers fold the sealed query
+state once: initial loading, empty, ready data, stale/refreshing data, failure
+with or without retained data, pagination, and disposal. UI code MUST use that
+typed fold instead of repeating state switches or converting it into provider
+state. A bounded synchronous exact lookup uses a narrow MobX observation hook
+over the generated computed index and retains no query lease.
 
 ## 9. Local persistence
 

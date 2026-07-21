@@ -136,6 +136,73 @@ void main() {
     expect(find.text('empty'), findsOneWidget);
   });
 
+  testWidgets(
+    'Given a bounded exact index, When membership changes, Then the value hook rebuilds and disposes its reaction',
+    (tester) async {
+      final selected = Observable<int?>(1);
+      var reads = 0;
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: HookBuilder(
+            builder: (_) {
+              final value = useObservedEntityValue<int>(() {
+                reads++;
+                return selected.value;
+              });
+              return Text('value: $value');
+            },
+          ),
+        ),
+      );
+
+      expect(find.text('value: 1'), findsOneWidget);
+
+      runInAction(() => selected.value = 2);
+      await tester.pump();
+      expect(find.text('value: 2'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      final readsAtDispose = reads;
+      runInAction(() => selected.value = 3);
+      await tester.pump();
+      expect(reads, readsAtDispose);
+    },
+  );
+
+  testWidgets('observed existence exposes a boolean without list mechanics', (
+    tester,
+  ) async {
+    final source = ObservableList<int>();
+    final cache = LocalEntityQueryCache<int>(
+      source: ReadOnlyObservableList(source),
+    );
+    addTearDown(cache.dispose);
+
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: HookBuilder(
+          builder: (_) {
+            final observed = useObservedEntityExistence(
+              () => EntityExistence(
+                cache.acquire(EntityQuerySpec<int>(pageSize: 1)),
+              ),
+            );
+            return Text('exists: ${observed.value}');
+          },
+        ),
+      ),
+    );
+
+    expect(find.text('exists: false'), findsOneWidget);
+
+    runInAction(() => source.add(1));
+    await tester.pump();
+    expect(find.text('exists: true'), findsOneWidget);
+  });
+
   testWidgets('entity action reports and clears errors generically', (
     tester,
   ) async {

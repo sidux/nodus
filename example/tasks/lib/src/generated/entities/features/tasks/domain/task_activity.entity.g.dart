@@ -774,6 +774,18 @@ final class TaskActivitySet {
       pageSize: 1,
     ),
   );
+  EntityExistence<TaskActivity> exists({
+    required EntityPredicate<TaskActivity> where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) =>
+      EntityExistence(query(where: where, tombstones: tombstones, pageSize: 1));
+  EntityFirst<TaskActivity> first({
+    EntityPredicate<TaskActivity>? where,
+    required EntityOrder<TaskActivity> orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) => EntityFirst(
+    query(where: where, orderBy: orderBy, tombstones: tombstones, pageSize: 1),
+  );
   LocalEntityQuery<TaskActivity> query({
     EntityPredicate<TaskActivity>? where,
     EntityOrder<TaskActivity>? orderBy,

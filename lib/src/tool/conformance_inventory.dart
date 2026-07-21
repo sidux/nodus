@@ -358,6 +358,12 @@ final class _GraphMetadata {
           setAccessor:
               generated['setAccessor'] as String? ?? _lowerCamel(table),
           listName: generated['list']! as String,
+          boundedListConstructors: {
+            for (final constructor
+                in (generated['boundedListConstructors'] as List<Object?>? ??
+                    const []))
+              constructor! as String,
+          },
           capabilities: _enabledCapabilities(rawEntity['capabilities']),
           actionNames: {
             for (final action in (rawEntity['actions']! as List<Object?>))
@@ -389,6 +395,7 @@ final class _EntityMetadata {
     required this.unbounded,
     required this.setAccessor,
     required this.listName,
+    required this.boundedListConstructors,
     required this.capabilities,
     required this.actionNames,
   });
@@ -399,6 +406,7 @@ final class _EntityMetadata {
   final bool unbounded;
   final String setAccessor;
   final String listName;
+  final Set<String> boundedListConstructors;
   final Set<String> capabilities;
   final Set<String> actionNames;
 }
@@ -439,6 +447,7 @@ final class _ConformanceVisitor extends RecursiveAstVisitor<void> {
   _EntityMetadata? _currentEntity;
   String? _currentExtensionType;
   Map<String, Set<_EntityMetadata>> _localBindings = const {};
+  Map<String, Set<_EntityMetadata>> _localBoundedBindings = const {};
 
   @override
   void visitClassDeclaration(ClassDeclaration node) {
@@ -463,22 +472,36 @@ final class _ConformanceVisitor extends RecursiveAstVisitor<void> {
   @override
   void visitMethodDeclaration(MethodDeclaration node) {
     final previous = _localBindings;
+    final previousBounded = _localBoundedBindings;
     _localBindings = _collectLocalBindings(node.body, previous);
+    _localBoundedBindings = _collectBoundedLocalBindings(
+      node.body,
+      previousBounded,
+      _localBindings,
+    );
     _inspectRawIdentityGetter(node);
     _inspectGraphForwarder(node);
     super.visitMethodDeclaration(node);
     _localBindings = previous;
+    _localBoundedBindings = previousBounded;
   }
 
   @override
   void visitFunctionDeclaration(FunctionDeclaration node) {
     final previous = _localBindings;
+    final previousBounded = _localBoundedBindings;
     _localBindings = _collectLocalBindings(
       node.functionExpression.body,
       previous,
     );
+    _localBoundedBindings = _collectBoundedLocalBindings(
+      node.functionExpression.body,
+      previousBounded,
+      _localBindings,
+    );
     super.visitFunctionDeclaration(node);
     _localBindings = previous;
+    _localBoundedBindings = previousBounded;
   }
 
   @override
@@ -697,7 +720,12 @@ final class _ConformanceVisitor extends RecursiveAstVisitor<void> {
 
   void _inspectUseAll(MethodInvocation node) {
     final entities = _entitiesFromExpression(node.target);
-    final unbounded = entities.where((entity) => entity.unbounded).toSet();
+    final unbounded = entities
+        .where(
+          (entity) =>
+              entity.unbounded && !_isBoundedSelection(node.target, entity),
+        )
+        .toSet();
     if (unbounded.isEmpty) return;
     final entity = unbounded.length == 1 ? unbounded.single : null;
     _finding('unbounded-use-all', node, entity: entity);
@@ -765,6 +793,60 @@ final class _ConformanceVisitor extends RecursiveAstVisitor<void> {
       }
     }
     return bindings;
+  }
+
+  Map<String, Set<_EntityMetadata>> _collectBoundedLocalBindings(
+    FunctionBody body,
+    Map<String, Set<_EntityMetadata>> inherited,
+    Map<String, Set<_EntityMetadata>> entityBindings,
+  ) {
+    final declarations = <VariableDeclaration>[];
+    body.accept(_VariableCollector(declarations.add));
+    final bindings = <String, Set<_EntityMetadata>>{
+      for (final entry in inherited.entries) entry.key: {...entry.value},
+    };
+    for (var pass = 0; pass < 2; pass++) {
+      for (final declaration in declarations) {
+        final initializer = declaration.initializer;
+        if (initializer == null) continue;
+        final entities = _entitiesFromExpression(
+          initializer,
+          bindings: entityBindings,
+        );
+        final bounded = {
+          for (final entity in entities)
+            if (_isBoundedSelection(initializer, entity, bindings: bindings))
+              entity,
+        };
+        if (bounded.isNotEmpty) {
+          bindings[declaration.name.lexeme] = bounded;
+        }
+      }
+    }
+    return bindings;
+  }
+
+  bool _isBoundedSelection(
+    Expression? expression,
+    _EntityMetadata entity, {
+    Map<String, Set<_EntityMetadata>>? bindings,
+  }) {
+    if (expression == null) return false;
+    final source = expression.toSource();
+    for (final constructor in entity.boundedListConstructors) {
+      if (RegExp(
+        '\\b${RegExp.escape(entity.listName)}\\s*\\.\\s*'
+        '${RegExp.escape(constructor)}\\s*\\(',
+      ).hasMatch(source)) {
+        return true;
+      }
+    }
+    final identifiers = <String>[];
+    expression.accept(_IdentifierCollector(identifiers.add));
+    final activeBindings = bindings ?? _localBoundedBindings;
+    return identifiers.any(
+      (identifier) => activeBindings[identifier]?.contains(entity) == true,
+    );
   }
 
   Set<_EntityMetadata> _entitiesFromExpression(

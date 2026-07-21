@@ -2040,7 +2040,31 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
     final reader = ConstantReader(indexValue);
     final keyset = reader.read('keyset').boolValue;
     final unordered = reader.read('unordered').boolValue;
+    final activeOnly = reader.read('activeOnly').boolValue;
+    final exactLookup = reader.read('exactLookup').boolValue;
+    final unique = reader.read('unique').boolValue;
+    if ((activeOnly || exactLookup) && !unique) {
+      throw InvalidGenerationSourceError(
+        'CompoundIndex activeOnly and exactLookup require unique: true.',
+        element: element,
+      );
+    }
+    if (activeOnly &&
+        !persistedByName.containsKey(EntityConventions.deletedAtFieldName)) {
+      throw InvalidGenerationSourceError(
+        'CompoundIndex activeOnly requires the SoftDeletable capability.',
+        element: element,
+      );
+    }
     final conditionReader = reader.peek('condition');
+    if (activeOnly && conditionReader != null && !conditionReader.isNull) {
+      throw InvalidGenerationSourceError(
+        'CompoundIndex cannot combine activeOnly with condition until the '
+        'same conjunctive predicate is generated for every storage target '
+        'and exact lookup.',
+        element: element,
+      );
+    }
     IndexConditionSpec? condition;
     if (conditionReader != null && !conditionReader.isNull) {
       if (keyset) {
@@ -2102,7 +2126,9 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
         element: element,
       );
     }
-    final minimumFields = keyset || condition != null || unordered ? 1 : 2;
+    final minimumFields = keyset || condition != null || unordered || activeOnly
+        ? 1
+        : 2;
     if (names.length < minimumFields) {
       throw InvalidGenerationSourceError(
         keyset
@@ -2188,6 +2214,8 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
         condition.field,
         ...condition.values.map((value) => value.toString()),
       ],
+      if (activeOnly) 'activeOnly',
+      if (exactLookup) 'exactLookup',
     ].join('|');
     if (!identities.add(identity)) {
       throw InvalidGenerationSourceError(
@@ -2198,11 +2226,13 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
     indexes.add(
       CompoundIndexSpec(
         fields: List.unmodifiable(resolved),
-        unique: reader.read('unique').boolValue,
+        unique: unique,
         scope: scope,
         keyset: keyset,
         condition: condition,
         unordered: unordered,
+        activeOnly: activeOnly,
+        exactLookup: exactLookup,
       ),
     );
   }
@@ -3118,6 +3148,67 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
         }
         composedTargets.add(target.className);
       }
+      if (reference.aggregateMember) {
+        final inverseCardinality = entity.inverseCardinalityFor(field);
+        if (inverseCardinality != Cardinality.bounded) {
+          throw InvalidGenerationSourceError(
+            '`${entity.className}.${field.name}` is an aggregate member but '
+            'its `${target.className}.${reference.inverseName}` inverse is '
+            'unbounded. Declare '
+            '`Reference.inverseCardinality: Cardinality.bounded` only when '
+            'one target owns a small complete collection, or make the source '
+            'entity globally bounded.',
+            element: element,
+          );
+        }
+        if (field.nullable) {
+          throw InvalidGenerationSourceError(
+            'Aggregate-member references must be non-null.',
+            element: element,
+          );
+        }
+        if (reference.onDelete != ReferenceDeleteAction.cascade) {
+          throw InvalidGenerationSourceError(
+            'Aggregate-member references require '
+            'ReferenceDeleteAction.cascade so child lifecycle cannot outlive '
+            'the aggregate.',
+            element: element,
+          );
+        }
+        if (!entity.canCreate ||
+            !entity.canUpdate ||
+            !entity.canDelete ||
+            entity.deletedAtField == null ||
+            !entity.createParameters.contains(field)) {
+          throw InvalidGenerationSourceError(
+            'Aggregate member `${entity.className}` must expose generated '
+            'create, update, and soft-delete behavior, and its parent '
+            'reference must be a caller-supplied creation field.',
+            element: element,
+          );
+        }
+        if (!target.canCreatePublicly || !target.canBeginMutationDraftEdit) {
+          throw InvalidGenerationSourceError(
+            'Aggregate root `${target.className}` must expose generated '
+            'creation and draft lifecycle behavior so one typed root draft '
+            'can own both creation and editing.',
+            element: element,
+          );
+        }
+        if (const {
+          'root',
+          'save',
+          'discard',
+          'isConsumed',
+        }.contains(reference.inverseName)) {
+          throw InvalidGenerationSourceError(
+            'Aggregate-member inverse `${reference.inverseName}` conflicts '
+            'with the generated aggregate draft lifecycle. Choose a '
+            'domain-specific inverse name.',
+            element: element,
+          );
+        }
+      }
       if (field.isAccessReference &&
           target.security.grants.any(
             (grant) =>
@@ -3486,6 +3577,13 @@ ReferenceSpec _parseReference(
       element: field,
     );
   }
+  final inverseCardinalityReader = annotation.peek('inverseCardinality');
+  final inverseCardinality =
+      inverseCardinalityReader == null || inverseCardinalityReader.isNull
+      ? null
+      : _readEnum(annotation.read('inverseCardinality'), Cardinality.values);
+  final aggregateMember =
+      annotation.peek('aggregateMember')?.boolValue ?? false;
   return ReferenceSpec(
     targetClassName: target.name!,
     targetInputImport: target.library.uri.toString(),
@@ -3495,6 +3593,8 @@ ReferenceSpec _parseReference(
     accessorName: accessorName,
     inverseName: inverseName,
     onDelete: onDelete,
+    inverseCardinality: inverseCardinality,
+    aggregateMember: aggregateMember,
     targetSelectPrincipals:
         targetSecurity.grants
             .where((grant) => grant.operation == RlsOperation.select)

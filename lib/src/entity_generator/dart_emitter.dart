@@ -134,7 +134,7 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
         '    conflictPolicy: FieldConflictPolicy.${_conflict(field.conflict)},',
       )
       ..writeln(
-        '    reference: ${field.reference == null ? 'null' : 'EntityReferenceDescriptor(targetEntityType: \'${field.reference!.targetClassName}\', onDelete: ReferenceDeleteAction.${field.reference!.onDelete.name}${field.isComposition ? ', composition: true' : ''})'},',
+        '    reference: ${field.reference == null ? 'null' : 'EntityReferenceDescriptor(targetEntityType: \'${field.reference!.targetClassName}\', onDelete: ReferenceDeleteAction.${field.reference!.onDelete.name}${field.isComposition ? ', composition: true' : ''}${field.reference!.inverseCardinality == null ? '' : ', inverseCardinality: Cardinality.${field.reference!.inverseCardinality!.name}'})'},',
       );
     if (field.transitions.isNotEmpty) {
       buffer.writeln(
@@ -1323,6 +1323,7 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
       .toList(growable: false);
   final transfer = spec.orderScopeTransferAction;
   if (!spec.canCreatePublicly &&
+      !spec.canBeginMutationDraftEdit &&
       editableFields.isEmpty &&
       editableVariants.isEmpty &&
       transfer == null) {
@@ -1358,7 +1359,7 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     ...editFields.map((field) => field.name),
     ...editableVariants.map((variant) => variant.name),
   };
-  if (editFields.isNotEmpty || editableVariants.isNotEmpty) {
+  if (spec.canBeginMutationDraftEdit) {
     buffer
       ..writeln(
         'extension ${spec.className}GeneratedEditing on ${spec.className} {',
@@ -1372,11 +1373,30 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     ..writeln('    implements EntityMutationDraft<${spec.className}> {');
   final entries = fields.entries.toList(growable: false);
   if (spec.canCreatePublicly) {
+    final hasDraftInitializers =
+        editFields.isNotEmpty ||
+        editableVariants.isNotEmpty ||
+        entries.isNotEmpty;
     buffer
-      ..writeln('  $draftName.create(this._set)')
+      ..writeln('  $draftName.create(')
+      ..writeln('    this._set, {')
+      ..writeln('    LocalId<${spec.className}>? id,');
+    if (spec.hasOrderedCapability) {
+      buffer.writeln('    OrderedPlacement placement = OrderedPlacement.last,');
+    }
+    buffer
+      ..writeln('  })')
+      ..writeln('      : _entity = null,')
       ..writeln(
-        '      : _entity = null${entries.isEmpty && editFields.isEmpty ? ';' : ','}',
+        '        _createId = id ?? _set!.allocateId()'
+        '${spec.hasOrderedCapability || hasDraftInitializers ? ',' : ';'}',
       );
+    if (spec.hasOrderedCapability) {
+      buffer.writeln(
+        '        _createPlacement = placement'
+        '${hasDraftInitializers ? ',' : ';'}',
+      );
+    }
     for (final field in editFields) {
       buffer.writeln('        _base${field.capitalizedName} = null,');
     }
@@ -1404,11 +1424,25 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
       buffer.writeln('        _${entry.key}Field = $initializer$suffix');
     }
   }
-  if (editFields.isNotEmpty || editableVariants.isNotEmpty) {
+  if (spec.canBeginMutationDraftEdit) {
+    final hasDraftInitializers =
+        editFields.isNotEmpty ||
+        editableVariants.isNotEmpty ||
+        entries.isNotEmpty;
     buffer
       ..writeln('  $draftName.edit(${spec.className} entity)')
       ..writeln('      : _set = null,')
-      ..writeln('        _entity = entity,');
+      ..writeln('        _entity = entity,')
+      ..writeln(
+        '        _createId = null'
+        '${spec.hasOrderedCapability || hasDraftInitializers ? ',' : ';'}',
+      );
+    if (spec.hasOrderedCapability) {
+      buffer.writeln(
+        '        _createPlacement = null'
+        '${hasDraftInitializers ? ',' : ';'}',
+      );
+    }
     for (final field in editFields) {
       buffer.writeln(
         '        _base${field.capitalizedName} = entity.${field.name},',
@@ -1434,7 +1468,11 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
   buffer
     ..writeln()
     ..writeln('  final ${spec.className}Set? _set;')
-    ..writeln('  final ${spec.className}? _entity;');
+    ..writeln('  final ${spec.className}? _entity;')
+    ..writeln('  final LocalId<${spec.className}>? _createId;');
+  if (spec.hasOrderedCapability) {
+    buffer.writeln('  final OrderedPlacement? _createPlacement;');
+  }
   for (final field in editFields) {
     buffer.writeln(
       '  final ${_nullableType(field.dartType)} _base${field.capitalizedName};',
@@ -1450,6 +1488,9 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     ..writeln()
     ..writeln('  bool get isCreating => _entity == null;')
     ..writeln('  ${spec.className}? get entity => _entity;')
+    ..writeln(
+      '  LocalId<${spec.className}> get id => _entity?.id ?? _createId!;',
+    )
     ..writeln('  @override bool get isConsumed => _consumed;');
   for (final entry in fields.entries) {
     buffer
@@ -1485,7 +1526,14 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
   if (spec.canCreatePublicly) {
     buffer
       ..writeln('    if (current == null) {')
-      ..writeln('      final created = await _set!.create(');
+      ..writeln(
+        '      final created = await _set!.'
+        '${spec.hasOrderedCapability ? 'createAt' : 'create'}(',
+      )
+      ..writeln('        id: _createId,');
+    if (spec.hasOrderedCapability) {
+      buffer.writeln('        placement: _createPlacement!,');
+    }
     for (final field in createParameters) {
       buffer.writeln(
         "        ${field.name}: _${field.name}Field.requireValue(entityType: '${spec.className}', field: '${field.name}'),",
@@ -2792,17 +2840,27 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   buffer
     ..writeln('  final $engineType _engine;')
     ..writeln('  final LocalEntityQueryCache<${spec.className}> _queries;');
-  final hasEditDraft =
-      spec.draftEditableFields.isNotEmpty ||
-      spec.draftEditableVariants.isNotEmpty;
+  final hasEditDraft = spec.canBeginMutationDraftEdit;
   if (spec.canCreatePublicly ||
       hasEditDraft ||
       spec.orderScopeTransferAction != null) {
     if (spec.canCreatePublicly) {
-      buffer.writeln(
-        '  ${spec.className}MutationDraft beginCreate() => '
-        '${spec.className}MutationDraft.create(this);',
-      );
+      buffer
+        ..writeln('  ${spec.className}MutationDraft beginCreate({')
+        ..writeln('    LocalId<${spec.className}>? id,');
+      if (spec.hasOrderedCapability) {
+        buffer.writeln(
+          '    OrderedPlacement placement = OrderedPlacement.last,',
+        );
+      }
+      buffer
+        ..writeln('  }) => ${spec.className}MutationDraft.create(')
+        ..writeln('    this,')
+        ..writeln('    id: id,');
+      if (spec.hasOrderedCapability) {
+        buffer.writeln('    placement: placement,');
+      }
+      buffer.writeln('  );');
     }
     if (hasEditDraft || spec.orderScopeTransferAction != null) {
       buffer.writeln(
@@ -2876,6 +2934,84 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
       ..writeln('    pageSize: 1,')
       ..writeln('  ));');
+  }
+  buffer
+    ..writeln('  EntityExistence<${spec.className}> exists({')
+    ..writeln('    required EntityPredicate<${spec.className}> where,')
+    ..writeln(
+      '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
+    );
+  if (spec.hasArchivableCapability) {
+    buffer.writeln(
+      '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
+    );
+  }
+  buffer
+    ..writeln('  }) => EntityExistence(query(')
+    ..writeln('    where: where,')
+    ..writeln('    tombstones: tombstones,')
+    ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+    ..writeln('    pageSize: 1,')
+    ..writeln('  ));')
+    ..writeln('  EntityFirst<${spec.className}> first({')
+    ..writeln('    EntityPredicate<${spec.className}>? where,')
+    ..writeln('    required EntityOrder<${spec.className}> orderBy,')
+    ..writeln(
+      '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
+    );
+  if (spec.hasArchivableCapability) {
+    buffer.writeln(
+      '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
+    );
+  }
+  buffer
+    ..writeln('  }) => EntityFirst(query(')
+    ..writeln('    where: where,')
+    ..writeln('    orderBy: orderBy,')
+    ..writeln('    tombstones: tombstones,')
+    ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+    ..writeln('    pageSize: 1,')
+    ..writeln('  ));');
+  if (cachesAuthenticatedOwner) {
+    buffer
+      ..writeln('  EntityExistence<${spec.className}> existsOwned({')
+      ..writeln('    EntityPredicate<${spec.className}>? where,')
+      ..writeln(
+        '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
+      );
+    if (spec.hasArchivableCapability) {
+      buffer.writeln(
+        '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
+      );
+    }
+    buffer
+      ..writeln('  }) => exists(')
+      ..writeln(
+        '    where: ${spec.className}Fields.${spec.ownerField.name}.equals(_ownerId) & (where ?? EntityPredicate<${spec.className}>.all()),',
+      )
+      ..writeln('    tombstones: tombstones,')
+      ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+      ..writeln('  );')
+      ..writeln('  EntityFirst<${spec.className}> firstOwned({')
+      ..writeln('    EntityPredicate<${spec.className}>? where,')
+      ..writeln('    required EntityOrder<${spec.className}> orderBy,')
+      ..writeln(
+        '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
+      );
+    if (spec.hasArchivableCapability) {
+      buffer.writeln(
+        '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
+      );
+    }
+    buffer
+      ..writeln('  }) => first(')
+      ..writeln(
+        '    where: ${spec.className}Fields.${spec.ownerField.name}.equals(_ownerId) & (where ?? EntityPredicate<${spec.className}>.all()),',
+      )
+      ..writeln('    orderBy: orderBy,')
+      ..writeln('    tombstones: tombstones,')
+      ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+      ..writeln('  );');
   }
   buffer
     ..writeln('  LocalEntityQuery<${spec.className}> query({')
@@ -3004,6 +3140,36 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         }
         buffer.writeln('  );');
       }
+      buffer
+        ..writeln('  Future<${spec.className}> createAt({')
+        ..writeln('    LocalId<${spec.className}>? id,')
+        ..writeln('    OrderedPlacement placement = OrderedPlacement.last,');
+      _emitCreateParameters(buffer, publicCreateParameters);
+      _emitPersistedVariantParameters(buffer, createVariants);
+      buffer
+        ..writeln('  }) {')
+        ..writeln('    if (placement != OrderedPlacement.first &&')
+        ..writeln('        placement != OrderedPlacement.last) {')
+        ..writeln('      throw const EntityValidationException(')
+        ..writeln("        entityType: '${spec.className}',")
+        ..writeln("        field: 'order',")
+        ..writeln(
+          "        message: 'Ordered creation supports only first or last placement.',",
+        )
+        ..writeln('      );')
+        ..writeln('    }')
+        ..writeln('    return _create(')
+        ..writeln('      first: placement == OrderedPlacement.first,')
+        ..writeln('      id: id,');
+      for (final field in publicCreateParameters) {
+        buffer.writeln('      ${field.name}: ${field.name},');
+      }
+      for (final variant in createVariants) {
+        buffer.writeln('      ${variant.name}: ${variant.name},');
+      }
+      buffer
+        ..writeln('    );')
+        ..writeln('  }');
       buffer
         ..writeln('  Future<${spec.className}> _create({')
         ..writeln('    required bool first,');
@@ -3199,6 +3365,7 @@ void _emitCreateOrGetMethods(
     (candidate) =>
         candidate.unique &&
         candidate.condition == null &&
+        !candidate.activeOnly &&
         candidate.fieldNames.every(
           (name) =>
               !spec.fields.singleWhere((field) => field.name == name).nullable,
@@ -3672,10 +3839,14 @@ void _emitUniqueLookups(StringBuffer buffer, EntitySpec spec) {
   for (final index in spec.indexes.where(
     (candidate) =>
         candidate.unique &&
-        candidate.fieldNames.every(
-          (name) =>
-              !spec.fields.singleWhere((field) => field.name == name).nullable,
-        ),
+        (candidate.exactLookup ||
+            (candidate.condition == null &&
+                !candidate.activeOnly &&
+                candidate.fieldNames.every(
+                  (name) => !spec.fields
+                      .singleWhere((field) => field.name == name)
+                      .nullable,
+                ))),
   )) {
     final lookupFields = index.ownerScoped
         ? index.fieldNames
@@ -3689,17 +3860,56 @@ void _emitUniqueLookups(StringBuffer buffer, EntitySpec spec) {
       for (final name in index.fieldNames)
         spec.fields.singleWhere((candidate) => candidate.name == name),
     ];
+    String exactType(FieldSpec field) => field.dartType.replaceAll('?', '');
+    (PersistedVariantSpec, PersistedVariantCaseSpec)? variantComponent(
+      FieldSpec field,
+    ) {
+      final variant = spec.persistedVariantForField(field);
+      if (variant == null) return null;
+      final variantCase = variant.cases.singleWhere(
+        (candidate) => candidate.fields.contains(field),
+      );
+      return (variant, variantCase);
+    }
+
+    String entityValue(FieldSpec field) {
+      final component = variantComponent(field);
+      if (component == null) {
+        return 'entity.${field.name}${field.nullable ? '!' : ''}';
+      }
+      final (variant, variantCase) = component;
+      final value =
+          '(entity.${variant.name} as ${variantCase.className}).${field.name}';
+      return field.persistedVariantComponentNullable == true
+          ? '$value!'
+          : value;
+    }
+
     final keyType = index.unordered
-        ? 'UnorderedEntityPairKey<${fields.first.dartType}>'
-        : '({${fields.map((field) => '${field.dartType} ${field.name}').join(', ')}})';
+        ? 'UnorderedEntityPairKey<${exactType(fields.first)}>'
+        : '({${fields.map((field) => '${exactType(field)} ${field.name}').join(', ')}})';
     final entityKey = index.unordered
-        ? 'UnorderedEntityPairKey(entity.${fields.first.name}, '
-              'entity.${fields.last.name})'
-        : '(${fields.map((field) => '${field.name}: entity.${field.name}').join(', ')})';
+        ? 'UnorderedEntityPairKey(${entityValue(fields.first)}, '
+              '${entityValue(fields.last)})'
+        : '(${fields.map((field) => '${field.name}: ${entityValue(field)}').join(', ')})';
     final argumentKey = index.unordered
         ? 'UnorderedEntityPairKey(${fields.first.name}, ${fields.last.name})'
         : '(${fields.map((field) => '${field.name}: ${field.name}').join(', ')})';
     final conditions = <String>[];
+    for (final field in fields) {
+      final component = variantComponent(field);
+      if (component case (final variant, final variantCase)) {
+        conditions.add('entity.${variant.name} is ${variantCase.className}');
+        if (field.persistedVariantComponentNullable == true) {
+          conditions.add(
+            '(entity.${variant.name} as ${variantCase.className}).'
+            '${field.name} != null',
+          );
+        }
+      } else if (field.nullable) {
+        conditions.add('entity.${field.name} != null');
+      }
+    }
     if (index.activeOnly) {
       conditions.add('entity.${EntityConventions.deletedAtFieldName} == null');
     }
@@ -3731,7 +3941,7 @@ void _emitUniqueLookups(StringBuffer buffer, EntitySpec spec) {
       ..writeln('  });')
       ..writeln('  ${spec.className}? $methodName({');
     for (final field in fields) {
-      buffer.writeln('    required ${field.dartType} ${field.name},');
+      buffer.writeln('    required ${exactType(field)} ${field.name},');
     }
     buffer.writeln('  }) => _${methodName}Index.value[$argumentKey];');
   }

@@ -628,23 +628,33 @@ extension TaskProjectGeneratedEditing on TaskProject {
 
 final class TaskProjectMutationDraft
     implements EntityMutationDraft<TaskProject> {
-  TaskProjectMutationDraft.create(this._set)
-    : _entity = null,
-      _baseTitle = null,
-      _titleField = EntityDraftField<String>.unset();
+  TaskProjectMutationDraft.create(
+    this._set, {
+    LocalId<TaskProject>? id,
+    OrderedPlacement placement = OrderedPlacement.last,
+  }) : _entity = null,
+       _createId = id ?? _set!.allocateId(),
+       _createPlacement = placement,
+       _baseTitle = null,
+       _titleField = EntityDraftField<String>.unset();
   TaskProjectMutationDraft.edit(TaskProject entity)
     : _set = null,
       _entity = entity,
+      _createId = null,
+      _createPlacement = null,
       _baseTitle = entity.title,
       _titleField = EntityDraftField<String>.value(entity.title);
 
   final TaskProjectSet? _set;
   final TaskProject? _entity;
+  final LocalId<TaskProject>? _createId;
+  final OrderedPlacement? _createPlacement;
   final String? _baseTitle;
   bool _consumed = false;
 
   bool get isCreating => _entity == null;
   TaskProject? get entity => _entity;
+  LocalId<TaskProject> get id => _entity?.id ?? _createId!;
   @override
   bool get isConsumed => _consumed;
   final EntityDraftField<String> _titleField;
@@ -667,7 +677,9 @@ final class TaskProjectMutationDraft
     }
     final current = _entity;
     if (current == null) {
-      final created = await _set!.create(
+      final created = await _set!.createAt(
+        id: _createId,
+        placement: _createPlacement!,
         title: _titleField.requireValue(
           entityType: 'TaskProject',
           field: 'title',
@@ -839,8 +851,10 @@ final class TaskProjectSet {
       _queries = LocalEntityQueryCache<TaskProject>(source: engine.all);
   final LocalEntityEngine<TaskProject, TaskProjectRecord> _engine;
   final LocalEntityQueryCache<TaskProject> _queries;
-  TaskProjectMutationDraft beginCreate() =>
-      TaskProjectMutationDraft.create(this);
+  TaskProjectMutationDraft beginCreate({
+    LocalId<TaskProject>? id,
+    OrderedPlacement placement = OrderedPlacement.last,
+  }) => TaskProjectMutationDraft.create(this, id: id, placement: placement);
   TaskProjectMutationDraft beginEdit(TaskProject entity) => entity.beginEdit();
   final LocalId<Account> _ownerId;
   ReadOnlyObservableList<TaskProject> get all => _engine.all;
@@ -849,6 +863,38 @@ final class TaskProjectSet {
   TaskProject? byId(LocalId<TaskProject> id) => _engine.byRawId(id.value);
   TaskProject require(LocalId<TaskProject> id) =>
       _engine.requireRawId(id.value);
+  EntityExistence<TaskProject> exists({
+    required EntityPredicate<TaskProject> where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) =>
+      EntityExistence(query(where: where, tombstones: tombstones, pageSize: 1));
+  EntityFirst<TaskProject> first({
+    EntityPredicate<TaskProject>? where,
+    required EntityOrder<TaskProject> orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) => EntityFirst(
+    query(where: where, orderBy: orderBy, tombstones: tombstones, pageSize: 1),
+  );
+  EntityExistence<TaskProject> existsOwned({
+    EntityPredicate<TaskProject>? where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) => exists(
+    where:
+        TaskProjectFields.ownerId.equals(_ownerId) &
+        (where ?? EntityPredicate<TaskProject>.all()),
+    tombstones: tombstones,
+  );
+  EntityFirst<TaskProject> firstOwned({
+    EntityPredicate<TaskProject>? where,
+    required EntityOrder<TaskProject> orderBy,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) => first(
+    where:
+        TaskProjectFields.ownerId.equals(_ownerId) &
+        (where ?? EntityPredicate<TaskProject>.all()),
+    orderBy: orderBy,
+    tombstones: tombstones,
+  );
   LocalEntityQuery<TaskProject> query({
     EntityPredicate<TaskProject>? where,
     EntityOrder<TaskProject>? orderBy,
@@ -1163,6 +1209,26 @@ final class TaskProjectSet {
     LocalId<TaskProject>? id,
     required String title,
   }) => _create(first: true, id: id, title: title);
+  Future<TaskProject> createAt({
+    LocalId<TaskProject>? id,
+    OrderedPlacement placement = OrderedPlacement.last,
+    required String title,
+  }) {
+    if (placement != OrderedPlacement.first &&
+        placement != OrderedPlacement.last) {
+      throw const EntityValidationException(
+        entityType: 'TaskProject',
+        field: 'order',
+        message: 'Ordered creation supports only first or last placement.',
+      );
+    }
+    return _create(
+      first: placement == OrderedPlacement.first,
+      id: id,
+      title: title,
+    );
+  }
+
   Future<TaskProject> _create({
     required bool first,
     LocalId<TaskProject>? id,

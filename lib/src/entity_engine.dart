@@ -280,11 +280,13 @@ final class EntityReferenceDescriptor {
     required this.targetEntityType,
     required this.onDelete,
     this.composition = false,
+    this.inverseCardinality,
   });
 
   final String targetEntityType;
   final ReferenceDeleteAction onDelete;
   final bool composition;
+  final Cardinality? inverseCardinality;
 }
 
 abstract interface class GeneratedEntityRecord {

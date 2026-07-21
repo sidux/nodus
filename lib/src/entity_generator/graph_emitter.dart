@@ -621,13 +621,14 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
       (candidate) =>
           candidate.unique &&
           !candidate.unordered &&
-          !candidate.activeOnly &&
-          candidate.condition == null &&
-          candidate.fieldNames.every(
-            (name) => !entity.fields
-                .singleWhere((field) => field.name == name)
-                .nullable,
-          ),
+          (candidate.exactLookup ||
+              (candidate.condition == null &&
+                  !candidate.activeOnly &&
+                  candidate.fieldNames.every(
+                    (name) => !entity.fields
+                        .singleWhere((field) => field.name == name)
+                        .nullable,
+                  ))),
     );
     if (indexes.isEmpty) continue;
 
@@ -642,25 +643,40 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
       ];
       final constructorName =
           'by${fields.map((field) => _upperCamel(_idFieldAccessor(field.name))).join('And')}';
+      final predicates = [
+        for (final field in fields)
+          '${entity.className}Fields.${field.name}.equals(${field.name})',
+        if (index.condition case final condition?)
+          '${entity.className}Fields.${condition.field}.isIn({${condition.values.map((value) => _graphIndexConditionLiteral(entity.fields.singleWhere((field) => field.name == condition.field), value)).join(', ')}})',
+      ];
+      final hasOptionalParameters =
+          !index.activeOnly || entity.hasArchivableCapability;
       buffer
         ..writeln('  $lookupName.$constructorName(')
         ..writeln('    $entityGraphName entityGraph,')
         ..writeln(
           fields
-              .map((field) => '    ${field.dartType} ${field.name},')
+              .map(
+                (field) =>
+                    '    ${field.dartType.replaceAll('?', '')} ${field.name},',
+              )
               .join('\n'),
         )
-        ..writeln('    {')
-        ..writeln(
-          '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
+        ..write(hasOptionalParameters ? '    {\n' : '')
+        ..write(
+          index.activeOnly
+              ? ''
+              : '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,\n',
         );
       _emitArchiveParameter(buffer, entity, defaultVisibility: 'include');
       buffer
-        ..writeln('  }) : super(entityGraph.${entity.setAccessor}.query(')
         ..writeln(
-          '         where: ${fields.map((field) => '${entity.className}Fields.${field.name}.equals(${field.name})').join(' & ')},',
+          '  ${hasOptionalParameters ? '}' : ''}) : super(entityGraph.${entity.setAccessor}.query(',
         )
-        ..writeln('         tombstones: tombstones,')
+        ..writeln('         where: ${predicates.join(' & ')},')
+        ..writeln(
+          '         tombstones: ${index.activeOnly ? 'TombstoneVisibility.exclude' : 'tombstones'},',
+        )
         ..write(_archiveArgument(entity))
         ..writeln('         pageSize: 1,')
         ..writeln('       ));');
@@ -669,6 +685,15 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
       ..writeln('}')
       ..writeln();
   }
+}
+
+String _graphIndexConditionLiteral(FieldSpec field, Object value) {
+  if (!field.isEnum) return dartLiteral(value);
+  final index = field.enumWireValues.indexOf(value as String);
+  if (index < 0) {
+    throw StateError('Unknown `${field.name}` index-condition value `$value`.');
+  }
+  return '${field.dartType}.${field.enumValues[index]}';
 }
 
 void _emitGraphOwnedListConstructor(
@@ -862,6 +887,7 @@ void _emitOrderedCollection(
 
 void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
   final entityGraphName = '${graph.className}EntityGraph';
+  final aggregateTypes = _aggregateTypeNames(graph);
   for (final collection in graph.relationships) {
     _emitActiveRelationship(
       buffer,
@@ -870,6 +896,13 @@ void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
       cardinalityResolution: collection.cardinalityResolution,
       entityGraphName: entityGraphName,
     );
+    if (collection.cardinality == Cardinality.bounded) {
+      _emitActiveRelationshipDraft(
+        buffer,
+        collection: collection,
+        entityGraphName: entityGraphName,
+      );
+    }
   }
   for (final source in graph.entities) {
     for (final field in source.fields) {
@@ -890,6 +923,15 @@ void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
           field: field,
           entityGraphName: entityGraphName,
         );
+        if (reference.aggregateMember) {
+          _emitAggregateCollectionDraft(
+            buffer,
+            source: source,
+            field: field,
+            entityGraphName: entityGraphName,
+            childIsAggregate: aggregateTypes.contains(source.className),
+          );
+        }
       }
       final returnType = isMutableRelationshipSource
           ? '${source.className}Relationship'
@@ -939,6 +981,904 @@ void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
         ..writeln();
     }
   }
+  _emitAggregateRootDrafts(buffer, graph, entityGraphName);
+}
+
+void _emitActiveRelationshipDraft(
+  StringBuffer buffer, {
+  required ActiveRelationshipCollectionSpec collection,
+  required String entityGraphName,
+}) {
+  final link = collection.linkEntity;
+  final relationship = collection.relationship;
+  final ownerField = relationship.ownerReference;
+  final targetField = relationship.targetReference;
+  final source = collection.sourceEntity;
+  final relationshipType = '${link.className}Relationship';
+  final draftType = '${link.className}MembershipDraft';
+  final targetIdType = targetField.dartType;
+  final inverse = ownerField.reference!.inverseName;
+  buffer
+    ..writeln(
+      'extension ${source.className}${link.className}MembershipEditing '
+      'on ${source.className} {',
+    )
+    ..writeln('  Future<$draftType> begin${_upperCamel(inverse)}Draft(')
+    ..writeln('    $entityGraphName entityGraph,')
+    ..writeln('  ) => $draftType.load(entityGraph, id);')
+    ..writeln('}')
+    ..writeln()
+    ..writeln('final class $draftType implements AggregateCollectionDraft {')
+    ..writeln('  $draftType._(')
+    ..writeln('    this._entityGraph,')
+    ..writeln('    this._${ownerField.name},')
+    ..writeln('    Iterable<$targetIdType> targetIds,')
+    ..writeln('    this._lease,')
+    ..writeln('  ) : _targetIds = targetIds.toList(growable: true);')
+    ..writeln()
+    ..writeln('  factory $draftType.create(')
+    ..writeln('    $entityGraphName entityGraph,')
+    ..writeln('    ${ownerField.dartType} ${ownerField.name},')
+    ..writeln(
+      '  ) => $draftType._(entityGraph, ${ownerField.name}, const [], null);',
+    )
+    ..writeln()
+    ..writeln('  static Future<$draftType> load(')
+    ..writeln('    $entityGraphName entityGraph,')
+    ..writeln('    ${ownerField.dartType} ${ownerField.name},')
+    ..writeln('  ) async {')
+    ..writeln('    final lease = $relationshipType(')
+    ..writeln('      entityGraph,')
+    ..writeln('      ${ownerField.name},')
+    ..writeln('    );')
+    ..writeln('    final links = await lease.loadAll();')
+    ..writeln('    return $draftType._(')
+    ..writeln('      entityGraph,')
+    ..writeln('      ${ownerField.name},')
+    ..writeln('      links.map((link) => link.${targetField.name}),')
+    ..writeln('      lease,')
+    ..writeln('    );')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  final $entityGraphName _entityGraph;')
+    ..writeln('  final ${ownerField.dartType} _${ownerField.name};')
+    ..writeln('  final EntityList<${link.className}>? _lease;')
+    ..writeln('  final List<$targetIdType> _targetIds;')
+    ..writeln('  bool _consumed = false;')
+    ..writeln()
+    ..writeln(
+      '  List<$targetIdType> get targetIds => List.unmodifiable(_targetIds);',
+    )
+    ..writeln('  @override bool get isConsumed => _consumed;')
+    ..writeln()
+    ..writeln('  void replace(Iterable<$targetIdType> targetIds) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    final requested = targetIds.toList(growable: false);')
+    ..writeln('    if (requested.toSet().length != requested.length) {')
+    ..writeln('      throw const EntityValidationException(')
+    ..writeln("        entityType: '${link.className}',")
+    ..writeln("        field: '${targetField.name}',")
+    ..writeln("        message: 'A relationship target may appear only once.',")
+    ..writeln('      );')
+    ..writeln('    }')
+    ..writeln('    _targetIds')
+    ..writeln('      ..clear()')
+    ..writeln('      ..addAll(requested);')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  @override')
+    ..writeln('  void discard() {')
+    ..writeln('    if (_consumed) return;')
+    ..writeln('    _lease?.dispose();')
+    ..writeln('    _consumed = true;')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  @override')
+    ..writeln('  Future<void> save() async {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    await $relationshipType(')
+    ..writeln('      _entityGraph,')
+    ..writeln('      _${ownerField.name},')
+    ..writeln('    ).replace(_targetIds);')
+    ..writeln('    discard();')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  void _ensureActive() {')
+    ..writeln('    if (_consumed) {')
+    ..writeln('      throw const EntityDraftStateException(')
+    ..writeln("        entityType: '${source.className}',")
+    ..writeln("        entityId: '<aggregate>',")
+    ..writeln('        reason: EntityDraftFailureReason.consumed,')
+    ..writeln(
+      "        message: 'This relationship membership draft is already consumed.',",
+    )
+    ..writeln('      );')
+    ..writeln('    }')
+    ..writeln('  }')
+    ..writeln('}')
+    ..writeln();
+}
+
+void _emitAggregateRootDrafts(
+  StringBuffer buffer,
+  EntityGraphSpec graph,
+  String entityGraphName,
+) {
+  final aggregateTypes = _aggregateTypeNames(graph);
+  final byClass = {
+    for (final entity in graph.entities) entity.className: entity,
+  };
+  for (final target in graph.entities) {
+    final members = <(EntitySpec, FieldSpec)>[
+      for (final source in graph.entities)
+        for (final field in source.fields)
+          if (field.reference case final reference?)
+            if (reference.aggregateMember &&
+                reference.targetClassName == target.className)
+              (source, field),
+    ];
+    final compositions = <(FieldSpec, EntitySpec)>[
+      for (final field in target.fields)
+        if (field.isComposition)
+          (field, byClass[field.reference!.targetClassName]!),
+    ];
+    final relationships = <ActiveRelationshipCollectionSpec>[
+      for (final relationship in graph.relationships)
+        if (relationship.cardinality == Cardinality.bounded &&
+            relationship.sourceEntity == target)
+          relationship,
+    ];
+    if (!aggregateTypes.contains(target.className)) continue;
+
+    final targetName = target.className;
+    final rootDraft = '${targetName}MutationDraft';
+    final aggregateDraft = '${targetName}AggregateDraft';
+    final targetIdType = target.idField.dartType;
+    final parts = <(String, String)>[
+      for (final (_, field) in members)
+        (
+          field.reference!.inverseName,
+          '${generatedInverseCreationTypeName(field)}Draft',
+        ),
+      for (final (field, component) in compositions)
+        (field.reference!.accessorName, '${component.className}AggregateDraft'),
+      for (final (field, component) in compositions)
+        (
+          '${field.reference!.accessorName}Lease',
+          'EntityLookupLease<${component.className}>?',
+        ),
+      for (final relationship in relationships)
+        (
+          relationship.relationship.ownerReference.reference!.inverseName,
+          '${relationship.linkEntity.className}MembershipDraft',
+        ),
+    ];
+    buffer
+      ..writeln(
+        'extension ${targetName}GeneratedAggregateEditing on $targetName {',
+      )
+      ..writeln('  Future<$aggregateDraft> beginAggregateEdit(')
+      ..writeln('    $entityGraphName entityGraph,')
+      ..writeln('  ) => $aggregateDraft.edit(entityGraph, this);')
+      ..writeln('}')
+      ..writeln()
+      ..writeln(
+        'final class $aggregateDraft '
+        'implements AggregateMutationDraft<$targetName> {',
+      )
+      ..writeln('  $aggregateDraft._(')
+      ..writeln('    this._entityGraph,')
+      ..writeln('    this.root,${parts.isEmpty ? '' : ' {'}');
+    for (final (_, field) in members) {
+      final collectionDraft = '${generatedInverseCreationTypeName(field)}Draft';
+      buffer.writeln(
+        '    required $collectionDraft ${field.reference!.inverseName},',
+      );
+    }
+    for (final (field, component) in compositions) {
+      buffer.writeln(
+        '    required ${component.className}AggregateDraft '
+        '${field.reference!.accessorName},',
+      );
+      buffer.writeln(
+        '    required EntityLookupLease<${component.className}>? '
+        '${field.reference!.accessorName}Lease,',
+      );
+    }
+    for (final relationship in relationships) {
+      final name =
+          relationship.relationship.ownerReference.reference!.inverseName;
+      buffer.writeln(
+        '    required ${relationship.linkEntity.className}MembershipDraft '
+        '$name,',
+      );
+    }
+    if (parts.isEmpty) {
+      buffer.writeln('  );');
+    } else {
+      buffer.writeln('  }) :');
+    }
+    for (var index = 0; index < parts.length; index += 1) {
+      final (name, _) = parts[index];
+      final suffix = index == parts.length - 1 ? ';' : ',';
+      buffer.writeln('       _$name = $name$suffix');
+    }
+    buffer
+      ..writeln()
+      ..writeln('  factory $aggregateDraft.create(')
+      ..writeln('    $entityGraphName entityGraph, {')
+      ..writeln('    $targetIdType? id,');
+    if (target.hasOrderedCapability) {
+      buffer.writeln('    OrderedPlacement placement = OrderedPlacement.last,');
+    }
+    buffer.writeln('  }) {');
+    for (final (field, component) in compositions) {
+      final name = field.reference!.accessorName;
+      buffer.writeln(
+        '    final $name = ${component.className}AggregateDraft.create('
+        'entityGraph);',
+      );
+    }
+    buffer
+      ..writeln('    final root = entityGraph.${target.setAccessor}')
+      ..writeln('        .beginCreate(')
+      ..writeln('          id: id,');
+    if (target.hasOrderedCapability) {
+      buffer.writeln('          placement: placement,');
+    }
+    buffer.writeln('        )${compositions.isEmpty ? ';' : ''}');
+    if (compositions.isNotEmpty) {
+      for (var index = 0; index < compositions.length; index += 1) {
+        final (field, _) = compositions[index];
+        final suffix = index == compositions.length - 1 ? ';' : '';
+        buffer.writeln(
+          '      ..${field.name} = ${field.reference!.accessorName}.root.id$suffix',
+        );
+      }
+    }
+    buffer
+      ..writeln('    return $aggregateDraft._(')
+      ..writeln('      entityGraph,')
+      ..writeln('      root,');
+    for (final (_, field) in members) {
+      final inverse = field.reference!.inverseName;
+      final collectionDraft = '${generatedInverseCreationTypeName(field)}Draft';
+      buffer.writeln(
+        '      $inverse: $collectionDraft.create(entityGraph, root.id),',
+      );
+    }
+    for (final (field, _) in compositions) {
+      final name = field.reference!.accessorName;
+      buffer
+        ..writeln('      $name: $name,')
+        ..writeln('      ${name}Lease: null,');
+    }
+    for (final relationship in relationships) {
+      final name =
+          relationship.relationship.ownerReference.reference!.inverseName;
+      buffer.writeln(
+        '      $name: ${relationship.linkEntity.className}MembershipDraft.'
+        'create(entityGraph, root.id),',
+      );
+    }
+    buffer
+      ..writeln('    );')
+      ..writeln('  }')
+      ..writeln()
+      ..writeln('  static Future<$aggregateDraft> edit(')
+      ..writeln('    $entityGraphName entityGraph,')
+      ..writeln('    $targetName entity,')
+      ..writeln('  ) async {');
+    for (final (field, component) in compositions) {
+      final name = field.reference!.accessorName;
+      if (component.cardinality == Cardinality.unbounded) {
+        buffer
+          ..writeln(
+            '    final ${name}Lease = await '
+            'entityGraph.${component.setAccessor}.loadById(entity.${field.name});',
+          )
+          ..writeln('    final ${name}Entity = ${name}Lease?.value;');
+      } else {
+        buffer
+          ..writeln('    const EntityLookupLease<${component.className}>? ')
+          ..writeln('        ${name}Lease = null;')
+          ..writeln('    final ${name}Entity = entity.$name;');
+      }
+      buffer
+        ..writeln('    if (${name}Entity == null) {')
+        ..writeln('      throw EntityNotFoundException(')
+        ..writeln("        entityType: '${component.className}',")
+        ..writeln('        entityId: entity.${field.name}.value,')
+        ..writeln('      );')
+        ..writeln('    }')
+        ..writeln(
+          '    final $name = await ${name}Entity.beginAggregateEdit('
+          'entityGraph);',
+        );
+    }
+    for (final (source, field) in members) {
+      final inverse = field.reference!.inverseName;
+      final collectionDraft = '${generatedInverseCreationTypeName(field)}Draft';
+      buffer
+        ..writeln('    final $inverse = await $collectionDraft.load(')
+        ..writeln('      entityGraph,')
+        ..writeln('      entity.id,');
+      if (source.hasArchivableCapability) {
+        buffer.writeln('      archives: ArchiveVisibility.include,');
+      }
+      buffer.writeln('    );');
+    }
+    for (final relationship in relationships) {
+      final name =
+          relationship.relationship.ownerReference.reference!.inverseName;
+      buffer.writeln(
+        '    final $name = await '
+        '${relationship.linkEntity.className}MembershipDraft.load('
+        'entityGraph, entity.id);',
+      );
+    }
+    buffer
+      ..writeln('    return $aggregateDraft._(')
+      ..writeln('      entityGraph,')
+      ..writeln('      entity.beginEdit(),');
+    for (final (_, field) in members) {
+      final inverse = field.reference!.inverseName;
+      buffer.writeln('      $inverse: $inverse,');
+    }
+    for (final (field, _) in compositions) {
+      final name = field.reference!.accessorName;
+      buffer
+        ..writeln('      $name: $name,')
+        ..writeln('      ${name}Lease: ${name}Lease,');
+    }
+    for (final relationship in relationships) {
+      final name =
+          relationship.relationship.ownerReference.reference!.inverseName;
+      buffer.writeln('      $name: $name,');
+    }
+    buffer
+      ..writeln('    );')
+      ..writeln('  }')
+      ..writeln()
+      ..writeln('  final $entityGraphName _entityGraph;')
+      ..writeln('  final $rootDraft root;');
+    for (final (_, field) in members) {
+      final inverse = field.reference!.inverseName;
+      final collectionDraft = '${generatedInverseCreationTypeName(field)}Draft';
+      buffer
+        ..writeln('  final $collectionDraft _$inverse;')
+        ..writeln('  $collectionDraft get $inverse => _$inverse;');
+    }
+    for (final (field, component) in compositions) {
+      final name = field.reference!.accessorName;
+      buffer
+        ..writeln('  final ${component.className}AggregateDraft _$name;')
+        ..writeln('  ${component.className}AggregateDraft get $name => _$name;')
+        ..writeln(
+          '  final EntityLookupLease<${component.className}>? '
+          '_${name}Lease;',
+        );
+    }
+    for (final relationship in relationships) {
+      final name =
+          relationship.relationship.ownerReference.reference!.inverseName;
+      final type = '${relationship.linkEntity.className}MembershipDraft';
+      buffer
+        ..writeln('  final $type _$name;')
+        ..writeln('  $type get $name => _$name;');
+    }
+    buffer
+      ..writeln('  bool _consumed = false;')
+      ..writeln('  @override bool get isCreating => root.isCreating;')
+      ..writeln('  @override $targetName? get entity => root.entity;')
+      ..writeln('  @override $targetIdType get id => root.id;')
+      ..writeln('  @override bool get isConsumed => _consumed;')
+      ..writeln()
+      ..writeln('  @override')
+      ..writeln('  void discard() => _consumeTree();')
+      ..writeln()
+      ..writeln('  @override')
+      ..writeln('  Future<$targetName> save({')
+      ..writeln('    FutureOr<void> Function($targetName root)? afterRoot,')
+      ..writeln('  }) async {')
+      ..writeln('    _ensureActive();')
+      ..writeln('    late $targetName result;')
+      ..writeln('    try {')
+      ..writeln('      await _entityGraph.transaction(() async {')
+      ..writeln('        result = await _saveRootTree();')
+      ..writeln('        await afterRoot?.call(result);')
+      ..writeln('        await _saveMemberTree();')
+      ..writeln('      });')
+      ..writeln('      return result;')
+      ..writeln('    } finally {')
+      ..writeln('      _consumeTree();')
+      ..writeln('    }')
+      ..writeln('  }')
+      ..writeln()
+      ..writeln('  Future<$targetName> _saveRootTree() async {');
+    for (final (field, _) in compositions) {
+      buffer.writeln(
+        '    await _${field.reference!.accessorName}._saveRootTree();',
+      );
+    }
+    buffer
+      ..writeln('    return root.save();')
+      ..writeln('  }')
+      ..writeln()
+      ..writeln('  Future<void> _saveMemberTree() async {');
+    for (final (_, field) in members) {
+      buffer.writeln('    await _${field.reference!.inverseName}.save();');
+    }
+    for (final relationship in relationships) {
+      buffer.writeln(
+        '    await _${relationship.relationship.ownerReference.reference!.inverseName}.save();',
+      );
+    }
+    for (final (field, _) in compositions) {
+      buffer.writeln(
+        '    await _${field.reference!.accessorName}._saveMemberTree();',
+      );
+    }
+    buffer
+      ..writeln('  }')
+      ..writeln()
+      ..writeln('  void _consumeTree() {')
+      ..writeln('    if (_consumed) return;')
+      ..writeln('    if (!root.isConsumed) root.discard();');
+    for (final (_, field) in members) {
+      final inverse = field.reference!.inverseName;
+      buffer.writeln('    if (!_$inverse.isConsumed) _$inverse.discard();');
+    }
+    for (final relationship in relationships) {
+      final name =
+          relationship.relationship.ownerReference.reference!.inverseName;
+      buffer.writeln('    if (!_$name.isConsumed) _$name.discard();');
+    }
+    for (final (field, _) in compositions) {
+      final name = field.reference!.accessorName;
+      buffer
+        ..writeln('    _$name._consumeTree();')
+        ..writeln('    _${name}Lease?.release();');
+    }
+    buffer
+      ..writeln('    _consumed = true;')
+      ..writeln('  }')
+      ..writeln()
+      ..writeln('  void _ensureActive() {')
+      ..writeln('    if (_consumed) {')
+      ..writeln('      throw EntityDraftStateException(')
+      ..writeln("        entityType: '$targetName',")
+      ..writeln('        entityId: root.id.value,')
+      ..writeln('        reason: EntityDraftFailureReason.consumed,')
+      ..writeln(
+        "        message: 'This aggregate mutation draft is already consumed.',",
+      )
+      ..writeln('      );')
+      ..writeln('    }')
+      ..writeln('  }')
+      ..writeln('}')
+      ..writeln();
+  }
+}
+
+Set<String> _aggregateTypeNames(EntityGraphSpec graph) {
+  final aggregateTypes = <String>{};
+  for (final source in graph.entities) {
+    for (final field in source.fields) {
+      final reference = field.reference;
+      if (reference?.aggregateMember == true) {
+        aggregateTypes.add(reference!.targetClassName);
+      }
+      if (field.isComposition) {
+        aggregateTypes
+          ..add(source.className)
+          ..add(reference!.targetClassName);
+      }
+    }
+  }
+  for (final relationship in graph.relationships) {
+    if (relationship.cardinality == Cardinality.bounded) {
+      aggregateTypes.add(relationship.sourceEntity.className);
+    }
+  }
+  return aggregateTypes;
+}
+
+/// Emits the exact, bounded child-draft surface for one aggregate member.
+///
+/// The reference declaration proves collection completeness. The generated
+/// draft keeps identities and ordering stable, binds the known parent ID on
+/// creation, and commits every child mutation in one graph transaction.
+void _emitAggregateCollectionDraft(
+  StringBuffer buffer, {
+  required EntitySpec source,
+  required FieldSpec field,
+  required String entityGraphName,
+  required bool childIsAggregate,
+}) {
+  final reference = field.reference!;
+  final parent = reference.targetClassName;
+  final child = source.className;
+  final childDraft = childIsAggregate
+      ? '${child}AggregateDraft'
+      : '${child}MutationDraft';
+  final collection = generatedInverseCreationTypeName(field);
+  final draft = '${collection}Draft';
+  final idType = source.idField.dartType;
+  final parentIdType = field.dartType.replaceAll('?', '');
+  final globallyBounded = source.cardinality == Cardinality.bounded;
+  final ordered = source.hasOrderedCapability;
+  final archivable = source.hasArchivableCapability;
+
+  buffer
+    ..writeln('extension $parent${child}AggregateCollection on $parent {')
+    ..writeln(
+      '  Future<$draft> begin${_upperCamel(reference.inverseName)}Draft(',
+    )
+    ..writeln('    $entityGraphName entityGraph,')
+    ..writeln(
+      '  ) => $draft.load(entityGraph, ${EntityConventions.idFieldName});',
+    )
+    ..writeln('}')
+    ..writeln()
+    ..writeln('final class $draft implements AggregateCollectionDraft {')
+    ..writeln('  $draft._(')
+    ..writeln('    this._entityGraph,')
+    ..writeln('    this._${field.name},')
+    ..writeln('    List<$childDraft> members,')
+    ..writeln('    this._lease,')
+    ..writeln('  ) : _initialIds = List.unmodifiable(')
+    ..writeln('         members')
+    ..writeln(
+      '             .where((member) => member.entity!.deletedAt == null)',
+    )
+    ..writeln('             .map((member) => member.id),')
+    ..writeln('       ),')
+    ..writeln('       _members = [')
+    ..writeln('         for (final member in members)')
+    ..writeln('           if (member.entity!.deletedAt == null) member,')
+    ..writeln('       ],')
+    ..writeln('       _inactive = [')
+    ..writeln('         for (final member in members)')
+    ..writeln('           if (member.entity!.deletedAt != null) member,')
+    ..writeln('       ];')
+    ..writeln()
+    ..writeln('  factory $draft.create(')
+    ..writeln('    $entityGraphName entityGraph,')
+    ..writeln('    $parentIdType ${field.name},')
+    ..writeln('  ) => $draft._(entityGraph, ${field.name}, const [], null);')
+    ..writeln()
+    ..writeln('  static Future<$draft> load(')
+    ..writeln('    $entityGraphName entityGraph,')
+    ..writeln('    $parentIdType ${field.name},${archivable ? ' {' : ''}');
+  if (archivable) {
+    buffer.writeln(
+      '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
+    );
+  }
+  buffer
+    ..writeln('  ${archivable ? '}' : ''}) async {')
+    ..writeln('    final lease = $collection(')
+    ..writeln('      entityGraph,')
+    ..writeln('      ${field.name},')
+    ..writeln('      tombstones: TombstoneVisibility.include,');
+  if (archivable) {
+    buffer.writeln('      archives: archives,');
+  }
+  buffer
+    ..writeln('    );')
+    ..writeln('    final entities = await lease.loadAll();');
+  if (childIsAggregate) {
+    buffer
+      ..writeln('    final members = await Future.wait([')
+      ..writeln(
+        '      for (final entity in entities) '
+        '$childDraft.edit(entityGraph, entity),',
+      )
+      ..writeln('    ]);');
+  } else {
+    buffer
+      ..writeln('    final members = [')
+      ..writeln('      for (final entity in entities) entity.beginEdit(),')
+      ..writeln('    ];');
+  }
+  buffer
+    ..writeln(
+      '    return $draft._(entityGraph, ${field.name}, members, lease);',
+    )
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  final $entityGraphName _entityGraph;')
+    ..writeln('  final $parentIdType _${field.name};')
+    ..writeln('  final EntityList<$child>? _lease;')
+    ..writeln('  final List<$idType> _initialIds;')
+    ..writeln('  final List<$childDraft> _members;')
+    ..writeln('  final List<$childDraft> _inactive;')
+    ..writeln('  final List<$childDraft> _removed = [];')
+    ..writeln('  final Set<$childDraft> _revived = {};')
+    ..write(
+      archivable ? '  final Map<$childDraft, bool> _archiveStates = {};\n' : '',
+    )
+    ..writeln('  bool _consumed = false;')
+    ..writeln()
+    ..writeln('  List<$childDraft> get members => List.unmodifiable(_members);')
+    ..writeln(
+      '  List<$childDraft> get availableMembers => '
+      'List.unmodifiable([..._members, ..._inactive]);',
+    )
+    ..writeln('  @override bool get isConsumed => _consumed;')
+    ..writeln()
+    ..writeln('  $childDraft add({$idType? id}) {')
+    ..writeln('    _ensureActive();')
+    ..writeln(
+      '    final member = ${childIsAggregate ? '$childDraft.create(_entityGraph, id: id)' : '_entityGraph.${source.setAccessor}.beginCreate(id: id)'}',
+    )
+    ..writeln(
+      '      ..${childIsAggregate ? 'root.' : ''}${field.name} = _${field.name};',
+    )
+    ..writeln('    _members.add(member);')
+    ..writeln('    return member;')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  void remove($childDraft member) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    if (!_members.remove(member)) {')
+    ..writeln(
+      "      throw ArgumentError.value(member, 'member', 'Not in this draft.');",
+    )
+    ..writeln('    }')
+    ..writeln('    if (member.entity == null) {')
+    ..writeln('      member.discard();')
+    ..writeln('    } else {')
+    ..writeln('      _removed.add(member);')
+    ..writeln('    }')
+    ..write(archivable ? '    _archiveStates.remove(member);\n' : '')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  void move(int from, int to) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    if (from == to) return;')
+    ..writeln('    final member = _members.removeAt(from);')
+    ..writeln('    _members.insert(to, member);')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  $childDraft activate($childDraft member) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    if (_members.contains(member)) return member;')
+    ..writeln('    if (!_inactive.contains(member)) {')
+    ..writeln(
+      "      throw ArgumentError.value(member, 'member', 'Not available in this draft.');",
+    )
+    ..writeln('    }')
+    ..writeln('    _revive(member);')
+    ..writeln('    _members.add(member);')
+    ..writeln('    return member;')
+    ..writeln('  }')
+    ..writeln();
+  if (archivable) {
+    buffer
+      ..writeln('  void setArchived($childDraft member, bool archived) {')
+      ..writeln('    _ensureActive();')
+      ..writeln('    if (!_members.contains(member)) {')
+      ..writeln(
+        "      throw ArgumentError.value(member, 'member', 'Not active in this draft.');",
+      )
+      ..writeln('    }')
+      ..writeln('    _archiveStates[member] = archived;')
+      ..writeln('  }')
+      ..writeln();
+  }
+  buffer
+    ..writeln('  void order(Iterable<$childDraft> members) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    final ordered = members.toList(growable: false);')
+    ..writeln('    if (ordered.toSet().length != ordered.length ||')
+    ..writeln('        ordered.length != _members.length ||')
+    ..writeln('        !ordered.toSet().containsAll(_members)) {')
+    ..writeln('      throw const EntityValidationException(')
+    ..writeln("        entityType: '$child',")
+    ..writeln("        field: 'order',")
+    ..writeln(
+      "        message: 'Aggregate order must contain every active member exactly once.',",
+    )
+    ..writeln('      );')
+    ..writeln('    }')
+    ..writeln('    _members')
+    ..writeln('      ..clear()')
+    ..writeln('      ..addAll(ordered);')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  void replaceByPosition<V>(')
+    ..writeln('    Iterable<V> values, {')
+    ..writeln('    required void Function($childDraft member, V value) write,')
+    ..writeln('  }) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    final requested = values.toList(growable: false);')
+    ..writeln('    while (_members.length > requested.length) {')
+    ..writeln('      remove(_members.last);')
+    ..writeln('    }')
+    ..writeln('    while (_members.length < requested.length) {')
+    ..writeln('      add();')
+    ..writeln('    }')
+    ..writeln('    for (final (index, value) in requested.indexed) {')
+    ..writeln('      write(_members[index], value);')
+    ..writeln('    }')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  void replaceById<V>(')
+    ..writeln('    Iterable<V> values, {')
+    ..writeln('    required $idType Function(V value) idOf,')
+    ..writeln('    required void Function($childDraft member, V value) write,')
+    ..writeln('  }) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    final requested = values.toList(growable: false);')
+    ..writeln(
+      '    final requestedIds = requested.map(idOf).toList(growable: false);',
+    )
+    ..writeln('    if (requestedIds.toSet().length != requestedIds.length) {')
+    ..writeln('      throw const EntityValidationException(')
+    ..writeln("        entityType: '$child',")
+    ..writeln("        field: 'id',")
+    ..writeln("        message: 'Aggregate member identities must be unique.',")
+    ..writeln('      );')
+    ..writeln('    }')
+    ..writeln('    final existing = <$idType, $childDraft>{')
+    ..writeln('      for (final member in _members) member.id: member,')
+    ..writeln('    };')
+    ..writeln('    final inactive = <$idType, $childDraft>{')
+    ..writeln('      for (final member in _inactive) member.id: member,')
+    ..writeln('    };')
+    ..writeln('    final ordered = <$childDraft>[];')
+    ..writeln('    for (var index = 0; index < requested.length; index += 1) {')
+    ..writeln('      final value = requested[index];')
+    ..writeln('      final id = requestedIds[index];')
+    ..writeln('      final member =')
+    ..writeln('          existing.remove(id) ??')
+    ..writeln('          _revive(inactive.remove(id)) ??')
+    ..writeln('          add(id: id);')
+    ..writeln('      write(member, value);')
+    ..writeln('      ordered.add(member);')
+    ..writeln('    }')
+    ..writeln('    for (final member in existing.values) {')
+    ..writeln('      remove(member);')
+    ..writeln('    }')
+    ..writeln('    _members')
+    ..writeln('      ..clear()')
+    ..writeln('      ..addAll(ordered);')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  void replaceByKey<V, K>(')
+    ..writeln('    Iterable<V> values, {')
+    ..writeln('    required K Function($childDraft member) memberKey,')
+    ..writeln('    required K Function(V value) valueKey,')
+    ..writeln('    required void Function($childDraft member, V value) write,')
+    ..writeln('  }) {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    final requested = values.toList(growable: false);')
+    ..writeln('    final available = <K, List<$childDraft>>{};')
+    ..writeln('    for (final member in [..._members, ..._inactive]) {')
+    ..writeln('      (available[memberKey(member)] ??= []).add(member);')
+    ..writeln('    }')
+    ..writeln('    final ordered = <$childDraft>[];')
+    ..writeln('    for (final value in requested) {')
+    ..writeln('      final matches = available[valueKey(value)];')
+    ..writeln('      final matched = matches == null || matches.isEmpty')
+    ..writeln('          ? null')
+    ..writeln('          : matches.removeAt(0);')
+    ..writeln('      final member = _revive(matched) ?? add();')
+    ..writeln('      write(member, value);')
+    ..writeln('      ordered.add(member);')
+    ..writeln('    }')
+    ..writeln('    for (final member in [..._members]) {')
+    ..writeln('      if (!ordered.contains(member)) remove(member);')
+    ..writeln('    }')
+    ..writeln('    _members')
+    ..writeln('      ..clear()')
+    ..writeln('      ..addAll(ordered);')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  $childDraft? _revive($childDraft? member) {')
+    ..writeln('    if (member == null) return null;')
+    ..writeln('    if (_inactive.remove(member)) _revived.add(member);')
+    ..writeln('    return member;')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  @override')
+    ..writeln('  void discard() {')
+    ..writeln('    if (_consumed) return;')
+    ..writeln(
+      '    for (final member in [..._members, ..._inactive, ..._removed]) {',
+    )
+    ..writeln('      if (!member.isConsumed) member.discard();')
+    ..writeln('    }')
+    ..writeln('    _lease?.dispose();')
+    ..writeln('    _consumed = true;')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  @override')
+    ..writeln('  Future<void> save() async {')
+    ..writeln('    _ensureActive();')
+    ..writeln('    await _entityGraph.transaction(() async {')
+    ..writeln('      for (final member in _members) {')
+    ..writeln('        if (_revived.contains(member)) {')
+    ..writeln('          await member.entity!.restore();')
+    ..writeln('        }')
+    ..writeln('        final saved = await member.save();');
+  if (archivable) {
+    buffer
+      ..writeln('        if (_archiveStates[member] case final archived?) {')
+      ..writeln(
+        '          archived ? await saved.archive() : await saved.unarchive();',
+      )
+      ..writeln('        }');
+  }
+  buffer
+    ..writeln('      }')
+    ..writeln('      for (final member in _removed) {')
+    ..writeln('        await member.entity!.remove();')
+    ..writeln('        member.discard();')
+    ..writeln('      }')
+    ..writeln('      for (final member in _inactive) {')
+    ..writeln('        member.discard();')
+    ..writeln('      }');
+  if (ordered) {
+    buffer
+      ..writeln(
+        '      final desired = _members.map((member) => member.id).toList();',
+      )
+      ..writeln('      if (desired.isNotEmpty) {');
+    if (globallyBounded) {
+      buffer.writeln(
+        '        await _entityGraph.${source.setAccessor}.reorder(desired);',
+      );
+    } else {
+      buffer
+        ..writeln(
+          '        final removedIds = _removed.map((member) => member.id).toSet();',
+        )
+        ..writeln('        final current = <${source.idField.dartType}>[')
+        ..writeln(
+          '          ..._initialIds.where((id) => !removedIds.contains(id)),',
+        )
+        ..writeln(
+          '          ...desired.where((id) => !_initialIds.contains(id)),',
+        )
+        ..writeln('        ];')
+        ..writeln(
+          '        for (var index = 0; index < desired.length; index += 1) {',
+        )
+        ..writeln('          final id = desired[index];')
+        ..writeln('          if (current[index] == id) continue;')
+        ..writeln('          final anchor = current[index];')
+        ..writeln(
+          '          await _entityGraph.${source.setAccessor}.moveBefore(id, anchor);',
+        )
+        ..writeln('          current.remove(id);')
+        ..writeln('          current.insert(index, id);')
+        ..writeln('        }');
+    }
+    buffer.writeln('      }');
+  }
+  buffer
+    ..writeln('    });')
+    ..writeln('    _lease?.dispose();')
+    ..writeln('    _consumed = true;')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln('  void _ensureActive() {')
+    ..writeln('    if (_consumed) {')
+    ..writeln('      throw const EntityDraftStateException(')
+    ..writeln("        entityType: '$parent',")
+    ..writeln("        entityId: '<aggregate>',")
+    ..writeln('        reason: EntityDraftFailureReason.consumed,')
+    ..writeln(
+      "        message: 'This aggregate collection draft is already consumed.',",
+    )
+    ..writeln('      );')
+    ..writeln('    }')
+    ..writeln('  }')
+    ..writeln('}')
+    ..writeln();
 }
 
 /// Emits an inverse collection that binds its source reference for creation.

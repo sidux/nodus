@@ -33,6 +33,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -44,6 +45,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -55,6 +57,7 @@
           "generated": false,
           "mutable": false,
           "reference": "TaskProject",
+          "inverseCardinality": "unbounded",
           "source": "entity declaration"
         },
         {
@@ -66,6 +69,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -77,6 +81,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -88,6 +93,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -99,6 +105,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -110,6 +117,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -121,6 +129,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -132,6 +141,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -143,6 +153,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -154,6 +165,7 @@
           "generated": true,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "generated convention or capability"
         },
         {
@@ -165,6 +177,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -176,6 +189,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         }
       ],
@@ -189,7 +203,9 @@
           ],
           "unique": false,
           "scope": "field",
-          "keyset": true
+          "keyset": true,
+          "activeOnly": false,
+          "exactLookup": false
         },
         {
           "fields": [
@@ -199,7 +215,9 @@
           ],
           "unique": false,
           "scope": "field",
-          "keyset": true
+          "keyset": true,
+          "activeOnly": false,
+          "exactLookup": false
         }
       ],
       "actions": [
@@ -259,6 +277,7 @@
         "set": "TaskSet",
         "setAccessor": "tasks",
         "list": "TaskList",
+        "boundedListConstructors": [],
         "draft": "TaskMutationDraft",
         "create": true
       }
@@ -290,6 +309,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -301,6 +321,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -312,6 +333,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -323,6 +345,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -334,6 +357,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -345,6 +369,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -356,6 +381,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -367,6 +393,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -378,6 +405,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -389,6 +417,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         }
       ],
@@ -400,7 +429,9 @@
           ],
           "unique": false,
           "scope": "field",
-          "keyset": false
+          "keyset": false,
+          "activeOnly": false,
+          "exactLookup": false
         },
         {
           "fields": [
@@ -408,7 +439,9 @@
           ],
           "unique": false,
           "scope": "field",
-          "keyset": false
+          "keyset": false,
+          "activeOnly": false,
+          "exactLookup": false
         },
         {
           "fields": [
@@ -416,7 +449,9 @@
           ],
           "unique": true,
           "scope": "field",
-          "keyset": false
+          "keyset": false,
+          "activeOnly": false,
+          "exactLookup": false
         }
       ],
       "actions": [],
@@ -424,6 +459,7 @@
         "set": "TaskActivitySet",
         "setAccessor": "taskActivities",
         "list": "TaskActivityList",
+        "boundedListConstructors": [],
         "draft": "TaskActivityMutationDraft",
         "create": false
       }
@@ -455,6 +491,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -466,6 +503,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -477,6 +515,7 @@
           "generated": false,
           "mutable": true,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -488,6 +527,7 @@
           "generated": true,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "generated convention or capability"
         },
         {
@@ -499,6 +539,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         },
         {
@@ -510,6 +551,7 @@
           "generated": false,
           "mutable": false,
           "reference": null,
+          "inverseCardinality": null,
           "source": "entity declaration"
         }
       ],
@@ -521,7 +563,9 @@
           ],
           "unique": false,
           "scope": "field",
-          "keyset": true
+          "keyset": true,
+          "activeOnly": false,
+          "exactLookup": false
         }
       ],
       "actions": [],
@@ -529,6 +573,7 @@
         "set": "TaskProjectSet",
         "setAccessor": "taskProjects",
         "list": "TaskProjectList",
+        "boundedListConstructors": [],
         "draft": "TaskProjectMutationDraft",
         "create": true
       }

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../annotations.dart';
 import 'model.dart';
 
 String emitEntityGraphExplanation(EntityGraphSpec graph) {
@@ -22,10 +23,10 @@ String emitEntityGraphExplanation(EntityGraphSpec graph) {
           'sync': {'mode': bindings[entity.className]!.mode.name, 'target': bindings[entity.className]!.target?.wireName},
           'capabilities': {'archivable': entity.hasArchivableCapability, 'ordered': entity.hasOrderedCapability, 'collaborative': entity.canCollaborate, 'activityTracked': graph.activityTrackings.any((tracking) => tracking.source.className == entity.className), 'component': entity.isComponent},
           'fields': [
-            for (final field in entity.fields) {'name': field.name, 'type': field.dartType, 'column': field.columnName, 'nullable': field.nullable, 'default': field.defaultValue?.toString(), 'generated': field.generatedOnly, 'mutable': entity.isPatchable(field), 'reference': field.reference?.targetClassName, 'source': field.generatedOnly ? 'generated convention or capability' : 'entity declaration'},
+            for (final field in entity.fields) {'name': field.name, 'type': field.dartType, 'column': field.columnName, 'nullable': field.nullable, 'default': field.defaultValue?.toString(), 'generated': field.generatedOnly, 'mutable': entity.isPatchable(field), 'reference': field.reference?.targetClassName, 'inverseCardinality': field.reference == null ? null : entity.inverseCardinalityFor(field).name, 'source': field.generatedOnly ? 'generated convention or capability' : 'entity declaration'},
           ],
           'indexes': [
-            for (final index in entity.compoundIndexes) {'fields': index.fields, 'unique': index.unique, 'scope': index.scope.name, 'keyset': index.keyset},
+            for (final index in entity.compoundIndexes) {'fields': index.fields, 'unique': index.unique, 'scope': index.scope.name, 'keyset': index.keyset, 'activeOnly': index.activeOnly, 'exactLookup': index.exactLookup},
           ],
           'actions': [
             for (final action in entity.actions) {
@@ -36,8 +37,37 @@ String emitEntityGraphExplanation(EntityGraphSpec graph) {
                 'fields': action.targetFields,
               },
           ],
-          'generatedApi': {'set': '${entity.className}Set', 'setAccessor': entity.setAccessor, 'list': '${entity.className}List', 'draft': '${entity.className}MutationDraft', 'create': entity.canCreatePublicly},
+          'generatedApi': {'set': '${entity.className}Set', 'setAccessor': entity.setAccessor, 'list': '${entity.className}List', 'boundedListConstructors': _boundedListConstructors(entity), 'draft': '${entity.className}MutationDraft', 'create': entity.canCreatePublicly},
         },
     ],
   })}\n';
 }
+
+List<String> _boundedListConstructors(EntitySpec entity) {
+  final constructors = <String>{};
+  for (final field in entity.fields) {
+    final reference = field.reference;
+    final accessor =
+        reference?.accessorName ??
+        (field.isParticipant ? _idFieldAccessor(field.name) : null);
+    if (accessor == null || reference == null) continue;
+    if (entity.inverseCardinalityFor(field) == Cardinality.bounded) {
+      constructors.add('for${_upperCamel(accessor)}');
+    }
+  }
+  if (entity.ownership == Ownership.separate &&
+      entity.ownerField.reference != null &&
+      entity.inverseCardinalityFor(entity.ownerField) == Cardinality.bounded) {
+    constructors
+      ..add('owned')
+      ..add('forOwner');
+  }
+  return constructors.toList(growable: false)..sort();
+}
+
+String _idFieldAccessor(String fieldName) => fieldName.endsWith('Id')
+    ? fieldName.substring(0, fieldName.length - 2)
+    : fieldName;
+
+String _upperCamel(String value) =>
+    value.isEmpty ? value : '${value[0].toUpperCase()}${value.substring(1)}';

@@ -211,6 +211,29 @@ L useEntityLookup<E, L extends EntityLookup<E>>(
   return lookup;
 }
 
+/// Acquires one generated existence selection and releases it with the widget.
+EntityExistence<E> useEntityExistence<E>(
+  EntityExistence<E> Function() acquire, {
+  List<Object?> keys = const [],
+}) {
+  final existence = useMemoized(acquire, keys);
+  useEffect(() => existence.dispose, [existence]);
+  _useCompleteEntityQuery(existence.query, loadAllPages: false);
+  return existence;
+}
+
+/// Acquires one generated ordered-first selection and releases it with the
+/// widget.
+EntityFirst<E> useEntityFirst<E>(
+  EntityFirst<E> Function() acquire, {
+  List<Object?> keys = const [],
+}) {
+  final first = useMemoized(acquire, keys);
+  useEffect(() => first.dispose, [first]);
+  _useCompleteEntityQuery(first.query, loadAllPages: false);
+  return first;
+}
+
 /// A query lease and its current state observed by a Flutter Hook.
 ///
 /// This removes the otherwise repetitive `Observer` wrapper while preserving
@@ -325,6 +348,60 @@ final class ObservedEntityLookup<E extends Object> {
   };
 }
 
+/// An observed yes/no existence selection without leaking list mechanics.
+final class ObservedEntityExistence<E> {
+  const ObservedEntityExistence(this.existence, this.state);
+
+  final EntityExistence<E> existence;
+  final EntityQueryState<E> state;
+
+  bool get value => existence.value;
+  bool get loading => state is EntityQueryInitialLoading<E>;
+  Object? get error => switch (state) {
+    EntityQueryFailure<E>(:final error) => error,
+    _ => null,
+  };
+
+  Future<void> refresh() => existence.query.refresh();
+}
+
+/// Acquires and observes an existence query for the widget lifetime.
+ObservedEntityExistence<E> useObservedEntityExistence<E>(
+  EntityExistence<E> Function() acquire, {
+  List<Object?> keys = const [],
+}) {
+  final existence = useEntityExistence(acquire, keys: keys);
+  final observed = _useObservedEntityQuery(existence.query);
+  return ObservedEntityExistence(existence, observed.state);
+}
+
+/// An observed deterministic first entity without a uniqueness claim.
+final class ObservedEntityFirst<E> {
+  const ObservedEntityFirst(this.first, this.state);
+
+  final EntityFirst<E> first;
+  final EntityQueryState<E> state;
+
+  E? get value => first.value;
+  bool get loading => state is EntityQueryInitialLoading<E>;
+  Object? get error => switch (state) {
+    EntityQueryFailure<E>(:final error) => error,
+    _ => null,
+  };
+
+  Future<void> refresh() => first.query.refresh();
+}
+
+/// Acquires and observes an explicitly ordered first-row query.
+ObservedEntityFirst<E> useObservedEntityFirst<E>(
+  EntityFirst<E> Function() acquire, {
+  List<Object?> keys = const [],
+}) {
+  final first = useEntityFirst(acquire, keys: keys);
+  final observed = _useObservedEntityQuery(first.query);
+  return ObservedEntityFirst(first, observed.state);
+}
+
 /// Acquires and observes one exact zero-or-one lookup for the widget lifetime.
 ObservedEntityLookup<E> useObservedEntityLookup<E extends Object>(
   EntityLookup<E> Function() acquire, {
@@ -333,6 +410,33 @@ ObservedEntityLookup<E> useObservedEntityLookup<E extends Object>(
   final lookup = useEntityLookup<E, EntityLookup<E>>(acquire, keys: keys);
   final observed = _useObservedEntityQuery(lookup.query);
   return ObservedEntityLookup(lookup, observed.state);
+}
+
+/// Observes one synchronous generated bounded-set lookup.
+///
+/// The generated computed index remains the only state owner. This hook owns
+/// only the MobX reaction that rebuilds its widget when exact membership or the
+/// selected stable identity changes.
+E? useObservedEntityValue<E extends Object>(
+  E? Function() read, {
+  List<Object?> keys = const [],
+}) {
+  final currentRead = useMemoized(() => read, keys);
+  final rebuild = useState(0);
+  useEffect(() {
+    var initial = true;
+    final disposeReaction = autorun((_) {
+      currentRead();
+      if (initial) {
+        initial = false;
+      } else {
+        rebuild.value++;
+      }
+    });
+    return disposeReaction.call;
+  }, [currentRead]);
+  rebuild.value;
+  return currentRead();
 }
 
 ObservedEntityQuery<E> _useObservedEntityQuery<E>(LocalEntityQuery<E> query) {

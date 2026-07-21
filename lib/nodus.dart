@@ -413,11 +413,39 @@ final class EntityDraftField<T> {
 
 /// Common lifecycle exposed by generated create/edit drafts.
 abstract interface class EntityMutationDraft<E> {
+  bool get isCreating;
+
+  E? get entity;
+
+  LocalId<E> get id;
+
   bool get isConsumed;
 
   Future<E> save();
 
   void discard();
+}
+
+/// One generated, typed child-collection mutation inside an aggregate.
+///
+/// Collection drafts load only a domain-declared bounded inverse, preserve
+/// existing child identities, and own create/edit/remove/order persistence in
+/// one entity-graph transaction. They intentionally expose the generated child
+/// drafts so application code can keep genuine business mapping and guards
+/// without rebuilding infrastructure mechanics.
+abstract interface class AggregateCollectionDraft {
+  bool get isConsumed;
+
+  Future<void> save();
+
+  void discard();
+}
+
+/// One generated root draft spanning an entity and its declared aggregate
+/// mutation parts.
+abstract interface class AggregateMutationDraft<E>
+    implements EntityMutationDraft<E> {
+  EntityMutationDraft<E> get root;
 }
 
 /// Completion of one local entity mutation batch.
@@ -2113,6 +2141,62 @@ class EntityLookup<E> {
     }
     return items.isEmpty ? null : items.single;
   }
+}
+
+/// Lease-owning existence selection backed by one indexed query row.
+///
+/// Unlike [EntityLookup], this contract intentionally permits many matching
+/// rows and answers only whether at least one exists.
+class EntityExistence<E> {
+  EntityExistence(this.query) {
+    if (query.spec.pageSize != 1) {
+      throw ArgumentError.value(
+        query.spec.pageSize,
+        'query.spec.pageSize',
+        'An entity existence query must request exactly one row.',
+      );
+    }
+  }
+
+  final LocalEntityQuery<E> query;
+
+  Computed<EntityQueryState<E>> get state => query.state;
+  bool get value => query.items.isNotEmpty;
+
+  Future<bool> load() async => (await query.loadFirstPage()).isNotEmpty;
+
+  Future<R> use<R>(FutureOr<R> Function(bool exists) action) =>
+      query.useFirstPage((items) => action(items.isNotEmpty));
+
+  void dispose() => query.dispose();
+}
+
+/// Lease-owning first row of one explicitly ordered selection.
+///
+/// This is not a uniqueness claim. The generated set requires a typed order so
+/// choosing the first row is deterministic domain query intent.
+class EntityFirst<E> {
+  EntityFirst(this.query) {
+    if (query.spec.pageSize != 1 || query.spec.orderBy == null) {
+      throw ArgumentError.value(
+        query.spec,
+        'query.spec',
+        'An entity-first query requires one row and an explicit order.',
+      );
+    }
+  }
+
+  final LocalEntityQuery<E> query;
+
+  Computed<EntityQueryState<E>> get state => query.state;
+  E? get value => query.items.firstOrNull;
+
+  Future<E?> load() async => (await query.loadFirstPage()).firstOrNull;
+
+  Future<R> use<R>(FutureOr<R> Function(E? value) action) =>
+      query.useFirstPage((items) => action(items.firstOrNull));
+
+  void dispose() => query.dispose();
 }
 
 /// Domain-named live selection backed by one generated query lease.
@@ -4055,12 +4139,14 @@ final class PullResult {
 enum RelationshipCardinalityResolution {
   unboundedByDefault,
   boundedByLinkEntity,
+  boundedByOwnerInverse,
   boundedByTargetEntity;
 
   Cardinality get cardinality => switch (this) {
     RelationshipCardinalityResolution.unboundedByDefault =>
       Cardinality.unbounded,
     RelationshipCardinalityResolution.boundedByLinkEntity ||
+    RelationshipCardinalityResolution.boundedByOwnerInverse ||
     RelationshipCardinalityResolution.boundedByTargetEntity =>
       Cardinality.bounded,
   };
@@ -4730,6 +4816,8 @@ void _validateRelationshipDefinitions({
     }
     final expectedResolution = link.cardinality == Cardinality.bounded
         ? RelationshipCardinalityResolution.boundedByLinkEntity
+        : sourceField.reference?.inverseCardinality == Cardinality.bounded
+        ? RelationshipCardinalityResolution.boundedByOwnerInverse
         : target.cardinality == Cardinality.bounded
         ? RelationshipCardinalityResolution.boundedByTargetEntity
         : RelationshipCardinalityResolution.unboundedByDefault;

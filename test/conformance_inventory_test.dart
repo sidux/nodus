@@ -87,6 +87,7 @@ final class _InventoryFixture {
               'set': 'TaskSet',
               'setAccessor': 'tasks',
               'list': 'TaskList',
+              'boundedListConstructors': ['forProject'],
               'draft': 'TaskMutationDraft',
               'create': true,
             },
@@ -120,6 +121,11 @@ extension TaskOperations on FixtureEntityGraph {
       await task.remove();
     }
   });
+
+  Future<int> bounded() {
+    final selection = TaskList.forProject(this, projectId);
+    return selection.useAll((tasks) => tasks.length);
+  }
 
   Stream<Object?> legacy(Object query) => query.itemSnapshots;
 

@@ -437,6 +437,9 @@ final class Account {}
           'nodus|lib/note.entity.g.dart': decodedMatches(
             allOf([
               contains('NoteMutationDraft beginEdit()'),
+              contains('NoteMutationDraft beginCreate({LocalId<Note>? id})'),
+              contains('LocalId<Note> get id => _entity?.id ?? _createId!'),
+              contains('id: _createId'),
               contains('final String? _baseTitle;'),
               isNot(contains('_baseImportedSource')),
               contains('entity.importedSource,'),
@@ -1672,10 +1675,17 @@ final class HabitTarget extends NextTarget {
   final String? note;
 }
 
-@Entity(cardinality: Cardinality.bounded)
+@Entity(
+  cardinality: Cardinality.bounded,
+  indexes: [
+    CompoundIndex([#taskId, #key], unique: true, exactLookup: true),
+  ],
+)
 abstract class NextAction implements OwnedBy<NextAction, Account> {
   @PersistedVariant()
   abstract final NextTarget target;
+
+  abstract final String key;
 }
 
 final class Account {}
@@ -1699,6 +1709,10 @@ final class Habit {}
             ),
             contains('(target as TaskTarget).taskId'),
             contains('(target as HabitTarget).habitId'),
+            contains('NextAction? byTaskIdAndKey('),
+            contains('entity.target is TaskTarget'),
+            contains('(entity.target as TaskTarget).taskId'),
+            isNot(contains('entity.taskId')),
             contains(
               'CHECK (CASE WHEN habit_id IS NOT NULL THEN 1 ELSE 0 END + '
               'CASE WHEN task_id IS NOT NULL THEN 1 ELSE 0 END = 1)',
@@ -2693,6 +2707,20 @@ abstract class Document implements OwnedBy<Document, Account>, Component {
               contains(
                 'DROP TRIGGER IF EXISTS tasks_document_id_composition_insert',
               ),
+              contains(
+                'final class DocumentAggregateDraft implements '
+                'AggregateMutationDraft<Document>',
+              ),
+              contains(
+                'final class TaskAggregateDraft implements '
+                'AggregateMutationDraft<Task>',
+              ),
+              contains('final document = DocumentAggregateDraft.create('),
+              contains('..documentId = document.root.id'),
+              contains('..summaryId = summary.root.id'),
+              contains('await _document._saveRootTree()'),
+              contains('await _summary._saveRootTree()'),
+              contains('return root.save()'),
             ]),
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
@@ -5007,6 +5035,7 @@ import 'package:nodus/nodus.dart';
         #status,
         [AssignmentStatus.pending, AssignmentStatus.accepted],
       ),
+      exactLookup: true,
     ),
   ],
 )
@@ -5034,6 +5063,9 @@ final class Account {}
             contains('EntityUniqueConstraintCondition('),
             contains("fieldName: 'status'"),
             contains("values: const ['pending', 'accepted']"),
+            contains('Assignment? byTaskKey('),
+            contains('entity.status == AssignmentStatus.pending'),
+            contains('entity.status == AssignmentStatus.accepted'),
           ]),
         ),
       },
@@ -5059,6 +5091,67 @@ final class Account {}
             ),
             contains("where status in ('pending', 'accepted')"),
           ]),
+        ),
+      },
+    );
+  });
+
+  test('generates an active-only exact lookup contract', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(
+  indexes: [
+    CompoundIndex(
+      [#parentId],
+      unique: true,
+      activeOnly: true,
+      exactLookup: true,
+    ),
+  ],
+)
+abstract class Selection
+    implements OwnedBy<Selection, Account>, SoftDeletable {
+  abstract final String parentId;
+}
+
+final class Account {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/note.entity.g.dart': decodedMatches(
+          allOf([contains('WHERE deleted_at IS NULL')]),
+        ),
+      },
+    );
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          allOf([
+            contains('final class SelectionLookup'),
+            contains('SelectionLookup.byParent('),
+            contains('tombstones: TombstoneVisibility.exclude'),
+            isNot(
+              contains(
+                'SelectionLookup.byParent(\n    NodusEntityGraph entityGraph,\n    String parentId, {\n    TombstoneVisibility tombstones',
+              ),
+            ),
+          ]),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          contains('where deleted_at is null'),
         ),
       },
     );
@@ -5109,6 +5202,42 @@ final class Account {}
       expect(result.succeeded, isFalse, reason: condition);
       expect(result.errors.join('\n'), contains(expected), reason: condition);
     }
+  });
+
+  test('rejects a conditional active-only index contract', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(
+  indexes: [
+    CompoundIndex(
+      [#taskKey],
+      unique: true,
+      activeOnly: true,
+      condition: IndexCondition.oneOf(#status, [AssignmentStatus.pending]),
+    ),
+  ],
+)
+abstract class Assignment
+    implements OwnedBy<Assignment, Account>, SoftDeletable {
+  final String taskKey = '';
+  final AssignmentStatus status = AssignmentStatus.pending;
+}
+
+enum AssignmentStatus { pending, accepted }
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+    );
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains('cannot combine activeOnly with condition'),
+    );
   });
 
   test('rejects invalid compound index declarations', () async {
@@ -5528,6 +5657,220 @@ abstract class Child implements OwnedBy<Child, Account>, Ordered {
   });
 
   test(
+    'generates exact typed drafts for bounded aggregate-member inverses',
+    () async {
+      const parentSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Parent implements OwnedBy<Parent, Account> {}
+''';
+      const childSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/parent.dart';
+
+@Entity(orderScope: [#parentId])
+abstract class Child
+    implements OwnedBy<Child, Account>, SoftDeletable, Ordered {
+  @OwnerReference()
+  @Reference(
+    inverse: 'children',
+    onDelete: ReferenceDeleteAction.cascade,
+    inverseCardinality: Cardinality.bounded,
+    aggregateMember: true,
+  )
+  abstract final LocalId<Parent> parentId;
+
+  abstract final String label;
+}
+''';
+      final sources = _sources(childSource, fileName: 'child.dart')
+        ..['nodus|lib/account.dart'] = 'final class Account {}'
+        ..['nodus|lib/parent.dart'] = parentSource;
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('extension ParentChildAggregateCollection on Parent'),
+              contains('Future<ParentChildrenDraft> beginChildrenDraft('),
+              contains(
+                'final class ParentChildrenDraft implements '
+                'AggregateCollectionDraft',
+              ),
+              contains('final lease = ParentChildren('),
+              contains('final entities = await lease.loadAll();'),
+              contains('factory ParentChildrenDraft.create('),
+              contains('.beginCreate(id: id)'),
+              contains('..parentId = _parentId'),
+              contains('void replaceByPosition<V>('),
+              contains('void replaceById<V>('),
+              contains('void replaceByKey<V, K>('),
+              contains('List<ChildMutationDraft> get availableMembers'),
+              contains('ChildMutationDraft activate('),
+              contains('void order(Iterable<ChildMutationDraft> members)'),
+              contains('tombstones: TombstoneVisibility.include'),
+              contains('await member.entity!.restore()'),
+              contains('await _entityGraph.transaction(() async {'),
+              contains('await _entityGraph.childs.moveBefore(id, anchor)'),
+              contains('final class ParentAggregateDraft implements'),
+              contains('AggregateMutationDraft<Parent>'),
+              contains('factory ParentAggregateDraft.create('),
+              contains('Future<ParentAggregateDraft> beginAggregateEdit('),
+              contains('result = await _saveRootTree()'),
+              contains('await _children.save()'),
+            ]),
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+        },
+      );
+    },
+  );
+
+  test(
+    'recursively composes nested aggregate members and lifecycle intent',
+    () async {
+      const parentSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Parent implements OwnedBy<Parent, Account> {}
+''';
+      const childSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/parent.dart';
+
+@Entity()
+abstract class Child
+    implements OwnedBy<Child, Account>, SoftDeletable, Archivable {
+  @OwnerReference()
+  @Reference(
+    inverse: 'children',
+    onDelete: ReferenceDeleteAction.cascade,
+    inverseCardinality: Cardinality.bounded,
+    aggregateMember: true,
+  )
+  abstract final LocalId<Parent> parentId;
+
+  abstract final String label;
+}
+''';
+      const grandchildSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/child.dart';
+
+@Entity()
+abstract class Grandchild
+    implements OwnedBy<Grandchild, Account>, SoftDeletable {
+  @OwnerReference()
+  @Reference(
+    inverse: 'grandchildren',
+    onDelete: ReferenceDeleteAction.cascade,
+    inverseCardinality: Cardinality.bounded,
+    aggregateMember: true,
+  )
+  abstract final LocalId<Child> childId;
+
+  abstract final String value;
+}
+''';
+      final sources = _sources(childSource, fileName: 'child.dart')
+        ..['nodus|lib/account.dart'] = 'final class Account {}'
+        ..['nodus|lib/parent.dart'] = parentSource
+        ..['nodus|lib/grandchild.dart'] = grandchildSource;
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('final List<ChildAggregateDraft> _members;'),
+              contains('ChildAggregateDraft.edit(entityGraph, entity),'),
+              contains('ChildAggregateDraft.create(_entityGraph, id: id)'),
+              contains('..root.parentId = _parentId;'),
+              contains(
+                'void setArchived('
+                'ChildAggregateDraft member, bool archived)',
+              ),
+              contains(
+                'archived ? await saved.archive() : await saved.unarchive();',
+              ),
+              contains('final class ChildAggregateDraft implements'),
+              contains('required ChildGrandchildrenDraft grandchildren'),
+            ]),
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+        },
+      );
+    },
+  );
+
+  test('rejects an unbounded aggregate-member inverse', () async {
+    const parentSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Parent implements OwnedBy<Parent, Account> {}
+''';
+    const childSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/parent.dart';
+
+@Entity()
+abstract class Child implements OwnedBy<Child, Account>, SoftDeletable {
+  @OwnerReference()
+  @Reference(
+    inverse: 'children',
+    onDelete: ReferenceDeleteAction.cascade,
+    aggregateMember: true,
+  )
+  abstract final LocalId<Parent> parentId;
+
+  abstract final String label;
+}
+''';
+    final sources = _sources(childSource, fileName: 'child.dart')
+      ..['nodus|lib/account.dart'] = 'final class Account {}'
+      ..['nodus|lib/parent.dart'] = parentSource;
+
+    final result = await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+    );
+
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains(
+        'is an aggregate member but its `Parent.children` inverse is unbounded',
+      ),
+    );
+  });
+
+  test(
     'generates one durable mutation handle for conventional active relationships',
     () async {
       const noteSource = r'''
@@ -5649,6 +5992,23 @@ abstract class NoteTagLink
               contains('NoteTagLinkFields.active.equals(true)'),
               contains('NoteTagLinkFields.deletedAt.isNull'),
               contains('orderBy ?? entityGraph.noteTagLinks.canonicalOrder'),
+              contains(
+                'final class NoteTagLinkMembershipDraft implements '
+                'AggregateCollectionDraft',
+              ),
+              contains(
+                'Future<NoteTagLinkMembershipDraft> beginTagLinksDraft(',
+              ),
+              contains('final EntityList<NoteTagLink>? _lease;'),
+              contains('final links = await lease.loadAll();'),
+              contains('_lease?.dispose();'),
+              contains('void replace(Iterable<LocalId<TaskTag>> targetIds)'),
+              contains(
+                'final class NoteAggregateDraft implements '
+                'AggregateMutationDraft<Note>',
+              ),
+              contains('NoteTagLinkMembershipDraft get tagLinks'),
+              contains('await _tagLinks.save()'),
             ]),
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
@@ -5670,26 +6030,24 @@ abstract class NoteTagLink
     },
   );
 
-  test(
-    'omits exact replacement for an unbounded active relationship',
-    () async {
-      const noteSource = r'''
+  test('omits exact replacement for an unbounded active relationship', () async {
+    const noteSource = r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account> {}
 ''';
-      final sources = _sources(noteSource, fileName: 'note.dart')
-        ..['nodus|lib/account.dart'] = 'final class Account {}'
-        ..['nodus|lib/task.dart'] = r'''
+    final sources = _sources(noteSource, fileName: 'note.dart')
+      ..['nodus|lib/account.dart'] = 'final class Account {}'
+      ..['nodus|lib/task.dart'] = r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
 
 @Entity()
 abstract class Task implements OwnedBy<Task, Account> {}
 '''
-        ..['nodus|lib/note_task_link.dart'] = r'''
+      ..['nodus|lib/note_task_link.dart'] = r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
 import 'package:nodus/note.dart';
@@ -5715,31 +6073,59 @@ abstract class NoteTaskLink
 }
 ''';
 
-      await testBuilder(
-        inferredEntityGraphBuilder(BuilderOptions.empty),
-        sources,
-        rootPackage: 'nodus',
-        outputs: {
-          'nodus|lib/nodus.g.dart': decodedMatches(anything),
-          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
-            anything,
-          ),
-          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
-          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
-            allOf([
-              contains('final class NoteTaskLinkRelationship'),
-              contains('RelationshipCardinalityResolution.unboundedByDefault'),
-              contains('Future<void> moveBefore('),
-              contains('Future<void> moveAfter('),
-              isNot(contains('Future<void> replace(')),
-              isNot(contains('await _entityGraph.noteTaskLinks.reorder(')),
-            ]),
-          ),
-          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
-        },
-      );
-    },
-  );
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          allOf([
+            contains('final class NoteTaskLinkRelationship'),
+            contains('RelationshipCardinalityResolution.unboundedByDefault'),
+            contains('Future<void> moveBefore('),
+            contains('Future<void> moveAfter('),
+            isNot(contains('Future<void> replace(')),
+            isNot(contains('await _entityGraph.noteTaskLinks.reorder(')),
+            isNot(contains('NoteTaskLinkMembershipDraft')),
+          ]),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+      },
+    );
+
+    final boundedInverseSources = Map<String, String>.of(sources);
+    boundedInverseSources['nodus|lib/note_task_link.dart'] =
+        boundedInverseSources['nodus|lib/note_task_link.dart']!.replaceFirst(
+          "inverse: 'taskLinks',",
+          "inverse: 'taskLinks',\n    inverseCardinality: Cardinality.bounded,",
+        );
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      boundedInverseSources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          allOf([
+            contains('RelationshipCardinalityResolution.boundedByOwnerInverse'),
+            contains('Future<void> replace('),
+            contains('NoteTaskLinkMembershipDraft'),
+            contains('NoteTaskLinkMembershipDraft get taskLinks'),
+          ]),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+      },
+    );
+  });
 
   test('generates the complete Archivable capability surface', () async {
     const source = r'''
@@ -6077,6 +6463,10 @@ abstract class Note
             contains(
               'Future<Note> createFirst({LocalId<Note>? id, required String title})',
             ),
+            contains('Future<Note> createAt({'),
+            contains('OrderedPlacement placement = OrderedPlacement.last'),
+            contains('NoteMutationDraft beginCreate({'),
+            contains('placement: _createPlacement!'),
             contains(
               'placement: first ? OrderedPlacement.first : '
               'OrderedPlacement.last',
