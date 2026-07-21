@@ -6,26 +6,51 @@
 
 ![Nodus: one graph becomes every application layer](assets/nodus-overview.png)
 
-**A local-first application compiler for Flutter.**
+**One domain model. A complete local-first Flutter system.**
 
-Nodus turns typed Dart entity declarations into the infrastructure that usually
-has to be repeated by hand: observable domain objects, local persistence,
-queries, migrations, durable synchronization, backend schema and security, and
-production-backed test utilities.
+Flutter made it possible to share one interface across platforms. Nodus takes
+the same idea beneath the widget tree: declare the product model once, then
+compile it into reactive entities, local storage, offline mutations, durable
+synchronization, backend schema and security, typed queries, and real test
+infrastructure.
 
-The goal is simple: describe the product model once, keep it usable as ordinary
-Dart, and generate the mechanical layers from the same resolved meaning.
+Instead of rebuilding the same feature as a model, store, table, repository,
+DTO, serializer, sync service, database policy, and mock, you write the domain
+meaning. Nodus generates the mechanics and keeps every layer aligned.
+
+This is not an ORM with extra code generation. An ORM begins at storage; a
+state library begins at the UI; a sync library begins at transport. Nodus begins
+with the domain and derives the typed boundaries between all three.
 
 > **Project status:** Nodus is at `0.1.0` and is not yet published on pub.dev.
 > It is ready for evaluation and new applications, but the API may change before
 > `1.0.0`.
 
-## Why Nodus
+## From shared UI to shared product meaning
 
-A Flutter application can share its UI across platforms while still duplicating
-the same model in many places: state objects, SQLite tables, API payloads,
-validation, synchronization code, backend policies, and test doubles. Those
-copies inevitably drift.
+A Flutter codebase can share every widget and still implement the same product
+rules repeatedly in state objects, SQLite tables, API payloads, validation,
+synchronization code, backend policies, and test doubles. Every copy adds work;
+every disagreement becomes a bug.
+
+With Nodus, the application-facing API stays small and domain-shaped:
+
+```dart
+final task = await entityGraph.tasks.create(title: 'Ship Nodus');
+
+final edit = task.beginEdit()..title = 'Publish Nodus';
+await edit.save();
+await task.complete();
+
+final openTasks = TaskList.all(
+  entityGraph,
+  where: TaskFields.status.equals(TaskStatus.todo),
+);
+```
+
+That code is simultaneously the reactive UI boundary, the local-durability
+boundary, and the entry point to retryable synchronization. There is no feature
+repository, DTO copy, command bus, or state mirror behind it.
 
 Nodus replaces that duplication with a compiler-owned entity graph:
 
@@ -44,10 +69,26 @@ flowchart LR
   C --> T["Test harness<br/>real runtime · in-memory backend"]
 ```
 
-Your entity declarations remain the public domain types. Nodus resolves them
-once into an `EntityGraphDefinition`; entity, storage, and synchronization
-emitters consume that definition instead of independently interpreting
-annotations.
+Your declarations remain the public domain types. Nodus resolves their fields,
+relationships, constraints, capabilities, ownership, and authority once into
+an `EntityGraphDefinition`. Every downstream emitter consumes those resolved
+facts instead of independently guessing what the model means.
+
+### What changes in practice
+
+| Ordinary Flutter architecture | With Nodus |
+| --- | --- |
+| A model change must be repeated across state, storage, transport, backend, and tests. | Change the entity declaration and regenerate every affected boundary. |
+| Offline support is added later as cache, queue, retry, and conflict plumbing. | Every generated mutation is local-first and records durable remote intent atomically. |
+| Client validation and database rules can silently diverge. | The same constraints become Dart validation, Drift checks, transport validation, and PostgreSQL checks. |
+| UI state mirrors persisted records through providers, repositories, or view models. | Widgets observe the same stable entity identities that persistence and sync update. |
+| Backend tables, RLS, push APIs, and client codecs evolve separately. | Supabase schema, security, protocol, and client codecs come from the same graph. |
+| Tests mock architectural seams that production may wire differently. | A generated harness runs the production graph with in-memory persistence and synchronization. |
+
+The payoff compounds with every entity and relationship: new features inherit
+the same durability, observation, authorization, query, synchronization, and
+testing model without rebuilding the architecture around them. Nodus moves
+Flutter development up a level—from sharing UI code to sharing product meaning.
 
 ## Quick start
 
@@ -157,11 +198,17 @@ The reference app shows the complete
 Generated files are reviewable artifacts, but they are never edited manually.
 Change the declaration, then regenerate.
 
+The important result is not simply “more generated code.” A field, constraint,
+relationship, or authority change has one source and one explanation trail. The
+compiler either carries it consistently through every boundary or fails with an
+actionable diagnostic before the application ships.
+
 ## Local-first by construction
 
-Drift is the durable local source of truth. Flutter reads stable entity
-identities immediately; synchronization is retryable background work against a
-named remote target.
+Local-first behavior is not a cache bolted on after the application is built.
+It is the generated mutation contract. Drift is the durable local source of
+truth, Flutter reads stable identities immediately, and synchronization is
+retryable background work against a named remote target.
 
 ```mermaid
 flowchart LR
@@ -194,6 +241,9 @@ push/pull protocol to another remote system. It does not choose entities or
 redefine their schema. Other backend adapters are not bundled yet.
 
 ## Core capabilities
+
+These are one coherent generated system rather than independent libraries the
+application must reconcile:
 
 - Stable entity identities with field-level observation and optimistic updates.
 - Typed creation and edit drafts with validation, rollback, and field-level
