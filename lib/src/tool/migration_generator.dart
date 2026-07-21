@@ -236,7 +236,10 @@ final class NodusGenerator {
     await _run('dart', ['run', 'build_runner', 'build']);
     await _verifySchemaLock(options);
     if (!options.deferSupabaseComposition) synchronizeSupabaseSchema();
-    if (options.resetDriftBaseline) resetDriftBaseline();
+    if (options.resetDriftBaseline) {
+      resetDriftBaseline();
+      await _run('dart', ['run', 'build_runner', 'build']);
+    }
     await _run('dart', ['run', 'drift_dev', 'make-migrations']);
     normalizeDriftStepsAccessors();
     normalizeDriftTestSchemaAccessors();
@@ -664,6 +667,11 @@ final class NodusGenerator {
     ];
     for (final file in generated) {
       file.deleteSync();
+    }
+    final lockFile = File(_path('nodus.lock'));
+    if (lockFile.existsSync()) {
+      final lock = NodusLock.decode(lockFile.readAsStringSync());
+      writeIfChanged(lockFile, lock.copyWith(schemaVersion: 1).encode());
     }
     _report('Reset ${generated.length} generated Drift baseline artifacts.');
   }
