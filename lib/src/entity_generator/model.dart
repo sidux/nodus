@@ -21,6 +21,7 @@ final class EntitySpec {
     required this.security,
     required this.commands,
     this.actions = const [],
+    this.persistedVariants = const [],
     this.exclusiveFieldGroups = const [],
     this.compoundIndexes = const [],
     this.typeImports = const [],
@@ -51,6 +52,7 @@ final class EntitySpec {
   final SecuritySpec security;
   final List<CommandSpec> commands;
   final List<ActionSpec> actions;
+  final List<PersistedVariantSpec> persistedVariants;
   final List<ExclusiveFieldGroupSpec> exclusiveFieldGroups;
   final List<CompoundIndexSpec> compoundIndexes;
   final List<String> typeImports;
@@ -115,6 +117,14 @@ final class EntitySpec {
 
   bool isCommandOnly(FieldSpec field) =>
       commands.any((command) => command.targetField == field.name);
+
+  PersistedVariantSpec? persistedVariantForField(FieldSpec field) =>
+      persistedVariants
+          .where((variant) => variant.storageFields.contains(field))
+          .firstOrNull;
+
+  bool isPersistedVariantField(FieldSpec field) =>
+      persistedVariantForField(field) != null;
 
   bool isActionTarget(FieldSpec field) =>
       actions.any((action) => action.targetFields.contains(field.name));
@@ -184,8 +194,12 @@ final class EntitySpec {
     return fields.where(isDraftEditable).toList(growable: false);
   }
 
+  List<PersistedVariantSpec> get draftEditableVariants =>
+      canUpdate && !isActivityEntry ? persistedVariants : const [];
+
   bool isDraftEditable(FieldSpec field) {
     if (!canUpdate || isActivityEntry) return false;
+    if (isPersistedVariantField(field)) return false;
     if (field.draftEditableOverride == false) return false;
     return !field.isId &&
         !field.generatedOnly &&
@@ -234,7 +248,9 @@ final class EntitySpec {
   bool isPatchable(FieldSpec field) =>
       !isCommandOnly(field) &&
       !isOrderScopeTransferTarget(field) &&
-      (isDraftEditable(field) || isActionTarget(field));
+      (isDraftEditable(field) ||
+          (canUpdate && isPersistedVariantField(field)) ||
+          isActionTarget(field));
 
   /// The canonical ordering scope derived once for every generated adapter.
   ///
@@ -443,6 +459,17 @@ final class EntitySpec {
       ...relationshipAccessOperations,
       ...?relationshipOperations[className],
     }.toList()..sort((left, right) => left.index.compareTo(right.index));
+    final resolvedFields = [
+      for (final field in fields)
+        if (field.reference case final reference?)
+          field.withReference(
+            reference.withTargetRelationshipAccess(
+              relationshipOperations[reference.targetClassName] ?? const {},
+            ),
+          )
+        else
+          field,
+    ];
     return EntitySpec(
       className: className,
       packageName: packageName,
@@ -457,20 +484,31 @@ final class EntitySpec {
       activitySubjectClassName: activitySubjectClassName,
       activityActorClassName: activityActorClassName,
       isComponent: isComponent,
-      fields: [
-        for (final field in fields)
-          if (field.reference case final reference?)
-            field.withReference(
-              reference.withTargetRelationshipAccess(
-                relationshipOperations[reference.targetClassName] ?? const {},
-              ),
-            )
-          else
-            field,
-      ],
+      fields: resolvedFields,
       security: security,
       commands: commands,
       actions: actions,
+      persistedVariants: [
+        for (final variant in persistedVariants)
+          PersistedVariantSpec(
+            name: variant.name,
+            dartType: variant.dartType,
+            nullable: variant.nullable,
+            cases: [
+              for (final variantCase in variant.cases)
+                PersistedVariantCaseSpec(
+                  className: variantCase.className,
+                  fields: [
+                    for (final field in variantCase.fields)
+                      resolvedFields.singleWhere(
+                        (candidate) => candidate.name == field.name,
+                      ),
+                  ],
+                  constructorParameters: variantCase.constructorParameters,
+                ),
+            ],
+          ),
+      ],
       exclusiveFieldGroups: exclusiveFieldGroups,
       compoundIndexes: compoundIndexes,
       typeImports: typeImports,
@@ -661,6 +699,62 @@ final class ExclusiveFieldGroupSpec {
 
   final List<String> fields;
   final bool allowNone;
+}
+
+final class PersistedVariantSpec {
+  const PersistedVariantSpec({
+    required this.name,
+    required this.dartType,
+    required this.nullable,
+    required this.cases,
+  });
+
+  final String name;
+  final String dartType;
+  final bool nullable;
+  final List<PersistedVariantCaseSpec> cases;
+
+  String get capitalizedName => '${name[0].toUpperCase()}${name.substring(1)}';
+
+  List<FieldSpec> get storageFields => [
+    for (final variantCase in cases) ...variantCase.fields,
+  ];
+
+  PersistedVariantCaseSpec? get emptyCase =>
+      cases.where((variantCase) => variantCase.fields.isEmpty).firstOrNull;
+}
+
+final class PersistedVariantCaseSpec {
+  const PersistedVariantCaseSpec({
+    required this.className,
+    required this.fields,
+    required this.constructorParameters,
+  });
+
+  final String className;
+  final List<FieldSpec> fields;
+  final List<PersistedVariantParameterSpec> constructorParameters;
+
+  FieldSpec? get presenceField => fields.where((field) {
+    final parameter = constructorParameters
+        .where((candidate) => candidate.fieldName == field.name)
+        .firstOrNull;
+    return parameter != null &&
+        parameter.required &&
+        field.persistedVariantComponentNullable == false;
+  }).firstOrNull;
+}
+
+final class PersistedVariantParameterSpec {
+  const PersistedVariantParameterSpec({
+    required this.fieldName,
+    required this.named,
+    required this.required,
+  });
+
+  final String fieldName;
+  final bool named;
+  final bool required;
 }
 
 final class CompoundIndexSpec {
@@ -1245,6 +1339,8 @@ final class FieldSpec {
     this.scalarValue,
     this.generatedOnly = false,
     this.draftEditableOverride,
+    this.persistedVariantName,
+    this.persistedVariantComponentNullable,
   });
 
   final String name;
@@ -1295,6 +1391,8 @@ final class FieldSpec {
   final ScalarValueSpec? scalarValue;
   final bool generatedOnly;
   final bool? draftEditableOverride;
+  final String? persistedVariantName;
+  final bool? persistedVariantComponentNullable;
 
   FieldSpec withReference(ReferenceSpec value) => FieldSpec(
     name: name,
@@ -1342,6 +1440,8 @@ final class FieldSpec {
     scalarValue: scalarValue,
     generatedOnly: generatedOnly,
     draftEditableOverride: draftEditableOverride,
+    persistedVariantName: persistedVariantName,
+    persistedVariantComponentNullable: persistedVariantComponentNullable,
   );
 
   bool get isServerManaged => authority == FieldAuthority.server;

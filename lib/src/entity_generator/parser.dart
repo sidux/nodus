@@ -13,6 +13,10 @@ import 'model.dart';
 
 const _entityChecker = TypeChecker.typeNamed(Entity, inPackage: 'nodus');
 const _persistedChecker = TypeChecker.typeNamed(Persisted, inPackage: 'nodus');
+const _persistedVariantChecker = TypeChecker.typeNamed(
+  PersistedVariant,
+  inPackage: 'nodus',
+);
 const _indexedChecker = TypeChecker.typeNamed(Indexed, inPackage: 'nodus');
 const _referenceChecker = TypeChecker.typeNamed(Reference, inPackage: 'nodus');
 const _compositionChecker = TypeChecker.typeNamed(
@@ -178,6 +182,7 @@ Future<EntitySpec?> parseEntityAsset(
     label: 'Entity.syncTarget',
   );
   final fields = <FieldSpec>[];
+  final persistedVariants = <PersistedVariantSpec>[];
   final typeImports = <String>{};
   List<FieldSpec> infrastructureTail = const [];
   final arguments = ownedByType.typeArguments;
@@ -357,6 +362,32 @@ Future<EntitySpec?> parseEntityAsset(
         '`${field.name}` is supplied by OwnedBy and must not be repeated.',
         element: field,
       );
+    }
+    if (_persistedVariantChecker.hasAnnotationOf(field)) {
+      final variant = _parsePersistedVariant(
+        field,
+        classElement,
+        ownerType: ownerType,
+        ownership: ownership,
+        ownerSetAccessor: setAccessor ?? lowerCamelCase(tableName),
+        typeImports: typeImports,
+      );
+      final repeatedStorageField = variant.storageFields
+          .where(
+            (candidate) =>
+                fields.any((existing) => existing.name == candidate.name),
+          )
+          .firstOrNull;
+      if (repeatedStorageField != null) {
+        throw InvalidGenerationSourceError(
+          'Persisted variant `${field.name}` produces duplicate storage field '
+          '`${repeatedStorageField.name}`.',
+          element: field,
+        );
+      }
+      fields.addAll(variant.storageFields);
+      persistedVariants.add(variant);
+      continue;
     }
     final persistedAnnotation = _persistedChecker.firstAnnotationOf(field);
     final referenceObject = _referenceChecker.firstAnnotationOf(field);
@@ -687,11 +718,21 @@ Future<EntitySpec?> parseEntityAsset(
   fields.addAll(infrastructureTail);
 
   _validateEntity(classElement, fields, ownership: ownership);
-  final exclusiveFieldGroups = _parseExclusiveFieldGroups(
-    annotation,
-    classElement,
-    fields,
-  );
+  final exclusiveFieldGroups = <ExclusiveFieldGroupSpec>[
+    ..._parseExclusiveFieldGroups(annotation, classElement, fields),
+    for (final variant in persistedVariants)
+      if (variant.cases
+              .where((variantCase) => variantCase.presenceField != null)
+              .length >=
+          2)
+        ExclusiveFieldGroupSpec(
+          fields: [
+            for (final variantCase in variant.cases)
+              if (variantCase.presenceField case final presence?) presence.name,
+          ],
+          allowNone: variant.nullable || variant.emptyCase != null,
+        ),
+  ];
   _validateOwnerReferenceGroups(classElement, fields, exclusiveFieldGroups);
   _validateAccessReferenceGroups(classElement, fields, exclusiveFieldGroups);
   _validateAccessTargetFields(classElement, fields, exclusiveFieldGroups);
@@ -1113,6 +1154,7 @@ Future<EntitySpec?> parseEntityAsset(
     security: security,
     commands: commands,
     actions: actions,
+    persistedVariants: persistedVariants,
     exclusiveFieldGroups: exclusiveFieldGroups,
     compoundIndexes: compoundIndexes,
     typeImports: typeImports.toList()..sort(),
@@ -2199,6 +2241,427 @@ Object _indexConditionValue(
   );
 }
 
+PersistedVariantSpec _parsePersistedVariant(
+  FieldElement field,
+  ClassElement entityElement, {
+  required DartType ownerType,
+  required Ownership ownership,
+  required String ownerSetAccessor,
+  required Set<String> typeImports,
+}) {
+  if (_persistedChecker.hasAnnotationOf(field) ||
+      _referenceChecker.hasAnnotationOf(field) ||
+      _compositionChecker.hasAnnotationOf(field) ||
+      _indexedChecker.hasAnnotationOf(field) ||
+      _accessParticipantChecker.hasAnnotationOf(field) ||
+      _accessReferenceChecker.hasAnnotationOf(field) ||
+      _accessTargetChecker.hasAnnotationOf(field) ||
+      _ownerReferenceChecker.hasAnnotationOf(field)) {
+    throw InvalidGenerationSourceError(
+      '@PersistedVariant owns persistence metadata for `${field.name}`. Put '
+      'scalar, index, and relationship annotations on each variant component.',
+      element: field,
+    );
+  }
+  final declaredType = field.type;
+  final baseType = declaredType is InterfaceType ? declaredType : null;
+  final baseElement = baseType?.element;
+  if (baseElement is! ClassElement || !baseElement.isSealed) {
+    throw InvalidGenerationSourceError(
+      '@PersistedVariant `${field.name}` must have a sealed class type.',
+      element: field,
+    );
+  }
+  _collectTypeImports(declaredType, typeImports);
+  final caseElements =
+      baseElement.library.classes
+          .where((candidate) => candidate.supertype?.element == baseElement)
+          .toList(growable: false)
+        ..sort((left, right) => left.name!.compareTo(right.name!));
+  if (caseElements.length < 2) {
+    throw InvalidGenerationSourceError(
+      '@PersistedVariant `${field.name}` requires at least two direct final '
+      'sealed subtypes.',
+      element: field,
+    );
+  }
+
+  final usedFieldNames = <String>{};
+  final cases = <PersistedVariantCaseSpec>[];
+  var emptyCases = 0;
+  for (final caseElement in caseElements) {
+    if (!caseElement.isFinal || caseElement.isPrivate) {
+      throw InvalidGenerationSourceError(
+        'Persisted variant `${caseElement.name}` must be a public final class.',
+        element: caseElement,
+      );
+    }
+    final constructors = caseElement.constructors
+        .where(
+          (constructor) =>
+              constructor.name == null ||
+              constructor.name!.isEmpty ||
+              constructor.name == 'new' ||
+              constructor.name == caseElement.name,
+        )
+        .toList(growable: false);
+    if (constructors.length != 1 || constructors.single.isFactory) {
+      throw InvalidGenerationSourceError(
+        'Persisted variant `${caseElement.name}` must expose exactly one '
+        'unnamed generative constructor.',
+        element: caseElement,
+      );
+    }
+    final constructor = constructors.single;
+    final componentElements = caseElement.fields
+        .where(
+          (component) =>
+              !component.isStatic &&
+              !component.isOriginGetterSetter &&
+              !_transientChecker.hasAnnotationOf(component),
+        )
+        .toList(growable: false);
+    if (componentElements.isEmpty) emptyCases += 1;
+    if (componentElements.any(
+      (component) => component.isPrivate || !component.isFinal,
+    )) {
+      throw InvalidGenerationSourceError(
+        'Persisted variant components must be public final fields.',
+        element: caseElement,
+      );
+    }
+    final componentsByName = {
+      for (final component in componentElements) component.name!: component,
+    };
+    final parameters = <PersistedVariantParameterSpec>[];
+    for (final parameter in constructor.formalParameters) {
+      final component = componentsByName[parameter.name];
+      if (component == null) {
+        throw InvalidGenerationSourceError(
+          'Constructor parameter `${parameter.name}` on '
+          '`${caseElement.name}` must initialize a public final component of '
+          'the same name.',
+          element: parameter,
+        );
+      }
+      parameters.add(
+        PersistedVariantParameterSpec(
+          fieldName: parameter.name!,
+          named: parameter.isNamed,
+          required: parameter.isRequired,
+        ),
+      );
+    }
+    if (parameters.length != componentElements.length ||
+        parameters.map((parameter) => parameter.fieldName).toSet().length !=
+            componentElements.length) {
+      throw InvalidGenerationSourceError(
+        'The unnamed `${caseElement.name}` constructor must initialize every '
+        'persisted component exactly once.',
+        element: constructor,
+      );
+    }
+    final optionalNonNullable = parameters.where((parameter) {
+      final component = componentsByName[parameter.fieldName]!;
+      return !parameter.required &&
+          component.type.nullabilitySuffix != NullabilitySuffix.question;
+    }).firstOrNull;
+    if (optionalNonNullable != null) {
+      throw InvalidGenerationSourceError(
+        'Optional persisted variant component '
+        '`${optionalNonNullable.fieldName}` must be nullable. Nodus always '
+        'reconstructs the complete native storage value explicitly.',
+        element: constructor,
+      );
+    }
+    if (componentElements.isNotEmpty &&
+        !parameters.any(
+          (parameter) =>
+              parameter.required &&
+              componentsByName[parameter.fieldName]!.type.nullabilitySuffix !=
+                  NullabilitySuffix.question,
+        )) {
+      throw InvalidGenerationSourceError(
+        'Persisted variant `${caseElement.name}` needs at least one required '
+        'component so its active storage case is unambiguous.',
+        element: constructor,
+      );
+    }
+
+    final componentSpecs = <FieldSpec>[];
+    for (final component in componentElements) {
+      if (!usedFieldNames.add(component.name!)) {
+        throw InvalidGenerationSourceError(
+          'Persisted variant component `${component.name}` is repeated. '
+          'Component names must be unique across variants because they derive '
+          'native column and protocol names.',
+          element: component,
+        );
+      }
+      componentSpecs.add(
+        _parsePersistedVariantComponent(
+          component,
+          entityElement,
+          variantName: field.name!,
+          variantNullable:
+              declaredType.nullabilitySuffix == NullabilitySuffix.question,
+          ownerType: ownerType,
+          ownership: ownership,
+          ownerSetAccessor: ownerSetAccessor,
+          typeImports: typeImports,
+        ),
+      );
+    }
+    final unsafeSetNullComponent = componentSpecs.where((component) {
+      return component.reference?.onDelete == ReferenceDeleteAction.setNull &&
+          component.persistedVariantComponentNullable == false &&
+          componentSpecs.length > 1;
+    }).firstOrNull;
+    if (unsafeSetNullComponent != null) {
+      throw InvalidGenerationSourceError(
+        'ReferenceDeleteAction.setNull on non-null persisted variant component '
+        '`${unsafeSetNullComponent.name}` requires a nullable logical variant '
+        'with a single-component case. Otherwise deleting the reference would '
+        'leave sibling columns without an active case.',
+        element: caseElement,
+      );
+    }
+    cases.add(
+      PersistedVariantCaseSpec(
+        className: caseElement.name!,
+        fields: componentSpecs,
+        constructorParameters: parameters,
+      ),
+    );
+  }
+  if (emptyCases > 1 ||
+      (emptyCases == 1 &&
+          declaredType.nullabilitySuffix == NullabilitySuffix.question)) {
+    throw InvalidGenerationSourceError(
+      'A persisted variant may have one empty case only when the entity field '
+      'is non-nullable; otherwise empty columns cannot distinguish that case '
+      'from no value.',
+      element: field,
+    );
+  }
+  return PersistedVariantSpec(
+    name: field.name!,
+    dartType: declaredType.getDisplayString(),
+    nullable: declaredType.nullabilitySuffix == NullabilitySuffix.question,
+    cases: cases,
+  );
+}
+
+FieldSpec _parsePersistedVariantComponent(
+  FieldElement field,
+  ClassElement entityElement, {
+  required String variantName,
+  required bool variantNullable,
+  required DartType ownerType,
+  required Ownership ownership,
+  required String ownerSetAccessor,
+  required Set<String> typeImports,
+}) {
+  if (_persistedVariantChecker.hasAnnotationOf(field) ||
+      _compositionChecker.hasAnnotationOf(field) ||
+      _accessParticipantChecker.hasAnnotationOf(field)) {
+    throw InvalidGenerationSourceError(
+      'Persisted variant components support scalar/index/reference/access '
+      'metadata, but cannot nest variants, compositions, or participants.',
+      element: field,
+    );
+  }
+  final persistedObject = _persistedChecker.firstAnnotationOf(field);
+  final persisted = persistedObject == null
+      ? null
+      : ConstantReader(persistedObject);
+  if (persisted?.peek('defaultValue')?.isNull == false ||
+      persisted?.peek('editable')?.isNull == false) {
+    throw InvalidGenerationSourceError(
+      'Persisted variant component defaults and editability belong to the '
+      'sealed value, not an inactive physical column.',
+      element: field,
+    );
+  }
+  final referenceObject = _referenceChecker.firstAnnotationOf(field);
+  final indexedObject = _indexedChecker.firstAnnotationOf(field);
+  final indexed = indexedObject == null ? null : ConstantReader(indexedObject);
+  final accessReferenceObject = _accessReferenceChecker.firstAnnotationOf(
+    field,
+  );
+  final accessTargetObject = _accessTargetChecker.firstAnnotationOf(field);
+  final ownerReferenceObject = _ownerReferenceChecker.firstAnnotationOf(field);
+  final ownerReferenceReader = ownerReferenceObject == null
+      ? null
+      : ConstantReader(ownerReferenceObject).peek('targetField');
+  final ownerReferenceTargetField =
+      ownerReferenceReader == null || ownerReferenceReader.isNull
+      ? null
+      : ownerReferenceReader.objectValue.toSymbolValue();
+  final reference = referenceObject == null
+      ? null
+      : _parseReference(
+          field,
+          entityElement,
+          ConstantReader(referenceObject),
+          ownerSetAccessor: ownerSetAccessor,
+          ownershipTargetField: ownerReferenceTargetField,
+          composition: false,
+          nullableStorage: variantNullable,
+        );
+  final accessTargetReader = accessTargetObject == null
+      ? null
+      : ConstantReader(accessTargetObject).peek('targetField');
+  final accessTargetField =
+      accessTargetReader == null || accessTargetReader.isNull
+      ? null
+      : accessTargetReader.objectValue.toSymbolValue();
+  final accessTarget = accessTargetObject == null
+      ? null
+      : _resolveAccessTarget(
+          field,
+          entityElement,
+          reference: reference,
+          targetField: accessTargetField,
+        );
+  if (accessReferenceObject != null) {
+    _validateAccessReferenceField(field, reference: reference);
+  }
+  if (ownerReferenceObject != null) {
+    _validateOwnerReferenceField(
+      field,
+      reference: reference,
+      ownerType: ownerType,
+      ownership: ownership,
+    );
+  }
+  final accessTargetOperations = accessTargetObject == null
+      ? const <RlsOperation>[]
+      : _parseAccessTargetOperations(
+          field,
+          ConstantReader(accessTargetObject),
+          reference: accessTarget!.reference,
+        );
+  final accessTargetStates = accessTargetObject == null
+      ? const _AccessTargetStates()
+      : _parseAccessTargetStates(ConstantReader(accessTargetObject), field);
+
+  final componentType = field.type;
+  if (_isDartCoreList(componentType)) {
+    throw InvalidGenerationSourceError(
+      'Persisted variant components must be native atomic scalars or typed '
+      'references, not collections.',
+      element: field,
+    );
+  }
+  final enumElement = componentType.element is EnumElement
+      ? componentType.element as EnumElement
+      : null;
+  final enumValues = enumElement == null
+      ? const <String>[]
+      : enumElement.fields
+            .where((candidate) => candidate.isEnumConstant)
+            .map((candidate) => candidate.name!)
+            .toList(growable: false);
+  final scalarValue = enumElement == null
+      ? _parseScalarValue(componentType, field)
+      : null;
+  _collectTypeImports(componentType, typeImports);
+  final componentDartType = componentType.getDisplayString();
+  final storageDartType = componentDartType.endsWith('?')
+      ? componentDartType
+      : '$componentDartType?';
+  final sqlType = enumElement == null
+      ? scalarValue?.sqlType ?? _inferSqlType(componentDartType)
+      : SqlType.text;
+  final columnName = persisted?.peek('column')?.isNull ?? true
+      ? snakeCase(field.name!)
+      : persisted!.read('column').stringValue;
+  _validateSqlIdentifier(columnName, field, label: 'column');
+  final transitions = _parseAllowedTransitions(persisted, field, enumElement);
+  return FieldSpec(
+    name: field.name!,
+    columnName: columnName,
+    dartType: storageDartType,
+    sqlType: sqlType,
+    nullable: true,
+    isFinal: true,
+    defaultValue: null,
+    conflict: persisted == null
+        ? ConflictStrategy.serverWins
+        : _readEnum(persisted.read('conflict'), ConflictStrategy.values),
+    authority: persisted == null
+        ? FieldAuthority.client
+        : _readEnum(persisted.read('authority'), FieldAuthority.values),
+    minLength: persisted?.peek('minLength')?.isNull ?? true
+        ? null
+        : persisted!.read('minLength').intValue,
+    maxLength: persisted?.peek('maxLength')?.isNull ?? true
+        ? null
+        : persisted!.read('maxLength').intValue,
+    allowWhitespace: persisted?.peek('allowWhitespace')?.boolValue ?? false,
+    minValue: persisted?.peek('minValue')?.isNull ?? true
+        ? null
+        : persisted!.read('minValue').intValue,
+    maxValue: persisted?.peek('maxValue')?.isNull ?? true
+        ? null
+        : persisted!.read('maxValue').intValue,
+    allowedValues: persisted == null
+        ? const []
+        : persisted
+              .read('allowedValues')
+              .listValue
+              .map((value) => value.toStringValue()!)
+              .toList(growable: false),
+    greaterThan: persisted?.peek('greaterThan')?.isNull ?? true
+        ? null
+        : persisted!.read('greaterThan').objectValue.toSymbolValue(),
+    greaterThanOrEqual: persisted?.peek('greaterThanOrEqual')?.isNull ?? true
+        ? null
+        : persisted!.read('greaterThanOrEqual').objectValue.toSymbolValue(),
+    requires: persisted?.peek('requires')?.isNull ?? true
+        ? null
+        : persisted!.read('requires').objectValue.toSymbolValue(),
+    notEqualTo: persisted?.peek('notEqualTo')?.isNull ?? true
+        ? null
+        : persisted!.read('notEqualTo').objectValue.toSymbolValue(),
+    indexed:
+        indexed != null ||
+        reference != null ||
+        accessReferenceObject != null ||
+        accessTargetObject != null ||
+        ownerReferenceObject != null,
+    unique: indexed?.read('unique').boolValue ?? false,
+    indexScope: indexed == null
+        ? IndexScope.field
+        : _readEnum(indexed.read('scope'), IndexScope.values),
+    enumValues: enumValues,
+    enumTypeImport: enumElement?.library.uri.toString(),
+    scalarValue: scalarValue,
+    reference: reference,
+    sinceProtocolVersion: persisted?.read('sinceProtocolVersion').intValue ?? 1,
+    renamedFrom: persisted?.peek('renamedFrom')?.isNull ?? true
+        ? null
+        : persisted!.read('renamedFrom').stringValue,
+    isAccessReference: accessReferenceObject != null,
+    isAccessTarget: accessTargetObject != null,
+    accessTargetOperations: accessTargetOperations,
+    accessTargetClassName: accessTarget?.reference.targetClassName,
+    accessTargetInputImport: accessTarget?.reference.targetInputImport,
+    accessTargetTableName: accessTarget?.reference.targetTableName,
+    accessTargetThroughColumnName: accessTarget?.throughColumnName,
+    accessTargetActiveStates: accessTargetStates.values,
+    accessTargetActiveStateEnumType: accessTargetStates.enumType,
+    accessTargetActiveStateEnumImport: accessTargetStates.enumImport,
+    isOwnerReference: ownerReferenceObject != null,
+    transitions: transitions,
+    updatePrincipals: _parseFieldUpdatePrincipals(persisted, field),
+    persistedVariantName: variantName,
+    persistedVariantComponentNullable:
+        componentType.nullabilitySuffix == NullabilitySuffix.question,
+  );
+}
+
 List<ExclusiveFieldGroupSpec> _parseExclusiveFieldGroups(
   ConstantReader annotation,
   ClassElement element,
@@ -2682,6 +3145,7 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
       final generatesCreationRelationship =
           entity.activeRelationship == null &&
           entity.canCreate &&
+          field.persistedVariantName == null &&
           entity.createParameters.contains(field);
       if (generatesCreationRelationship) {
         final typeName = generatedInverseCreationTypeName(field);
@@ -2845,6 +3309,7 @@ ReferenceSpec _parseReference(
   required String ownerSetAccessor,
   String? ownershipTargetField,
   bool composition = false,
+  bool? nullableStorage,
 }) {
   final annotationName = composition ? '@Composition' : '@Reference';
   final fieldName = field.name!;
@@ -2987,7 +3452,9 @@ ReferenceSpec _parseReference(
   final onDelete = composition
       ? ReferenceDeleteAction.restrict
       : _readEnum(annotation.read('onDelete'), ReferenceDeleteAction.values);
-  final nullable = field.type.nullabilitySuffix == NullabilitySuffix.question;
+  final nullable =
+      nullableStorage ??
+      field.type.nullabilitySuffix == NullabilitySuffix.question;
   if (onDelete == ReferenceDeleteAction.setNull && !nullable) {
     throw InvalidGenerationSourceError(
       'ReferenceDeleteAction.setNull requires a nullable LocalId field.',

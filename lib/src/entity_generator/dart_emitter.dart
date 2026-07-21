@@ -9,9 +9,14 @@ String _fieldMember(FieldSpec field) =>
 String _fieldReference(EntitySpec spec, FieldSpec field) =>
     '${spec.className}Fields.${_fieldMember(field)}';
 
-String _entityRead(FieldSpec field, {String entity = 'entity'}) =>
-    field.generatedOnly
+String _entityRead(
+  EntitySpec spec,
+  FieldSpec field, {
+  String entity = 'entity',
+}) => field.generatedOnly
     ? '$entity.generatedAccess.generatedOrderAccess!.generatedOrderRank'
+    : field.persistedVariantName != null
+    ? '($entity.generatedAccess as ${spec.className}Record).${field.name}'
     : '$entity.${field.name}';
 
 String _recordRead(FieldSpec field) =>
@@ -167,7 +172,7 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
         'Persisted$fieldClass<${spec.className}, $valueType>(',
       )
       ..writeln('    persistence: _${field.name}Persistence,')
-      ..writeln('    read: (entity) => ${_entityRead(field)},')
+      ..writeln('    read: (entity) => ${_entityRead(spec, field)},')
       ..writeln('    encode: (value) => ${_encodeExpression(field, 'value')},')
       ..writeln(
         '    decode: (source) => ${_decodeExpression(field, 'source')},',
@@ -303,6 +308,24 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
           return 'CASE WHEN $column IS NOT NULL THEN 1 ELSE 0 END';
         }).join(' + ')} ${group.allowNone ? '<=' : '='} 1)',
       ),
+    for (final variant in spec.persistedVariants)
+      for (final variantCase in variant.cases)
+        if (variantCase.presenceField case final presence?)
+          for (final parameter in variantCase.constructorParameters)
+            if (parameter.fieldName != presence.name)
+              _dartLiteral(
+                variantCase.fields
+                            .singleWhere(
+                              (field) => field.name == parameter.fieldName,
+                            )
+                            .persistedVariantComponentNullable ==
+                        false
+                    ? 'CHECK (${presence.columnName} IS NULL OR '
+                          '${variantCase.fields.singleWhere((field) => field.name == parameter.fieldName).columnName} IS NOT NULL)'
+                    : 'CHECK ('
+                          '${variantCase.fields.singleWhere((field) => field.name == parameter.fieldName).columnName} IS NULL OR '
+                          '${presence.columnName} IS NOT NULL)',
+              ),
     for (final index in spec.compoundIndexes.where(
       (candidate) => candidate.unordered,
     ))
@@ -678,9 +701,10 @@ void _emitRelationships(StringBuffer buffer, EntitySpec spec) {
   );
   for (final field in relationships) {
     final reference = field.reference!;
+    final fieldRead = _entityRead(spec, field, entity: 'this');
     final idExpression = field.nullable
-        ? '${field.name}?.value'
-        : '${field.name}.value';
+        ? '$fieldRead?.value'
+        : '$fieldRead.value';
     buffer
       ..writeln(
         '  ${reference.targetClassName}? get ${reference.accessorName} {',
@@ -702,6 +726,7 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
       spec.actions.isNotEmpty ||
       spec.commands.isNotEmpty ||
       spec.draftEditableFields.isNotEmpty ||
+      spec.draftEditableVariants.isNotEmpty ||
       spec.fields.any((field) => field.isMutable && !spec.isCommandOnly(field));
   buffer
     ..writeln(
@@ -854,9 +879,12 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
       );
   }
   for (final field in observableFields) {
-    buffer
-      ..writeln('  final Observable<${field.dartType}> _${field.name}Store;')
-      ..writeln('  @override');
+    buffer.writeln(
+      '  final Observable<${field.dartType}> _${field.name}Store;',
+    );
+    if (field.persistedVariantName == null) {
+      buffer.writeln('  @override');
+    }
     if (field.generatedOnly) {
       buffer.writeln(
         '  OrderRank get generatedOrderRank => _${field.name}Store.value;',
@@ -870,6 +898,7 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
       _emitSetter(buffer, spec, field);
     }
   }
+  _emitPersistedVariantGetters(buffer, spec);
   if (spec.hasOrderedCapability) {
     final scopeFields = spec.orderScopeFields;
     buffer
@@ -1017,8 +1046,67 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
     ..writeln();
 }
 
+void _emitPersistedVariantGetters(StringBuffer buffer, EntitySpec spec) {
+  for (final variant in spec.persistedVariants) {
+    buffer
+      ..writeln('  @override')
+      ..writeln('  ${variant.dartType} get ${variant.name} {');
+    for (final variantCase in variant.cases) {
+      final presence = variantCase.presenceField;
+      if (presence == null) continue;
+      buffer
+        ..writeln('    if (_${presence.name}Store.value != null) {')
+        ..writeln(
+          '      return ${_persistedVariantCaseConstruction(variantCase, (field) => '_${field.name}Store.value')};',
+        )
+        ..writeln('    }');
+    }
+    if (variant.emptyCase case final emptyCase?) {
+      buffer.writeln(
+        '    return ${_persistedVariantCaseConstruction(emptyCase, (_) => 'null')};',
+      );
+    } else if (variant.nullable) {
+      buffer.writeln('    return null;');
+    } else {
+      buffer
+        ..writeln('    throw StateError(')
+        ..writeln(
+          "      'Persisted variant ${spec.className}.${variant.name} has no active case.',",
+        )
+        ..writeln('    );');
+    }
+    buffer.writeln('  }');
+  }
+}
+
+String _persistedVariantCaseConstruction(
+  PersistedVariantCaseSpec variantCase,
+  String Function(FieldSpec field) read,
+) {
+  final positional = <String>[];
+  final named = <String>[];
+  for (final parameter in variantCase.constructorParameters) {
+    final field = variantCase.fields.singleWhere(
+      (candidate) => candidate.name == parameter.fieldName,
+    );
+    final source = read(field);
+    final value = field.persistedVariantComponentNullable == false
+        ? '$source!'
+        : source;
+    if (parameter.named) {
+      named.add('${parameter.fieldName}: $value');
+    } else {
+      positional.add(value);
+    }
+  }
+  return '${variantCase.className}(${[...positional, ...named].join(', ')})';
+}
+
 void _emitGeneratedDraftMutation(StringBuffer buffer, EntitySpec spec) {
-  final fields = spec.draftEditableFields;
+  final fields = <FieldSpec>[
+    ...spec.draftEditableFields,
+    for (final variant in spec.draftEditableVariants) ...variant.storageFields,
+  ];
   if (fields.isEmpty) {
     buffer
       ..writeln()
@@ -1087,7 +1175,15 @@ void _emitGeneratedDraftMutation(StringBuffer buffer, EntitySpec spec) {
     ..writeln('        entityId: generatedEntityId,')
     ..writeln('        fields: [');
   for (final field in fields) {
-    buffer.writeln("          if (${field.name}Overlaps) '${field.name}',");
+    if (field.persistedVariantName == null) {
+      buffer.writeln("          if (${field.name}Overlaps) '${field.name}',");
+    }
+  }
+  for (final variant in spec.draftEditableVariants) {
+    final overlaps = variant.storageFields
+        .map((field) => '${field.name}Overlaps')
+        .join(' || ');
+    buffer.writeln("          if ($overlaps) '${variant.name}',");
   }
   buffer
     ..writeln('        ],')
@@ -1216,18 +1312,36 @@ void _emitGeneratedDraftMutation(StringBuffer buffer, EntitySpec spec) {
 
 void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
   final editableFields = spec.draftEditableFields;
+  final editableVariants = spec.draftEditableVariants;
+  final createParameters = spec.createParameters
+      .where((field) => field.persistedVariantName == null)
+      .toList(growable: false);
+  final createVariants = spec.persistedVariants
+      .where(
+        (variant) => variant.storageFields.any(spec.createParameters.contains),
+      )
+      .toList(growable: false);
   final transfer = spec.orderScopeTransferAction;
-  if (!spec.canCreatePublicly && editableFields.isEmpty && transfer == null) {
+  if (!spec.canCreatePublicly &&
+      editableFields.isEmpty &&
+      editableVariants.isEmpty &&
+      transfer == null) {
     return;
   }
 
   final draftName = '${spec.className}MutationDraft';
   final fields = <String, String>{};
-  for (final field in spec.createParameters) {
+  for (final field in createParameters) {
     fields[field.name] = field.dartType;
+  }
+  for (final variant in createVariants) {
+    fields[variant.name] = variant.dartType;
   }
   for (final field in editableFields) {
     fields[field.name] = field.dartType;
+  }
+  for (final variant in editableVariants) {
+    fields[variant.name] = variant.dartType;
   }
   for (final action in [transfer].whereType<ActionSpec>()) {
     for (final parameter in action.parameters) {
@@ -1240,8 +1354,11 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     for (final field in spec.orderScopeTransferFields)
       if (!editableFields.contains(field)) field,
   ];
-  final editFieldNames = editFields.map((field) => field.name).toSet();
-  if (editFields.isNotEmpty) {
+  final editFieldNames = {
+    ...editFields.map((field) => field.name),
+    ...editableVariants.map((variant) => variant.name),
+  };
+  if (editFields.isNotEmpty || editableVariants.isNotEmpty) {
     buffer
       ..writeln(
         'extension ${spec.className}GeneratedEditing on ${spec.className} {',
@@ -1263,13 +1380,21 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     for (final field in editFields) {
       buffer.writeln('        _base${field.capitalizedName} = null,');
     }
+    for (final variant in editableVariants) {
+      buffer.writeln('        _base${variant.capitalizedName} = null,');
+    }
     for (var index = 0; index < entries.length; index++) {
       final entry = entries[index];
-      final field = spec.createParameters
+      final field = createParameters
+          .where((candidate) => candidate.name == entry.key)
+          .firstOrNull;
+      final variant = createVariants
           .where((candidate) => candidate.name == entry.key)
           .firstOrNull;
       final initializer = field == null
-          ? 'EntityDraftField<${entry.value}>.unset()'
+          ? variant?.nullable == true
+                ? 'EntityDraftField<${entry.value}>.value(null)'
+                : 'EntityDraftField<${entry.value}>.unset()'
           : field.defaultValue != null
           ? 'EntityDraftField<${entry.value}>.value(${_domainDefaultLiteral(field)})'
           : field.nullable
@@ -1279,7 +1404,7 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
       buffer.writeln('        _${entry.key}Field = $initializer$suffix');
     }
   }
-  if (editFields.isNotEmpty) {
+  if (editFields.isNotEmpty || editableVariants.isNotEmpty) {
     buffer
       ..writeln('  $draftName.edit(${spec.className} entity)')
       ..writeln('      : _set = null,')
@@ -1287,6 +1412,11 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     for (final field in editFields) {
       buffer.writeln(
         '        _base${field.capitalizedName} = entity.${field.name},',
+      );
+    }
+    for (final variant in editableVariants) {
+      buffer.writeln(
+        '        _base${variant.capitalizedName} = entity.${variant.name},',
       );
     }
     for (var index = 0; index < entries.length; index++) {
@@ -1308,6 +1438,11 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
   for (final field in editFields) {
     buffer.writeln(
       '  final ${_nullableType(field.dartType)} _base${field.capitalizedName};',
+    );
+  }
+  for (final variant in editableVariants) {
+    buffer.writeln(
+      '  final ${_nullableType(variant.dartType)} _base${variant.capitalizedName};',
     );
   }
   buffer
@@ -1351,9 +1486,14 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     buffer
       ..writeln('    if (current == null) {')
       ..writeln('      final created = await _set!.create(');
-    for (final field in spec.createParameters) {
+    for (final field in createParameters) {
       buffer.writeln(
         "        ${field.name}: _${field.name}Field.requireValue(entityType: '${spec.className}', field: '${field.name}'),",
+      );
+    }
+    for (final variant in createVariants) {
+      buffer.writeln(
+        "        ${variant.name}: _${variant.name}Field.requireValue(entityType: '${spec.className}', field: '${variant.name}'),",
       );
     }
     buffer
@@ -1401,17 +1541,45 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
   buffer.writeln(
     '    await current.generatedAccess.runGeneratedTransaction(() async {',
   );
-  if (editableFields.isNotEmpty) {
-    final first = editableFields.first;
-    final firstBase = first.nullable
+  final draftPatchFields = <FieldSpec>[
+    ...editableFields,
+    for (final variant in editableVariants) ...variant.storageFields,
+  ];
+  if (draftPatchFields.isNotEmpty) {
+    for (final variant in editableVariants) {
+      for (final variantCase in variant.cases) {
+        for (final field in variantCase.fields) {
+          buffer
+            ..writeln(
+              '      final generatedDraftBase${field.capitalizedName} = '
+              '_base${variant.capitalizedName} is ${variantCase.className} '
+              '? (_base${variant.capitalizedName} as ${variantCase.className}).${field.name} : null;',
+            )
+            ..writeln(
+              '      final generatedDraftCandidate${field.capitalizedName} = '
+              '${variant.name} is ${variantCase.className} '
+              '? (${variant.name} as ${variantCase.className}).${field.name} : null;',
+            );
+        }
+      }
+    }
+    final first = draftPatchFields.first;
+    final firstBase = first.persistedVariantName != null
+        ? 'generatedDraftBase${first.capitalizedName}'
+        : first.nullable
         ? '_base${first.capitalizedName}'
         : '_base${first.capitalizedName} as ${first.dartType}';
+    final firstCandidate = first.persistedVariantName != null
+        ? 'generatedDraftCandidate${first.capitalizedName}'
+        : first.name;
     buffer.writeln(
       '      final generatedDraftBase = ${_fieldReference(spec, first)}'
       '.patch($firstBase)',
     );
-    for (final field in editableFields.skip(1)) {
-      final base = field.nullable
+    for (final field in draftPatchFields.skip(1)) {
+      final base = field.persistedVariantName != null
+          ? 'generatedDraftBase${field.capitalizedName}'
+          : field.nullable
           ? '_base${field.capitalizedName}'
           : '_base${field.capitalizedName} as ${field.dartType}';
       buffer.writeln(
@@ -1422,12 +1590,15 @@ void _emitMutationDraft(StringBuffer buffer, EntitySpec spec) {
     buffer.writeln('          ;');
     buffer.writeln(
       '      final generatedDraftCandidate = ${_fieldReference(spec, first)}'
-      '.patch(${first.name})',
+      '.patch($firstCandidate)',
     );
-    for (final field in editableFields.skip(1)) {
+    for (final field in draftPatchFields.skip(1)) {
+      final candidate = field.persistedVariantName != null
+          ? 'generatedDraftCandidate${field.capitalizedName}'
+          : field.name;
       buffer.writeln(
         '          .merge(${_fieldReference(spec, field)}'
-        '.patch(${field.name}))',
+        '.patch($candidate))',
       );
     }
     buffer
@@ -1488,7 +1659,7 @@ void _emitDetachedRecordFactory(StringBuffer buffer, EntitySpec spec) {
     ..writeln('  /// Creates an explicitly non-persisted preview or fixture.')
     ..writeln('  factory $recordName.detached({');
   for (final field in spec.fields) {
-    if (field.generatedOnly) {
+    if (field.generatedOnly || field.persistedVariantName != null) {
       continue;
     } else if (field.serverGenerated &&
         field.name == EntityConventions.createdAtFieldName) {
@@ -1507,6 +1678,7 @@ void _emitDetachedRecordFactory(StringBuffer buffer, EntitySpec spec) {
       buffer.writeln('    required ${field.dartType} ${field.name},');
     }
   }
+  _emitPersistedVariantParameters(buffer, spec.persistedVariants);
   buffer
     ..writeln('    Clock clock = const SystemClock(),')
     ..writeln(
@@ -1517,6 +1689,7 @@ void _emitDetachedRecordFactory(StringBuffer buffer, EntitySpec spec) {
   if (requiresDetachedNow) {
     buffer.writeln('    final detachedNow = clock.nowUtc();');
   }
+  _emitPersistedVariantStorageLocals(buffer, spec.persistedVariants);
   buffer
     ..writeln('    return const ${spec.className}Descriptor().instantiate(')
     ..writeln('      mutationSink: mutationSink,')
@@ -1539,6 +1712,37 @@ void _emitDetachedRecordFactory(StringBuffer buffer, EntitySpec spec) {
     ..writeln('      },')
     ..writeln('    );')
     ..writeln('  }');
+}
+
+void _emitPersistedVariantParameters(
+  StringBuffer buffer,
+  Iterable<PersistedVariantSpec> variants,
+) {
+  for (final variant in variants) {
+    if (variant.nullable) {
+      buffer.writeln('    ${variant.dartType} ${variant.name},');
+    } else {
+      buffer.writeln('    required ${variant.dartType} ${variant.name},');
+    }
+  }
+}
+
+void _emitPersistedVariantStorageLocals(
+  StringBuffer buffer,
+  Iterable<PersistedVariantSpec> variants, {
+  String indent = '    ',
+}) {
+  for (final variant in variants) {
+    for (final variantCase in variant.cases) {
+      for (final field in variantCase.fields) {
+        buffer.writeln(
+          '$indent final ${field.name} = ${variant.name} is '
+          '${variantCase.className} ? '
+          '(${variant.name} as ${variantCase.className}).${field.name} : null;',
+        );
+      }
+    }
+  }
 }
 
 bool _hasValidation(FieldSpec field) =>
@@ -1754,6 +1958,58 @@ void _emitCrossFieldValidations(
       )
       ..writeln('$indent  );')
       ..writeln('$indent}');
+  }
+  for (final variant in spec.persistedVariants) {
+    for (final variantCase in variant.cases) {
+      final presence = variantCase.presenceField;
+      if (presence == null) continue;
+      final presenceValue = '(${valueFor(presence)})';
+      final requiredFields = [
+        for (final parameter in variantCase.constructorParameters)
+          if (variantCase.fields.singleWhere(
+                (field) => field.name == parameter.fieldName,
+              )
+              case final component
+              when component.persistedVariantComponentNullable == false)
+            component,
+      ];
+      final missingRequired = requiredFields
+          .where((field) => field != presence)
+          .map((field) => '(${valueFor(field)}) == null')
+          .join(' || ');
+      final orphanedComponent = variantCase.fields
+          .where((field) => field != presence)
+          .map((field) => '(${valueFor(field)}) != null')
+          .join(' || ');
+      if (missingRequired.isNotEmpty) {
+        buffer
+          ..writeln(
+            '$indent if ($presenceValue != null && ($missingRequired)) {',
+          )
+          ..writeln('$indent  throw const EntityValidationException(')
+          ..writeln("$indent    entityType: '${spec.className}',")
+          ..writeln("$indent    field: '${variant.name}',")
+          ..writeln(
+            "$indent    message: 'Active `${variantCase.className}` requires all of its required components.',",
+          )
+          ..writeln('$indent  );')
+          ..writeln('$indent}');
+      }
+      if (orphanedComponent.isNotEmpty) {
+        buffer
+          ..writeln(
+            '$indent if ($presenceValue == null && ($orphanedComponent)) {',
+          )
+          ..writeln('$indent  throw const EntityValidationException(')
+          ..writeln("$indent    entityType: '${spec.className}',")
+          ..writeln("$indent    field: '${variant.name}',")
+          ..writeln(
+            "$indent    message: 'Inactive `${variantCase.className}` components must be null.',",
+          )
+          ..writeln('$indent  );')
+          ..writeln('$indent}');
+      }
+    }
   }
   for (final index in spec.compoundIndexes.where(
     (candidate) => candidate.unordered,
@@ -2500,6 +2756,12 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   final setName = '${spec.className}Set';
   final createFields = spec.createFields;
   final createParameters = spec.createParameters;
+  final publicCreateParameters = createParameters
+      .where((field) => field.persistedVariantName == null)
+      .toList(growable: false);
+  final createVariants = spec.persistedVariants
+      .where((variant) => variant.storageFields.any(createParameters.contains))
+      .toList(growable: false);
   final engineType = 'LocalEntityEngine<${spec.className}, $recordName>';
   final cachesAuthenticatedOwner =
       spec.canCreatePublicly && spec.ownershipReferenceFields.isEmpty;
@@ -2530,7 +2792,9 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   buffer
     ..writeln('  final $engineType _engine;')
     ..writeln('  final LocalEntityQueryCache<${spec.className}> _queries;');
-  final hasEditDraft = spec.draftEditableFields.isNotEmpty;
+  final hasEditDraft =
+      spec.draftEditableFields.isNotEmpty ||
+      spec.draftEditableVariants.isNotEmpty;
   if (spec.canCreatePublicly ||
       hasEditDraft ||
       spec.orderScopeTransferAction != null) {
@@ -2726,13 +2990,17 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         buffer
           ..writeln('  Future<${spec.className}> $methodName({')
           ..writeln('    LocalId<${spec.className}>? id,');
-        _emitCreateParameters(buffer, createParameters);
+        _emitCreateParameters(buffer, publicCreateParameters);
+        _emitPersistedVariantParameters(buffer, createVariants);
         buffer
           ..writeln('  }) => _create(')
           ..writeln('    first: $first,')
           ..writeln('    id: id,');
-        for (final field in createParameters) {
+        for (final field in publicCreateParameters) {
           buffer.writeln('    ${field.name}: ${field.name},');
+        }
+        for (final variant in createVariants) {
+          buffer.writeln('    ${variant.name}: ${variant.name},');
         }
         buffer.writeln('  );');
       }
@@ -2743,8 +3011,10 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       buffer.writeln('  Future<${spec.className}> create({');
     }
     buffer.writeln('    LocalId<${spec.className}>? id,');
-    _emitCreateParameters(buffer, createParameters);
+    _emitCreateParameters(buffer, publicCreateParameters);
+    _emitPersistedVariantParameters(buffer, createVariants);
     buffer.writeln('  }) {');
+    _emitPersistedVariantStorageLocals(buffer, createVariants);
     if (spec.isComponent) {
       buffer
         ..writeln('    if (!_engine.isInMutationTransaction) {')
@@ -2914,6 +3184,14 @@ void _emitCreateOrGetMethods(
   required bool cachesAuthenticatedOwner,
 }) {
   if (spec.cardinality != Cardinality.bounded) return;
+  final publicCreateParameters = spec.createParameters
+      .where((field) => field.persistedVariantName == null)
+      .toList(growable: false);
+  final createVariants = spec.persistedVariants
+      .where(
+        (variant) => variant.storageFields.any(spec.createParameters.contains),
+      )
+      .toList(growable: false);
   final createParameterNames = {
     for (final field in spec.createParameters) field.name,
   };
@@ -2945,7 +3223,8 @@ void _emitCreateOrGetMethods(
       ..writeln()
       ..writeln('  Future<${spec.className}> $methodName({')
       ..writeln('    LocalId<${spec.className}>? id,');
-    _emitCreateParameters(buffer, spec.createParameters);
+    _emitCreateParameters(buffer, publicCreateParameters);
+    _emitPersistedVariantParameters(buffer, createVariants);
     buffer
       ..writeln('  }) async {')
       ..writeln('    final existing = $lookupMethod(');
@@ -2960,8 +3239,11 @@ void _emitCreateOrGetMethods(
       ..writeln('    if (existing != null) return existing;')
       ..writeln('    return create(')
       ..writeln('      id: id,');
-    for (final field in spec.createParameters) {
+    for (final field in publicCreateParameters) {
       buffer.writeln('      ${field.name}: ${field.name},');
+    }
+    for (final variant in createVariants) {
+      buffer.writeln('      ${variant.name}: ${variant.name},');
     }
     buffer
       ..writeln('    );')

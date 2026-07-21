@@ -881,6 +881,7 @@ void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
       final canCreateThroughReference =
           relationship == null &&
           source.canCreate &&
+          field.persistedVariantName == null &&
           source.createParameters.contains(field);
       if (canCreateThroughReference) {
         _emitCreationRelationship(
@@ -953,7 +954,16 @@ void _emitCreationRelationship(
 }) {
   final className = generatedInverseCreationTypeName(field);
   final createParameters = source.createParameters
-      .where((candidate) => candidate != field)
+      .where(
+        (candidate) =>
+            candidate != field && candidate.persistedVariantName == null,
+      )
+      .toList(growable: false);
+  final createVariants = source.persistedVariants
+      .where(
+        (variant) =>
+            variant.storageFields.any(source.createParameters.contains),
+      )
       .toList(growable: false);
   final boundType = field.dartType.replaceAll('?', '');
   buffer
@@ -997,12 +1007,16 @@ void _emitCreationRelationship(
       ..writeln('  Future<${source.className}> $methodName({')
       ..writeln('    LocalId<${source.className}>? id,');
     _emitRelationshipCreateParameters(buffer, createParameters);
+    _emitRelationshipVariantCreateParameters(buffer, createVariants);
     buffer
       ..writeln('  }) => _entityGraph.${source.setAccessor}.$setMethod(')
       ..writeln('    id: id,')
       ..writeln('    ${field.name}: _${field.name},');
     for (final parameter in createParameters) {
       buffer.writeln('    ${parameter.name}: ${parameter.name},');
+    }
+    for (final variant in createVariants) {
+      buffer.writeln('    ${variant.name}: ${variant.name},');
     }
     buffer
       ..writeln('  );')
@@ -1011,6 +1025,18 @@ void _emitCreationRelationship(
   buffer
     ..writeln('}')
     ..writeln();
+}
+
+void _emitRelationshipVariantCreateParameters(
+  StringBuffer buffer,
+  List<PersistedVariantSpec> variants,
+) {
+  for (final variant in variants) {
+    buffer.writeln(
+      '    ${variant.nullable ? '' : 'required '}${variant.dartType} '
+      '${variant.name},',
+    );
+  }
 }
 
 void _emitRelationshipCreateParameters(

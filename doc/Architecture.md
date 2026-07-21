@@ -480,6 +480,26 @@ the scalar, flattened-component, child-relationship, or boundary alternatives.
 A codec may adapt a supported atomic scalar or an external wire contract; it
 MUST NOT turn a structured persisted field back into an opaque database blob.
 
+A sealed value stored on an entity declares `@PersistedVariant` on the one
+logical field. Its direct cases MUST be public final classes with exactly one
+unnamed generative constructor. Every persisted case component MUST be a public
+final atomic scalar, enum, or nominal `LocalId<E>`, initialized exactly once by
+that constructor, and component names MUST be unique across all cases because
+they derive native column and protocol identities. Scalar constraints, indexes,
+and relationship/access annotations belong to the case components; they MUST
+NOT be repeated on the logical field. Variants cannot nest persisted variants,
+compositions, collections, or access participants.
+
+Generation flattens those components into nullable native storage, reconstructs
+the sealed value on reads, and exposes only the logical value through public
+create and mutation drafts. It MUST generate the same exclusivity, component
+presence, reference, codec, patch, and validation behavior across Dart, Drift,
+PostgreSQL, synchronization, and graph metadata. Every non-empty case requires
+one non-null presence component. A non-null logical variant MAY have one empty
+case; a nullable logical variant MUST NOT, because an empty case would be
+indistinguishable from no value. Physical component fields are generated
+implementation detail and MUST NOT become a second public mutation surface.
+
 Runtime-defined structured input is the narrow exception to an otherwise
 static schema, not an EAV escape hatch. It MUST use a first-class definition
 entity and a typed response relationship whose value variants are a closed set
@@ -510,9 +530,11 @@ A nullable dependent value declares `@Persisted(requires: #field)` once when
 its presence has no meaning without another nullable persisted field. The
 generator validates both symbols and emits the same implication for local
 construction, edits, remote merge, SQLite, and PostgreSQL. A mutually exclusive
-variant declares one `ExclusiveFieldGroup`; the generator then owns candidate
-validation and physical checks. Callers, adapters, and handwritten SQL MUST NOT
-re-implement those invariants.
+physical field group declares one `ExclusiveFieldGroup`; a sealed domain value
+declares one `@PersistedVariant`, which synthesizes its physical group and case
+presence checks. The generator then owns candidate validation and physical
+checks. Callers, adapters, and handwritten SQL MUST NOT re-implement those
+invariants.
 
 An ordered numeric field relationship declares `greaterThan: #field` or
 `greaterThanOrEqual: #field` once. Both fields MUST have the same numeric type;
@@ -2659,9 +2681,10 @@ An implementation conforms only when all statements are true:
 55. A nominal atomic domain value uses `PersistedScalarValue<Wire>` to derive
     one native scalar representation end to end; it never hides structured data
     inside that scalar.
-56. A discriminator is persisted only when variant identity cannot be derived
-    safely from mutually exclusive native values or typed references; derived
-    tags are forbidden duplicated state.
+56. A sealed domain value declares one `@PersistedVariant`; generation derives
+    its mutually exclusive native values or typed references, and persists a
+    discriminator only when variant identity cannot be derived safely from
+    presence. Derived tags are forbidden duplicated state.
 57. Nullable dependencies, ordered numeric relationships, and exclusive
     variant membership are declared once and generated across Dart candidates,
     SQLite, PostgreSQL, merge, and synchronization boundaries.

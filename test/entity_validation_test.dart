@@ -1649,6 +1649,317 @@ final class Habit {}
     );
   });
 
+  test('flattens one sealed persisted variant into native columns', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+sealed class NextTarget {
+  const NextTarget();
+}
+
+final class TaskTarget extends NextTarget {
+  const TaskTarget(this.taskId);
+
+  final LocalId<Task> taskId;
+}
+
+final class HabitTarget extends NextTarget {
+  const HabitTarget({required this.habitId, this.note});
+
+  final LocalId<Habit> habitId;
+
+  @Persisted(maxLength: 80)
+  final String? note;
+}
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class NextAction implements OwnedBy<NextAction, Account> {
+  @PersistedVariant()
+  abstract final NextTarget target;
+}
+
+final class Account {}
+final class Task {}
+final class Habit {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/note.entity.g.dart': decodedMatches(
+          allOf([
+            contains('required NextTarget target,'),
+            contains('NextTarget get target'),
+            contains('return TaskTarget(_taskIdStore.value!);'),
+            contains(
+              'return HabitTarget(habitId: _habitIdStore.value!, '
+              'note: _noteStore.value);',
+            ),
+            contains('(target as TaskTarget).taskId'),
+            contains('(target as HabitTarget).habitId'),
+            contains(
+              'CHECK (CASE WHEN habit_id IS NOT NULL THEN 1 ELSE 0 END + '
+              'CASE WHEN task_id IS NOT NULL THEN 1 ELSE 0 END = 1)',
+            ),
+            contains("field: 'target'"),
+          ]),
+        ),
+      },
+    );
+  });
+
+  test(
+    'preserves sealed variant references in graph and SQL metadata',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/habit.dart';
+import 'package:nodus/task.dart';
+
+sealed class NextTarget {
+  const NextTarget();
+}
+
+final class TaskTarget extends NextTarget {
+  const TaskTarget(this.taskId);
+
+  @Reference(onDelete: ReferenceDeleteAction.setNull)
+  final LocalId<Task> taskId;
+}
+
+final class HabitTarget extends NextTarget {
+  const HabitTarget(this.habitId);
+
+  @Reference(onDelete: ReferenceDeleteAction.restrict)
+  final LocalId<Habit> habitId;
+}
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class NextAction implements OwnedBy<NextAction, Account> {
+  @PersistedVariant()
+  abstract final NextTarget? target;
+}
+''';
+      final sources = _sources(source, fileName: 'next_action.dart')
+        ..['nodus|lib/account.dart'] = 'final class Account {}'
+        ..['nodus|lib/task.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Task implements OwnedBy<Task, Account> {}
+'''
+        ..['nodus|lib/habit.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Habit implements OwnedBy<Habit, Account> {}
+''';
+
+      await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/habit.entity.g.dart': decodedMatches(anything),
+          'nodus|lib/task.entity.g.dart': decodedMatches(anything),
+          'nodus|lib/next_action.entity.g.dart': decodedMatches(
+            allOf([
+              contains(
+                '(this.generatedAccess as NextActionRecord).habitId?.value',
+              ),
+              contains(
+                '(this.generatedAccess as NextActionRecord).taskId?.value',
+              ),
+            ]),
+          ),
+        },
+      );
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('NextActionList.forHabit'),
+              contains('NextActionList.forTask'),
+            ]),
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(
+            allOf([
+              contains('habit_id uuid'),
+              contains('task_id uuid'),
+              contains(
+                'check ((((habit_id is not null)::integer) + '
+                '((task_id is not null)::integer)) <= 1)',
+              ),
+              contains(
+                'habit_id uuid references public.habits (id) on delete restrict',
+              ),
+              contains(
+                'task_id uuid references public.tasks (id) on delete set null',
+              ),
+            ]),
+          ),
+        },
+      );
+    },
+  );
+
+  test('rejects ambiguous persisted variant declarations', () async {
+    final declarations = <({String source, String message})>[
+      (
+        source: r'''
+import 'package:nodus/nodus.dart';
+
+abstract class Target {
+  const Target();
+}
+
+final class AlphaTarget extends Target {
+  const AlphaTarget(this.alpha);
+  final int alpha;
+}
+
+final class BetaTarget extends Target {
+  const BetaTarget(this.beta);
+  final int beta;
+}
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Selection implements OwnedBy<Selection, Account> {
+  @PersistedVariant()
+  abstract final Target target;
+}
+
+final class Account {}
+''',
+        message: 'must have a sealed class type',
+      ),
+      (
+        source: r'''
+import 'package:nodus/nodus.dart';
+
+sealed class Target {
+  const Target();
+}
+
+final class AlphaTarget extends Target {
+  const AlphaTarget(this.value);
+  final int value;
+}
+
+final class BetaTarget extends Target {
+  const BetaTarget(this.value);
+  final int value;
+}
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Selection implements OwnedBy<Selection, Account> {
+  @PersistedVariant()
+  abstract final Target target;
+}
+
+final class Account {}
+''',
+        message: 'Component names must be unique across variants',
+      ),
+      (
+        source: r'''
+import 'package:nodus/nodus.dart';
+
+sealed class Target {
+  const Target();
+}
+
+final class EmptyTarget extends Target {
+  const EmptyTarget();
+}
+
+final class ValueTarget extends Target {
+  const ValueTarget(this.value);
+  final int value;
+}
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Selection implements OwnedBy<Selection, Account> {
+  @PersistedVariant()
+  abstract final Target? target;
+}
+
+final class Account {}
+''',
+        message: 'one empty case only when the entity field is non-nullable',
+      ),
+    ];
+
+    for (final declaration in declarations) {
+      final result = await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(declaration.source),
+        rootPackage: 'nodus',
+      );
+      expect(result.succeeded, isFalse, reason: declaration.message);
+      expect(result.errors.join('\n'), contains(declaration.message));
+    }
+
+    final unsafeSetNullSources =
+        _sources(r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/task.dart';
+
+sealed class Target {
+  const Target();
+}
+
+final class TaskTarget extends Target {
+  const TaskTarget(this.taskId, this.label);
+
+  @Reference(onDelete: ReferenceDeleteAction.setNull)
+  final LocalId<Task> taskId;
+  final String label;
+}
+
+final class TextTarget extends Target {
+  const TextTarget(this.text);
+  final String text;
+}
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Selection implements OwnedBy<Selection, Account> {
+  @PersistedVariant()
+  abstract final Target? target;
+}
+
+final class Account {}
+''', fileName: 'selection.dart')
+          ..['nodus|lib/task.dart'] = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Task implements OwnedBy<Task, Account> {}
+
+final class Account {}
+''';
+    final unsafeSetNull = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      unsafeSetNullSources,
+      rootPackage: 'nodus',
+    );
+    expect(unsafeSetNull.succeeded, isFalse);
+    expect(unsafeSetNull.errors.join('\n'), contains('single-component case'));
+  });
+
   test('generates a canonical date-only codec and typed field', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';

@@ -389,6 +389,18 @@ final class ExclusiveFieldGroup {
   final bool allowNone;
 }
 
+/// Persists one sealed domain value as mutually exclusive native columns.
+///
+/// The annotated entity field must have a sealed class type. Each direct final
+/// subtype is one variant and exposes its native scalar or `LocalId<E>`
+/// components as public final fields initialized by its unnamed constructor.
+/// Generation owns flattening, reconstruction, validation, schema checks,
+/// drafts, patches, references, and synchronization. A discriminator is not
+/// stored when the populated component columns identify the variant.
+final class PersistedVariant {
+  const PersistedVariant();
+}
+
 /// Declares a compound storage index that cannot be represented by [Indexed].
 ///
 /// Indexes are physical query policy, so they remain explicit. Table names,

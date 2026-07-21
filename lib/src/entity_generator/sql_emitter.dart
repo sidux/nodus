@@ -90,6 +90,25 @@ String emitSupabaseSql(
         .join(' + ');
     columns.add('  check (($terms) ${group.allowNone ? '<=' : '='} 1)');
   }
+  for (final variant in spec.persistedVariants) {
+    for (final variantCase in variant.cases) {
+      final presence = variantCase.presenceField;
+      if (presence == null) continue;
+      for (final parameter in variantCase.constructorParameters) {
+        if (parameter.fieldName == presence.name) continue;
+        final component = variantCase.fields.singleWhere(
+          (field) => field.name == parameter.fieldName,
+        );
+        columns.add(
+          component.persistedVariantComponentNullable == false
+              ? '  check (${presence.columnName} is null or '
+                    '${component.columnName} is not null)'
+              : '  check (${component.columnName} is null or '
+                    '${presence.columnName} is not null)',
+        );
+      }
+    }
+  }
   for (final index in spec.compoundIndexes.where(
     (candidate) => candidate.unordered,
   )) {
