@@ -98,6 +98,8 @@ Every artifact is decided by the first matching row:
 | Record domain-visible entity activity | `ActivityTracked` source plus one generated `ActivityOf<Source, Actor>` entry entity | manual activity writes, transaction wrappers, observers, and preformatted persisted messages forbidden |
 | Run a long-lived process owned by an entity outcome | named generated set constructor, entity action, aggregate action, or explicit process entity when its lifecycle is domain-visible | generic application workflow namespace or detached orchestration service forbidden |
 | Delete, restore, archive, or apply declared lifecycle | generated or entity-declared awaited method | application wrapper forbidden |
+| Apply one declared action or lifecycle transition to a selection | generated query-owned `<action>All`, `removeAll`, `restoreAll`, `archiveAll`, or `unarchiveAll` | materializing the selection and writing an application mutation loop forbidden |
+| Propagate lifecycle through a true self hierarchy | `@Reference(hierarchy: true, onDelete: ReferenceDeleteAction.cascade)` plus generated set hierarchy operations | descendant scans, recursive feature loops, and handwritten tree transactions forbidden |
 | Select by ownership, reference, participant, unique index, or compound index | generated named `<Entity>List` constructor or inverse relationship | repeated predicate/query wrapper forbidden |
 | Select an ad hoc typed subset | generated typed predicate and ordering API | pure named selector MAY add business vocabulary, never I/O mechanics |
 | Mutate a declared relationship | generated relationship API | link CRUD service forbidden |
@@ -1445,6 +1447,30 @@ or equivalent methods. Generated relationship handles provide typed link,
 unlink, movement, exact replacement, and inverse-list behavior only where the
 resolved relationship contract makes each operation safe.
 
+An entity action declared with `@Action(bulk: true)` generates a domain-named
+query-owned action on every compatible generated `<Entity>List`. Standard
+lifecycle capabilities generate the corresponding query-owned lifecycle
+actions without another declaration. The query, not feature code, owns
+canonical paging, identity retention, page transactions, cleanup, and the
+`EntityBulkMutationResult(matched, changed)` result; `skipped` is derived from
+those counts. An unbounded operation is atomic per generated page, not across
+an unlimited result set. A business rule requiring global all-or-nothing
+semantics MUST use a proved-bounded aggregate transaction; work requiring
+restart recovery, external I/O, progress, or cancellation MUST use a durable
+process. A caller MUST NOT call `useAll` merely to run one mutation per item.
+
+A nullable self-reference may declare `hierarchy: true` only with cascade
+deletion. Generation then exposes `removeHierarchy`, `restoreHierarchy`, and,
+for `Archivable`, `setHierarchyArchived` on the entity set. Nodus validates the
+root and hierarchy descriptor, rejects cycles, traverses the durable local
+projection recursively in bounded pages, keeps identities only for the active
+page, and orders parent/child lifecycle safely. Removal and archive are
+children-first where required; restoration is parent-first and rejects a root
+whose external parent is still deleted. For separately owned entities,
+foreign-owned descendants count as skipped rather than receiving unauthorized
+mutations. Feature code MUST NOT reconstruct descendants from a bounded
+identity map or issue its own recursive lifecycle loop.
+
 Relationship mutation MUST enforce source and target existence, ownership or
 access, active-link reuse, dependency ordering, and atomic persistence without
 N+1 reads. Handwritten link repositories and duplicated ID collections are
@@ -1609,6 +1635,27 @@ confirmation uses the narrow online capability rule from section 17. None of
 these mechanics justify an import repository, command handler, workflow
 service, provider, or feature-selected adapter.
 
+Purely mechanical entity-triggered work is declared adjacent to its source:
+
+```dart
+@EntityProcess(
+  name: 'applyOutcomes',
+  source: WorkSource(Decision, fields: [#status, #respondedAt]),
+)
+abstract final class ApplyOutcomesProcessDeclaration {}
+```
+
+`WorkSource` names one graph entity and, optionally, the persisted fields that
+can trigger the work; an empty field list means every projection change. The
+compiler validates the source, field symbols, and unique lower-camel name.
+Generation exposes one typed graph installer whose handler receives the stable
+source identity and a `GeneratedDurableWorkContext` containing the operation ID
+and attempt. Nodus owns coalescing, durable registration, leases, restart
+recovery, retry/backoff, scheduling, and page cleanup. The handler owns only
+the irreducible domain decision and applies outcomes through generated entity,
+relationship, aggregate, or query-owned actions. A successful checkpoint MUST
+be committed with its outcome when replay could otherwise duplicate behavior.
+
 ## 7. Collections, queries, and identity
 
 One persisted entity ID maps to exactly one live object instance per account
@@ -1724,6 +1771,17 @@ Cardinality is explicit:
   owns a precise lease;
 - every stream, reaction, query, and identity lease has deterministic cleanup.
 
+`useAll` is an explicit exhaustive, paged, lease-scoped read. It is allowed
+only when the returned business value genuinely depends on the complete typed
+selection—for example an ID-bounded relationship join, a date-bounded
+calculation, or a one-shot projection snapshot. It MUST remain read-only and
+MUST NOT create a retained cache, provider mirror, or mutation loop. A broad
+whole-account exhaustive read is a performance review signal: keep it only
+when the product result is intentionally complete and measured scale permits
+it; otherwise move the calculation to paging, a secondary projection, or a
+durable process. Conformance inventory reports these sites for review even when
+their lease and paging behavior is architecturally valid.
+
 Collections owned by the runtime are read-only outside it. Mutable backing
 collections never escape.
 
@@ -1765,6 +1823,12 @@ entity-graph lifecycle, not individual entity changes. Entity mutation MUST NOT
 rebuild the application scope or router. External capabilities are injected by
 interface; service locators and global mutable registries are forbidden.
 
+For a managed Flutter graph, generation MUST also emit the application-named
+`<Application>EntityGraphScope` and `BuildContext` accessors for strict state,
+optional readiness, and session access. Application code uses those typed
+names; it MUST NOT repeat the graph and account type arguments at every widget.
+The wrapper adds no state authority and delegates to the generic account scope.
+
 Scope access is explicit: strict state/session accessors fail when composition
 is missing, while an optional readiness accessor returns null when the scope is
 absent or not ready and subscribes only to lifecycle transitions. An API named
@@ -1785,6 +1849,14 @@ with or without retained data, pagination, and disposal. UI code MUST use that
 typed fold instead of repeating state switches or converting it into provider
 state. A bounded synchronous exact lookup uses a narrow MobX observation hook
 over the generated computed index and retains no query lease.
+
+When one widget consumes several independent observed queries,
+`ObservedEntityQueryGroup` folds only their shared lifecycle: initial loading,
+refreshing, blocking failure, stale-data refresh failure, and refresh-all. Each
+concrete query remains the typed source of its own items. A failure is blocking
+only when that query has no retained items; a refresh failure with stale items
+is exposed separately. Widgets MUST NOT replace this fold with local helper
+switches, a detached view model, or an untyped combined entity collection.
 
 ## 9. Local persistence
 
@@ -2073,6 +2145,28 @@ commits atomically with the authoritative local mutation, has independent
 destination lanes and receipts, and may be rebuilt deterministically from its
 declared source when the destination contract permits it. Projection failure
 never rolls back authoritative entity state.
+
+A mechanical multi-source projection is declared once beside its domain
+contract:
+
+```dart
+@SecondaryProjection(
+  name: 'searchIndex',
+  sources: [
+    WorkSource(Document, fields: [#title, #updatedAt]),
+    WorkSource(Tag),
+  ],
+)
+abstract final class SearchIndexProjectionDeclaration {}
+```
+
+Generation emits one typed installer and a domain-named `run...Now` trigger.
+All declared sources coalesce into an independent durable projection lane with
+stable operation IDs, leases, restart recovery, and retry/backoff. The supplied
+handler maps canonical state to the external destination and MUST rethrow a
+retryable destination failure; it does not subscribe, debounce, checkpoint,
+schedule, invalidate, or maintain its own outbox. Manual execution enters the
+same lane and semantics rather than bypassing durability.
 
 Application code MUST NOT represent a secondary destination by cloning the
 entity, adding another writable sync target, or maintaining a handwritten
