@@ -46,7 +46,6 @@ final class TaskProjectDescriptor
     implements
         EntityDescriptor<TaskProject, TaskProjectRecord>,
         EntityIdentityDescriptor<TaskProject>,
-        ActionPolicyProvider,
         OrderedDescriptor {
   const TaskProjectDescriptor();
 
@@ -94,14 +93,6 @@ final class TaskProjectDescriptor
       value,
     );
   }
-
-  @override
-  ActionPolicy get actionPolicy => const ActionPolicy(
-    actions: [
-      ActionDefinition(fieldNames: const ['title'], assignments: []),
-    ],
-    fixedInitialValues: {},
-  );
 
   @override
   EntitySemanticCommand<dynamic> decodeSemanticCommand(
@@ -391,61 +382,6 @@ final class TaskProjectRecord extends TaskProject
   }
 
   @override
-  Future<void> rename({required String title}) {
-    final _generatedActionTime = _clock.nowUtc();
-    final oldTitle = _titleStore.value;
-    final nextTitle = title;
-    final titleChanged = oldTitle != nextTitle;
-    if (!(titleChanged)) return Future.value();
-    if (_deletedAtStore.value != null) {
-      throw const EntityValidationException(
-        entityType: 'TaskProject',
-        field: 'rename',
-        message: 'Deleted entities cannot be changed.',
-      );
-    }
-    if (nextTitle.trim().length < 1) {
-      throw const EntityValidationException(
-        entityType: 'TaskProject',
-        field: 'title',
-        message: 'Must contain at least 1 non-whitespace character(s).',
-      );
-    }
-    if (nextTitle.length > 80) {
-      throw const EntityValidationException(
-        entityType: 'TaskProject',
-        field: 'title',
-        message: 'Must contain at most 80 character(s).',
-      );
-    }
-    if (titleChanged) {
-      _mutationSink.validateMutationAuthorization(
-        entity: this,
-        operation: RlsOperation.update,
-        principals: const [RlsPrincipal.owner],
-      );
-    }
-    final previousRevision = _localRevision;
-    final mutationRevision = ++_localRevision;
-    runInAction(() {
-      _titleStore.value = nextTitle;
-    });
-    final syncPatch = TaskProjectFields.title.patch(nextTitle);
-    _generatedLocalCommit = _mutationSink.recordEntityMutation<TaskProject>(
-      entity: this,
-      patch: syncPatch,
-      syncPatch: syncPatch,
-      occurredAt: _generatedActionTime,
-      rollbackIfCurrent: () {
-        if (_localRevision != mutationRevision) return;
-        _localRevision = previousRevision;
-        _titleStore.value = oldTitle;
-      },
-    );
-    return _generatedMutationCompletion(_generatedLocalCommit);
-  }
-
-  @override
   Future<void> remove() {
     final oldValue = _deletedAtStore.value;
     if (oldValue != null) return Future.value();
@@ -517,9 +453,82 @@ final class TaskProjectRecord extends TaskProject
   Future<void> applyGeneratedDraft({
     required TypedEntityPatch<TaskProject> base,
     required TypedEntityPatch<TaskProject> candidate,
-  }) => throw UnsupportedError(
-    'TaskProject has no ordinary draft-editable fields.',
-  );
+  }) {
+    final baseTitle = TaskProjectFields.title.decode(base['title']);
+    final candidateTitle = TaskProjectFields.title.decode(candidate['title']);
+    final nextTitle = candidateTitle;
+    final titleDraftChanged = baseTitle != nextTitle;
+    final titleCurrentChanged = baseTitle != _titleStore.value;
+    final titleChanged = titleDraftChanged && _titleStore.value != nextTitle;
+    final titleOverlaps = titleChanged && titleCurrentChanged;
+    if (titleOverlaps) {
+      throw EntityDraftFieldConflictException(
+        entityType: 'TaskProject',
+        entityId: generatedEntityId,
+        fields: [if (titleOverlaps) 'title'],
+      );
+    }
+    if (!(titleChanged)) return Future.value();
+    if (_deletedAtStore.value != null) {
+      throw const EntityValidationException(
+        entityType: 'TaskProject',
+        field: 'draft',
+        message: 'Deleted entities cannot be changed.',
+      );
+    }
+    if (titleChanged) {
+      if (nextTitle.trim().length < 1) {
+        throw const EntityValidationException(
+          entityType: 'TaskProject',
+          field: 'title',
+          message: 'Must contain at least 1 non-whitespace character(s).',
+        );
+      }
+      if (nextTitle.length > 80) {
+        throw const EntityValidationException(
+          entityType: 'TaskProject',
+          field: 'title',
+          message: 'Must contain at most 80 character(s).',
+        );
+      }
+    }
+    if (titleChanged) {
+      _mutationSink.validateMutationAuthorization(
+        entity: this,
+        operation: RlsOperation.update,
+        principals: const [RlsPrincipal.owner],
+      );
+    }
+    final mutationTime = _clock.nowUtc();
+    final oldTitle = _titleStore.value;
+    final previousRevision = _localRevision;
+    final mutationRevision = ++_localRevision;
+    runInAction(() {
+      if (titleChanged) {
+        _titleStore.value = nextTitle;
+      }
+    });
+    var generatedDraftPatch = TypedEntityPatch<TaskProject>.empty();
+    if (titleChanged) {
+      final fieldPatch = TaskProjectFields.title.patch(nextTitle);
+      generatedDraftPatch = generatedDraftPatch.merge(fieldPatch);
+    }
+    final syncPatch = generatedDraftPatch;
+    _generatedLocalCommit = _mutationSink.recordEntityMutation<TaskProject>(
+      entity: this,
+      patch: syncPatch,
+      syncPatch: syncPatch,
+      occurredAt: mutationTime,
+      rollbackIfCurrent: () {
+        if (_localRevision != mutationRevision) return;
+        _localRevision = previousRevision;
+        if (titleChanged) {
+          _titleStore.value = oldTitle;
+        }
+      },
+    );
+    return _generatedMutationCompletion(_generatedLocalCommit);
+  }
 
   @override
   String get generatedEntityType => 'TaskProject';
@@ -613,14 +622,25 @@ final class TaskProjectRecord extends TaskProject
   }
 }
 
+extension TaskProjectGeneratedEditing on TaskProject {
+  TaskProjectMutationDraft beginEdit() => TaskProjectMutationDraft.edit(this);
+}
+
 final class TaskProjectMutationDraft
     implements EntityMutationDraft<TaskProject> {
   TaskProjectMutationDraft.create(this._set)
     : _entity = null,
+      _baseTitle = null,
       _titleField = EntityDraftField<String>.unset();
+  TaskProjectMutationDraft.edit(TaskProject entity)
+    : _set = null,
+      _entity = entity,
+      _baseTitle = entity.title,
+      _titleField = EntityDraftField<String>.value(entity.title);
 
   final TaskProjectSet? _set;
   final TaskProject? _entity;
+  final String? _baseTitle;
   bool _consumed = false;
 
   bool get isCreating => _entity == null;
@@ -657,7 +677,16 @@ final class TaskProjectMutationDraft
       return created;
     }
     current.generatedAccess.validateGeneratedDraft();
-    await current.generatedAccess.runGeneratedTransaction(() async {});
+    await current.generatedAccess.runGeneratedTransaction(() async {
+      final generatedDraftBase = TaskProjectFields.title.patch(
+        _baseTitle as String,
+      );
+      final generatedDraftCandidate = TaskProjectFields.title.patch(title);
+      await current.generatedAccess.applyGeneratedDraft(
+        base: generatedDraftBase,
+        candidate: generatedDraftCandidate,
+      );
+    });
     _consumed = true;
     return current;
   }
@@ -812,6 +841,7 @@ final class TaskProjectSet {
   final LocalEntityQueryCache<TaskProject> _queries;
   TaskProjectMutationDraft beginCreate() =>
       TaskProjectMutationDraft.create(this);
+  TaskProjectMutationDraft beginEdit(TaskProject entity) => entity.beginEdit();
   final LocalId<Account> _ownerId;
   ReadOnlyObservableList<TaskProject> get all => _engine.all;
   Stream<TaskProject?> watchById(LocalId<TaskProject> id) =>

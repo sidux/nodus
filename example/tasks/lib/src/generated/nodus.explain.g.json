@@ -1,7 +1,7 @@
 {
   "graph": "TasksExample",
   "package": "tasks_example",
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "targets": [
     "supabase"
   ],
@@ -524,21 +524,7 @@
           "keyset": true
         }
       ],
-      "actions": [
-        {
-          "name": "rename",
-          "parameters": [
-            {
-              "name": "title",
-              "type": "String",
-              "named": true
-            }
-          ],
-          "fields": [
-            "title"
-          ]
-        }
-      ],
+      "actions": [],
       "generatedApi": {
         "set": "TaskProjectSet",
         "setAccessor": "taskProjects",

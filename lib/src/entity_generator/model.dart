@@ -153,9 +153,30 @@ final class EntitySpec {
     ),
   );
 
+  /// Declared actions whose atomic shape includes at least one field that
+  /// cannot be changed through the ordinary mutation draft.
+  List<ActionSpec> get guardedActions => [
+    for (final action in ordinaryActions)
+      if (action.targetFields.any((name) {
+        final field = fields.singleWhere((field) => field.name == name);
+        return !isDraftEditable(field);
+      }))
+        action,
+  ];
+
+  /// The action targets that activate semantic action-shape enforcement.
+  List<String> guardedActionFields(ActionSpec action) => [
+    for (final name in action.targetFields)
+      if (!isDraftEditable(fields.singleWhere((field) => field.name == name)))
+        name,
+  ];
+
   /// Ordinary scalar fields edited by the generated mutation draft.
   ///
-  /// Domain transitions and relationships stay behind their generated actions.
+  /// Domain transitions, fixed action assignments, and relationships stay
+  /// behind their generated actions. Ordinary action parameters remain
+  /// editable so a compound operation does not require a duplicate catch-all
+  /// action for normal form editing.
   /// An explicit `editable: false` keeps a creation-time fact immutable without
   /// requiring a no-op semantic action merely to communicate that policy.
   List<FieldSpec> get draftEditableFields {
@@ -173,7 +194,7 @@ final class EntitySpec {
         field.reference == null &&
         field.transitions.isEmpty &&
         !isCommandOnly(field) &&
-        !isActionTarget(field) &&
+        !isFixedActionTarget(field) &&
         field.name != EntityConventions.deletedAtFieldName &&
         field.name != EntityConventions.archivedAtFieldName &&
         field.name != EntityConventions.orderRankFieldName;

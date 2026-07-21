@@ -686,7 +686,7 @@ final class ActionPolicy {
       var managed = false;
       var valid = false;
       for (final action in actions) {
-        if (!action.fieldNames.contains(fieldName)) continue;
+        if (!action.guards(fieldName)) continue;
         managed = true;
         if (action.matches(patch, existing)) {
           valid = true;
@@ -705,10 +705,21 @@ final class ActionDefinition {
   const ActionDefinition({
     required this.fieldNames,
     this.assignments = const [],
+    this.guardedFieldNames,
   });
 
   final List<String> fieldNames;
   final List<ActionAssignment> assignments;
+
+  /// Fields that activate this action's full-shape validation.
+  ///
+  /// `null` preserves the all-fields behavior for manually authored
+  /// descriptors. Generated descriptors identify only action-exclusive fields
+  /// so ordinary draft fields can also participate in a compound action.
+  final List<String>? guardedFieldNames;
+
+  bool guards(String fieldName) =>
+      (guardedFieldNames ?? fieldNames).contains(fieldName);
 
   bool matches(JsonMap patch, JsonMap existing) =>
       fieldNames.every(patch.containsKey) &&

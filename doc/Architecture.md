@@ -1059,10 +1059,13 @@ A draft MUST be:
 Draft editability is inferred for client-authoritative, non-reference scalar
 fields on an update-capable entity. Fields owned by identity, ownership,
 timestamps, lifecycle capabilities, transitions, relationships, commands, or
-declared actions are excluded. A creation-time scalar fact on an otherwise
-editable entity uses `@Persisted(editable: false)`; a catch-all `edit(...)`
-action is forbidden boilerplate and action method names never affect draft
-generation.
+fixed action assignments are excluded. An ordinary scalar MAY also be a
+parameter of a semantic compound action without losing draft editability. If
+that action touches any excluded field, local and remote validation activate
+on the excluded field and require the action's complete atomic shape, including
+its ordinary parameters. A creation-time or otherwise action-exclusive scalar
+fact uses `@Persisted(editable: false)`; a catch-all `edit(...)` action is
+forbidden boilerplate and action method names never affect draft generation.
 
 For a creation draft, `await draft.save()` validates every required field and
 delegates to the generated set's canonical `create(...)` operation. For an edit

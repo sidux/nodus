@@ -1882,6 +1882,31 @@ void main() {
     expect(backend.record(entityId)?['status'], 'accepted');
   });
 
+  test('action policies guard only action-exclusive targets', () {
+    const policy = ActionPolicy(
+      actions: [
+        ActionDefinition(
+          fieldNames: ['title', 'reviewedAt'],
+          guardedFieldNames: ['reviewedAt'],
+          assignments: [
+            ActionAssignment.clockNow('reviewedAt', firstWriteOnly: true),
+          ],
+        ),
+      ],
+    );
+    final reviewedAt = DateTime.utc(2026, 7, 21).toIso8601String();
+
+    expect(policy.allowsPatch(const {'title': 'Draft'}, const {}), isTrue);
+    expect(policy.allowsPatch({'reviewedAt': reviewedAt}, const {}), isFalse);
+    expect(
+      policy.allowsPatch({
+        'title': 'Reviewed',
+        'reviewedAt': reviewedAt,
+      }, const {}),
+      isTrue,
+    );
+  });
+
   test('in-memory transport enforces atomic entity action shapes', () async {
     const entityId = 'a0000000-0000-7000-8000-000000000040';
     final descriptor = TestDescriptor<_Item>(

@@ -503,9 +503,11 @@ Ordinary client-authoritative scalar fields on an update-capable entity infer
 `entity.beginEdit()`, while the set generates `beginCreate()`. Both return one
 typed `<Entity>MutationDraft`; no catch-all action is declared. Identity,
 ownership, generated timestamps, lifecycle, transitions, references, commands,
-and semantic-action targets remain behind their owning generated APIs. A
-creation-time scalar fact that must stay immutable uses
-`@Persisted(editable: false)`.
+and fixed action assignments remain behind their owning generated APIs. An
+ordinary scalar may also be a semantic action parameter and stays
+draft-editable. When the action includes an exclusive target, validation still
+requires its complete atomic field shape. A creation-time or otherwise
+action-exclusive scalar fact uses `@Persisted(editable: false)`.
 The draft snapshots the inferred edit fields or holds typed creation defaults
 and unset required values; it remains a plain, non-observable value until
 `save()`. Saving rejects consumed, detached, account-switched, or disposed

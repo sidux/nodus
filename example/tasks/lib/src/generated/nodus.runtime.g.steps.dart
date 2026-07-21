@@ -1084,10 +1084,215 @@ final class Schema4 extends i0.VersionedSchema {
   );
 }
 
+final class Schema5 extends i0.VersionedSchema {
+  Schema5({required super.database}) : super(version: 5);
+  @override
+  late final List<i1.DatabaseSchemaEntity> entities = [
+    tasks,
+    taskActivities,
+    taskProjects,
+    localEntitySyncWork,
+    localEntitySyncCursor,
+    tasksProjectIdDeletedAtOrderRankIdIdx,
+    tasksProjectIdIdx,
+    tasksOwnerIdArchivedAtIdx,
+    tasksProjectIdArchivedAtDeletedAtStatusDueAtIdIdx,
+    tasksProjectIdArchivedAtDeletedAtIdIdx,
+    taskActivitiesSubjectIdOccurredAtIdx,
+    taskActivitiesOccurredAtIdx,
+    taskActivitiesSourceOperationIdIdx,
+    taskProjectsDeletedAtOrderRankIdIdx,
+    taskProjectsDeletedAtTitleIdIdx,
+    localEntityPushPatchIdx,
+    localEntitySyncReadyIdx,
+  ];
+  late final Shape0 tasks = Shape0(
+    source: i0.VersionedTable(
+      entityName: 'tasks',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: [
+        'PRIMARY KEY(id)',
+        'CHECK(length(trim(title)) >= 1)',
+        'CHECK(length(title) <= 160)',
+        'CHECK(length(description) <= 1000)',
+        'CHECK(status IN (\'todo\', \'in_progress\', \'done\'))',
+        'CHECK(priority IN (\'low\', \'normal\', \'high\'))',
+      ],
+      columns: [
+        _column_0,
+        _column_1,
+        _column_2,
+        _column_3,
+        _column_4,
+        _column_5,
+        _column_6,
+        _column_7,
+        _column_8,
+        _column_9,
+        _column_10,
+        _column_11,
+        _column_12,
+        _column_13,
+        _column_14,
+        _column_15,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape1 taskActivities = Shape1(
+    source: i0.VersionedTable(
+      entityName: 'task_activities',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: [
+        'PRIMARY KEY(id)',
+        'CHECK(length(trim(operation)) >= 1)',
+        'CHECK(length(trim(label)) >= 1)',
+        'CHECK(length(trim(source_operation_id)) >= 1)',
+        'CHECK(length(operation) <= 160)',
+        'CHECK(length(label) <= 240)',
+        'CHECK(length(source_operation_id) <= 64)',
+      ],
+      columns: [
+        _column_0,
+        _column_1,
+        _column_16,
+        _column_17,
+        _column_18,
+        _column_19,
+        _column_20,
+        _column_21,
+        _column_12,
+        _column_13,
+        _column_14,
+        _column_15,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape2 taskProjects = Shape2(
+    source: i0.VersionedTable(
+      entityName: 'task_projects',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: [
+        'PRIMARY KEY(id)',
+        'CHECK(length(trim(title)) >= 1)',
+        'CHECK(length(title) <= 80)',
+      ],
+      columns: [
+        _column_0,
+        _column_1,
+        _column_3,
+        _column_11,
+        _column_12,
+        _column_13,
+        _column_14,
+        _column_15,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape3 localEntitySyncWork = Shape3(
+    source: i0.VersionedTable(
+      entityName: 'local_entity_sync_work',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: [],
+      columns: [
+        _column_22,
+        _column_23,
+        _column_24,
+        _column_25,
+        _column_26,
+        _column_27,
+        _column_28,
+        _column_29,
+        _column_30,
+        _column_14,
+        _column_31,
+        _column_32,
+        _column_33,
+        _column_34,
+        _column_35,
+        _column_36,
+        _column_37,
+        _column_38,
+      ],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  late final Shape4 localEntitySyncCursor = Shape4(
+    source: i0.VersionedTable(
+      entityName: 'local_entity_sync_cursor',
+      withoutRowId: false,
+      isStrict: false,
+      tableConstraints: ['PRIMARY KEY(sync_target)'],
+      columns: [_column_23, _column_39],
+      attachedDatabase: database,
+    ),
+    alias: null,
+  );
+  final i1.Index tasksProjectIdDeletedAtOrderRankIdIdx = i1.Index(
+    'tasks_project_id_deleted_at_order_rank_id_idx',
+    'CREATE INDEX tasks_project_id_deleted_at_order_rank_id_idx ON tasks (project_id, deleted_at, order_rank, id)',
+  );
+  final i1.Index tasksProjectIdIdx = i1.Index(
+    'tasks_project_id_idx',
+    'CREATE INDEX tasks_project_id_idx ON tasks (project_id)',
+  );
+  final i1.Index tasksOwnerIdArchivedAtIdx = i1.Index(
+    'tasks_owner_id_archived_at_idx',
+    'CREATE INDEX tasks_owner_id_archived_at_idx ON tasks (owner_id, archived_at)',
+  );
+  final i1.Index tasksProjectIdArchivedAtDeletedAtStatusDueAtIdIdx = i1.Index(
+    'tasks_project_id_archived_at_deleted_at_status_due_at_id_idx',
+    'CREATE INDEX tasks_project_id_archived_at_deleted_at_status_due_at_id_idx ON tasks (project_id, archived_at, deleted_at, status, due_at, id)',
+  );
+  final i1.Index tasksProjectIdArchivedAtDeletedAtIdIdx = i1.Index(
+    'tasks_project_id_archived_at_deleted_at_id_idx',
+    'CREATE INDEX tasks_project_id_archived_at_deleted_at_id_idx ON tasks (project_id, archived_at, deleted_at, id)',
+  );
+  final i1.Index taskActivitiesSubjectIdOccurredAtIdx = i1.Index(
+    'task_activities_subject_id_occurred_at_idx',
+    'CREATE INDEX task_activities_subject_id_occurred_at_idx ON task_activities (subject_id, occurred_at)',
+  );
+  final i1.Index taskActivitiesOccurredAtIdx = i1.Index(
+    'task_activities_occurred_at_idx',
+    'CREATE INDEX task_activities_occurred_at_idx ON task_activities (occurred_at)',
+  );
+  final i1.Index taskActivitiesSourceOperationIdIdx = i1.Index(
+    'task_activities_source_operation_id_idx',
+    'CREATE UNIQUE INDEX task_activities_source_operation_id_idx ON task_activities (source_operation_id)',
+  );
+  final i1.Index taskProjectsDeletedAtOrderRankIdIdx = i1.Index(
+    'task_projects_deleted_at_order_rank_id_idx',
+    'CREATE INDEX task_projects_deleted_at_order_rank_id_idx ON task_projects (deleted_at, order_rank, id)',
+  );
+  final i1.Index taskProjectsDeletedAtTitleIdIdx = i1.Index(
+    'task_projects_deleted_at_title_id_idx',
+    'CREATE INDEX task_projects_deleted_at_title_id_idx ON task_projects (deleted_at, title, id)',
+  );
+  final i1.Index localEntityPushPatchIdx = i1.Index(
+    'local_entity_push_patch_idx',
+    'CREATE INDEX local_entity_push_patch_idx ON local_entity_sync_work (sync_target, entity_type, entity_id, id) WHERE direction = \'push\' AND kind = \'statePatch\' AND status = \'pending\'',
+  );
+  final i1.Index localEntitySyncReadyIdx = i1.Index(
+    'local_entity_sync_ready_idx',
+    'CREATE INDEX local_entity_sync_ready_idx ON local_entity_sync_work (sync_target, status, next_attempt_at, direction, id)',
+  );
+}
+
 i0.MigrationStepWithVersion migrationSteps({
   required Future<void> Function(i1.Migrator m, Schema2 schema) from1To2,
   required Future<void> Function(i1.Migrator m, Schema3 schema) from2To3,
   required Future<void> Function(i1.Migrator m, Schema4 schema) from3To4,
+  required Future<void> Function(i1.Migrator m, Schema5 schema) from4To5,
 }) {
   return (currentVersion, database) async {
     switch (currentVersion) {
@@ -1106,6 +1311,11 @@ i0.MigrationStepWithVersion migrationSteps({
         final migrator = i1.Migrator(database, schema);
         await from3To4(migrator, schema);
         return 4;
+      case 4:
+        final schema = Schema5(database: database);
+        final migrator = i1.Migrator(database, schema);
+        await from4To5(migrator, schema);
+        return 5;
       default:
         throw ArgumentError.value('Unknown migration from $currentVersion');
     }
@@ -1116,10 +1326,12 @@ i1.OnUpgrade stepByStep({
   required Future<void> Function(i1.Migrator m, Schema2 schema) from1To2,
   required Future<void> Function(i1.Migrator m, Schema3 schema) from2To3,
   required Future<void> Function(i1.Migrator m, Schema4 schema) from3To4,
+  required Future<void> Function(i1.Migrator m, Schema5 schema) from4To5,
 }) => i0.VersionedSchema.stepByStepHelper(
   step: migrationSteps(
     from1To2: from1To2,
     from2To3: from2To3,
     from3To4: from3To4,
+    from4To5: from4To5,
   ),
 );

@@ -1128,7 +1128,7 @@ Future<EntitySpec?> parseEntityAsset(
     throw InvalidGenerationSourceError(
       '`${invalidDraftOverride.name}` cannot be draft-editable. Identity, '
       'ownership, infrastructure, lifecycle, transition, relationship, and '
-      'action-owned fields must change through their generated capability or '
+      'fixed-action fields must change through their generated capability or '
       'action.',
       element: classElement,
     );

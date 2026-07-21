@@ -405,6 +405,7 @@ final class Account {}
             contains('set title(String value)'),
             contains('final EntityDraftField<String?> _descriptionField;'),
             contains('final EntityDraftField<int> _priorityField;'),
+            contains('final EntityDraftField<DateTime?> _reviewedAtField;'),
           ]),
         ),
       },
@@ -449,7 +450,7 @@ final class Account {}
     },
   );
 
-  test('rejects draft editability on action-owned fields', () async {
+  test('rejects draft editability on fixed-action fields', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
@@ -458,8 +459,8 @@ abstract class Note implements OwnedBy<Note, Account> {
   @Persisted(editable: true)
   abstract final String title;
 
-  @Action()
-  Future<void> rename({required String title});
+  @Action(values: [ActionValue(#title, 'Untitled')])
+  Future<void> resetTitle();
 }
 
 final class Account {}
@@ -475,6 +476,66 @@ final class Account {}
     expect(
       result.errors.join('\n'),
       contains('`title` cannot be draft-editable'),
+    );
+  });
+
+  test('keeps ordinary action parameters draft-editable while guarding the '
+      'exclusive action shape', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Note implements OwnedBy<Note, Account> {
+  abstract final String title;
+
+  @Persisted(editable: false)
+  abstract final DateTime? reviewedAt;
+
+  @Action(values: [ActionValue.clockNow(#reviewedAt)])
+  Future<void> recordReview({required String title});
+}
+
+final class Account {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/note.entity.g.dart': decodedMatches(
+          allOf([
+            contains('NoteMutationDraft beginEdit()'),
+            contains('final EntityDraftField<String> _titleField;'),
+            isNot(contains('_baseReviewedAt')),
+            contains("fieldNames: const ['title', 'reviewedAt']"),
+            contains("guardedFieldNames: const ['reviewedAt']"),
+          ]),
+        ),
+      },
+    );
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            contains("p_patch ? 'reviewedAt'"),
+            isNot(contains("p_patch ? 'title'\n     and not")),
+            contains("p_patch ?& array['title', 'reviewedAt']::text[]"),
+          ]),
+        ),
+      },
     );
   });
 

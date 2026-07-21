@@ -145,6 +145,7 @@ final class TaskDescriptor
     actions: [
       ActionDefinition(
         fieldNames: const ['status', 'completedAt'],
+        guardedFieldNames: const ['status', 'completedAt'],
         assignments: [
           ActionAssignment.literal('status', 'in_progress'),
           ActionAssignment.clear('completedAt'),
@@ -152,6 +153,7 @@ final class TaskDescriptor
       ),
       ActionDefinition(
         fieldNames: const ['status', 'completedAt'],
+        guardedFieldNames: const ['status', 'completedAt'],
         assignments: [
           ActionAssignment.literal('status', 'done'),
           ActionAssignment.clockNow('completedAt', firstWriteOnly: true),
@@ -159,6 +161,7 @@ final class TaskDescriptor
       ),
       ActionDefinition(
         fieldNames: const ['status', 'completedAt'],
+        guardedFieldNames: const ['status', 'completedAt'],
         assignments: [
           ActionAssignment.literal('status', 'todo'),
           ActionAssignment.clear('completedAt'),
@@ -166,12 +169,14 @@ final class TaskDescriptor
       ),
       ActionDefinition(
         fieldNames: const ['archivedAt'],
+        guardedFieldNames: const ['archivedAt'],
         assignments: [
           ActionAssignment.clockNow('archivedAt', firstWriteOnly: true),
         ],
       ),
       ActionDefinition(
         fieldNames: const ['archivedAt'],
+        guardedFieldNames: const ['archivedAt'],
         assignments: [ActionAssignment.clear('archivedAt')],
       ),
     ],

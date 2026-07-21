@@ -1,6 +1,6 @@
 // GENERATED FILE. DO NOT EDIT.
 // Source: package:tasks_example/nodus.lock
-// Schema fingerprint: 4339b886eceaee9d143ba7702ddd3f5957ec986062a084e93960ccfedbd4fb6b
+// Schema fingerprint: d762aed39721e02cc88ac78486bc759193dff7a08514b6fe527c847ccc3f1c31
 
 export 'package:nodus/nodus_flutter.dart';
 export 'src/generated/nodus.runtime.g.dart';

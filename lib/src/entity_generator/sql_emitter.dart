@@ -2890,17 +2890,14 @@ String _fieldUpdateAuthorizationSql(EntitySpec spec) {
 }
 
 String _actionValidationSql(EntitySpec spec) {
-  if (spec.ordinaryActions.isEmpty) return '';
+  if (spec.guardedActions.isEmpty) return '';
   final sections = <String>[];
   final actionFields =
-      spec.ordinaryActions
-          .expand((action) => action.targetFields)
-          .toSet()
-          .toList()
+      spec.guardedActions.expand(spec.guardedActionFields).toSet().toList()
         ..sort();
   for (final fieldName in actionFields) {
-    final matchingActions = spec.ordinaryActions.where(
-      (action) => action.targetFields.contains(fieldName),
+    final matchingActions = spec.guardedActions.where(
+      (action) => spec.guardedActionFields(action).contains(fieldName),
     );
     final allowed = matchingActions
         .map((action) {

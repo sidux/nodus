@@ -341,7 +341,7 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
       'EntityDescriptor<${spec.className}, $recordName>, '
       'EntityIdentityDescriptor<${spec.className}>'
       '${uniqueIndexes.isEmpty ? '' : ', EntityUniqueConstraintDescriptor'}'
-      '${spec.ordinaryActions.isEmpty ? '' : ', ActionPolicyProvider'}'
+      '${spec.guardedActions.isEmpty ? '' : ', ActionPolicyProvider'}'
       '${spec.hasOrderedCapability ? ', OrderedDescriptor' : ''}'
       '${spec.hasActivityTrackedCapability ? ', ActivityTrackedEntityDescriptor' : ''}'
       '${spec.isActivityEntry ? ', ActivityEntryEntityDescriptor' : ''} {',
@@ -509,7 +509,7 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
       ..writeln('  ];')
       ..writeln();
   }
-  if (spec.ordinaryActions.isNotEmpty) {
+  if (spec.guardedActions.isNotEmpty) {
     final initialFields = spec.fields.where(
       (field) =>
           spec.isFixedActionTarget(field) &&
@@ -523,10 +523,14 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
         'ActionPolicy(',
       )
       ..writeln('    actions: [');
-    for (final action in spec.ordinaryActions) {
+    for (final action in spec.guardedActions) {
       buffer
         ..writeln('      ActionDefinition(')
         ..writeln('        fieldNames: ${_dartLiteral(action.targetFields)},')
+        ..writeln(
+          '        guardedFieldNames: '
+          '${_dartLiteral(spec.guardedActionFields(action))},',
+        )
         ..writeln('        assignments: [');
       for (final assignment in action.assignments) {
         final field = spec.fields.singleWhere(

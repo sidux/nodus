@@ -18,6 +18,9 @@
 - Infers ordinary edit-draft fields without a catch-all action, merges
   non-overlapping concurrent drafts over current state, reports overlapping
   fields through a typed conflict, and treats unchanged saves as durable no-ops.
+- Keeps ordinary scalar action parameters draft-editable while enforcing the
+  complete atomic action shape whenever a transition, fixed assignment,
+  relationship, or explicitly action-exclusive field activates it.
 - Enables row-level security on the generated internal remote change log in
   addition to revoking direct API-role privileges.
 - Removes the legacy handwritten `@EntityGraph` setup path. Package discovery
