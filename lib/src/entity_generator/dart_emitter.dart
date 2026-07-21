@@ -1638,9 +1638,11 @@ void _emitCrossFieldValidations(
     final otherValue = '(${valueFor(other)})';
     late final String condition;
     if (field.nullable || other.nullable) {
-      final candidateValue = 'candidate${field.capitalizedName}';
+      final candidateValue =
+          '_generatedCrossField${field.capitalizedName}Value';
       final candidateOther =
-          'candidate${other.capitalizedName}For${field.capitalizedName}';
+          '_generatedCrossField${other.capitalizedName}For'
+          '${field.capitalizedName}Value';
       buffer
         ..writeln('$indent final $candidateValue = $value;')
         ..writeln('$indent final $candidateOther = $otherValue;');
@@ -1669,9 +1671,11 @@ void _emitCrossFieldValidations(
     final otherValue = '(${valueFor(other)})';
     late final String condition;
     if (field.nullable || other.nullable) {
-      final candidateValue = 'candidate${field.capitalizedName}';
+      final candidateValue =
+          '_generatedCrossField${field.capitalizedName}Value';
       final candidateOther =
-          'candidate${other.capitalizedName}For${field.capitalizedName}';
+          '_generatedCrossField${other.capitalizedName}For'
+          '${field.capitalizedName}Value';
       buffer
         ..writeln('$indent final $candidateValue = $value;')
         ..writeln('$indent final $candidateOther = $otherValue;');

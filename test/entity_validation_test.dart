@@ -1456,9 +1456,9 @@ final class Account {}
           'nodus|lib/note.entity.g.dart': decodedMatches(
             allOf([
               contains("'CHECK (maximum >= minimum)'"),
-              contains('candidateMaximum != null &&'),
-              contains('candidateMinimumForMaximum != null &&'),
-              contains('candidateMaximum < candidateMinimumForMaximum'),
+              contains('_generatedCrossFieldMaximumValue != null &&'),
+              contains('_generatedCrossFieldMinimumForMaximumValue != null &&'),
+              contains('_generatedCrossFieldMaximumValue <'),
               contains(
                 "message: 'Must be greater than or equal to `minimum`.'",
               ),
@@ -1512,21 +1512,20 @@ final class Account {}
         outputs: {
           'nodus|lib/note.entity.g.dart': decodedMatches(
             allOf([
+              contains('final _generatedCrossFieldEndMinutesValue ='),
               contains(
-                'final candidateEndMinutes = '
-                '(hasEndMinutes ? remoteEndMinutes : endMinutes);',
+                'final _generatedCrossFieldStartMinutesForEndMinutesValue =',
               ),
-              contains(
-                'final candidateStartMinutesForEndMinutes = '
-                '(hasStartMinutes',
-              ),
+              contains('(hasEndMinutes ? remoteEndMinutes : endMinutes)'),
+              contains('(hasStartMinutes'),
               contains('? remoteStartMinutes'),
               contains(': startMinutes);'),
-              contains('candidateEndMinutes != null &&'),
-              contains('candidateStartMinutesForEndMinutes != null &&'),
+              contains('_generatedCrossFieldEndMinutesValue != null &&'),
               contains(
-                'candidateEndMinutes <= candidateStartMinutesForEndMinutes',
+                '_generatedCrossFieldStartMinutesForEndMinutesValue != '
+                'null &&',
               ),
+              contains('_generatedCrossFieldEndMinutesValue <='),
               contains(
                 "'CHECK (end_minutes IS NULL OR start_minutes IS NOT NULL)'",
               ),
