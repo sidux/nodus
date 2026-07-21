@@ -10,6 +10,41 @@ import 'package:nodus/nodus_flutter.dart';
 import 'package:mobx/mobx.dart';
 
 void main() {
+  test('observed query groups fold lifecycle without copying typed items', () {
+    final source = ObservableList<int>.of([1]);
+    final cache = LocalEntityQueryCache<int>(
+      source: ReadOnlyObservableList(source),
+    );
+    addTearDown(cache.dispose);
+    final first = cache.acquire(EntityQuerySpec<int>());
+    final second = cache.acquire(EntityQuerySpec<int>());
+    addTearDown(first.dispose);
+    addTearDown(second.dispose);
+
+    final loading = ObservedEntityQueryGroup([
+      ObservedEntityQuery(first, const EntityQueryInitialLoading<int>()),
+      ObservedEntityQuery(
+        second,
+        const EntityQueryData<int>(items: [1], hasMore: false),
+      ),
+    ]);
+    expect(loading.isInitialLoading, isTrue);
+    expect(loading.failure, isNull);
+
+    final error = StateError('query failed');
+    final failed = ObservedEntityQueryGroup([
+      ObservedEntityQuery(
+        first,
+        EntityQueryFailure<int>(error: error, items: const [], hasMore: false),
+      ),
+      ObservedEntityQuery(
+        second,
+        const EntityQueryData<int>(items: [1], hasMore: false),
+      ),
+    ]);
+    expect(failed.failure, same(error));
+  });
+
   testWidgets(
     'Given a generated list hook, When its widget unmounts, Then its lease is disposed',
     (tester) async {

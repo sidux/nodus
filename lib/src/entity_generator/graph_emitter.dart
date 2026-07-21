@@ -37,7 +37,9 @@ String emitEntityGraph(
     buffer.writeln("import 'package:drift/native.dart';");
   }
   if (usesManagedFlutterRuntime) {
-    buffer.writeln("import 'package:nodus/nodus_flutter.dart';");
+    buffer
+      ..writeln("import 'package:flutter/widgets.dart' hide Table;")
+      ..writeln("import 'package:nodus/nodus_flutter.dart';");
     if (canOpenSupabase) {
       buffer
         ..writeln("import 'package:nodus/nodus_supabase.dart';")
@@ -278,12 +280,55 @@ String emitEntityGraph(
     databaseName,
     usesManagedFlutterRuntime: usesManagedFlutterRuntime,
   );
+  if (usesManagedFlutterRuntime) _emitTypedGraphScope(buffer, graph);
   _emitGraphLists(buffer, graph);
   _emitGraphLookups(buffer, graph);
   _emitGraphRelationships(buffer, graph);
   return DartFormatter(
     languageVersion: DartFormatter.latestLanguageVersion,
   ).format(buffer.toString());
+}
+
+void _emitTypedGraphScope(StringBuffer buffer, EntityGraphSpec graph) {
+  final graphName = '${graph.className}EntityGraph';
+  final scopeName = '${graph.className}EntityGraphScope';
+  final contextExtension = '${graph.className}EntityGraphBuildContext';
+  final prefix = lowerCamelCase(graph.className);
+  final account = graph.accountClassName;
+  buffer
+    ..writeln()
+    ..writeln('final class $scopeName extends StatelessWidget {')
+    ..writeln('  const $scopeName({')
+    ..writeln('    required this.session,')
+    ..writeln('    required this.child,')
+    ..writeln('    super.key,')
+    ..writeln('  });')
+    ..writeln(
+      '  final AccountEntityGraphSession<$graphName, $account> session;',
+    )
+    ..writeln('  final Widget child;')
+    ..writeln('  @override')
+    ..writeln('  Widget build(BuildContext context) =>')
+    ..writeln('      AccountEntityGraphScope<$graphName, $account>(')
+    ..writeln('        session: session, child: child,')
+    ..writeln('      );')
+    ..writeln('}')
+    ..writeln()
+    ..writeln('extension $contextExtension on BuildContext {')
+    ..writeln(
+      '  AccountEntityGraphSessionState<$graphName, $account> get '
+      '${prefix}EntityGraphState => AccountEntityGraphScope.stateOf<$graphName, $account>(this);',
+    )
+    ..writeln(
+      '  AccountEntityGraphReady<$graphName, $account>? get '
+      '${prefix}EntityGraphReady => AccountEntityGraphScope.maybeReadyOf<$graphName, $account>(this);',
+    )
+    ..writeln(
+      '  AccountEntityGraphSession<$graphName, $account> get '
+      '${prefix}EntityGraphSession => AccountEntityGraphScope.sessionOf<$graphName, $account>(this);',
+    )
+    ..writeln('}')
+    ..writeln();
 }
 
 void _emitCoIdentityConversions(StringBuffer buffer, EntityGraphSpec graph) {

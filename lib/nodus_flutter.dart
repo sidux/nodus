@@ -287,6 +287,68 @@ final class ObservedEntityQuery<E> {
   };
 }
 
+/// One lifecycle summary for several independently typed observed queries.
+///
+/// Items remain on their concrete [ObservedEntityQuery] values; this group owns
+/// only shared loading, refresh, and failure presentation so screens do not
+/// rebuild a parallel state model or hand-fold the same sealed states.
+final class ObservedEntityQueryGroup {
+  ObservedEntityQueryGroup(Iterable<ObservedEntityQuery<dynamic>> queries)
+    : queries = List.unmodifiable(queries);
+
+  final List<ObservedEntityQuery<dynamic>> queries;
+
+  bool get isInitialLoading =>
+      queries.any((query) => query.state is EntityQueryInitialLoading<dynamic>);
+
+  bool get isRefreshing =>
+      queries.any((query) => query.state is EntityQueryStaleData<dynamic>);
+
+  Object? get failure {
+    for (final query in queries) {
+      if (query.state case EntityQueryFailure<dynamic>(
+        :final error,
+        :final items,
+      ) when items.isEmpty) {
+        return error;
+      }
+    }
+    return null;
+  }
+
+  Object? get refreshError {
+    for (final query in queries) {
+      if (query.state case EntityQueryFailure<dynamic>(
+        :final error,
+        :final items,
+      ) when items.isNotEmpty) {
+        return error;
+      }
+    }
+    return null;
+  }
+
+  Future<void> refresh() =>
+      Future.wait([for (final query in queries) query.refresh()]);
+
+  Widget when({
+    required Widget Function() loading,
+    required Widget Function(
+      bool refreshing,
+      Object? refreshError,
+      Future<void> Function() refresh,
+    )
+    data,
+    required Widget Function(Object error, Future<void> Function() retry)
+    failure,
+  }) {
+    final blockingFailure = this.failure;
+    if (blockingFailure != null) return failure(blockingFailure, refresh);
+    if (isInitialLoading) return loading();
+    return data(isRefreshing, refreshError, refresh);
+  }
+}
+
 ObservedEntityQuery<E> useObservedEntityQuery<E>(
   LocalEntityQuery<E> Function() acquire, {
   List<Object?> keys = const [],
