@@ -6,84 +6,54 @@
 
 ![Nodus: one graph becomes every application layer](assets/nodus-overview.png)
 
-> Flutter made multiplatform UI simpler. Nodus takes the next step.
+**A local-first application compiler for Flutter.**
 
-Flutter lets teams share an interface and much of their application code across
-platforms. The product behind that interface is still too often restated in
-reactive state, local tables, API models, synchronization logic, backend
-constraints and permissions, routes, and test doubles. Those copies can drift
-even when the widgets are shared.
+Nodus turns typed Dart entity declarations into the infrastructure that usually
+has to be repeated by hand: observable domain objects, local persistence,
+queries, migrations, durable synchronization, backend schema and security, and
+production-backed test utilities.
 
-Nodus builds on Flutter's multiplatform foundation with a local-first
-application compiler. You declare one typed product model; Nodus resolves it
-into a canonical graph and generates the account-scoped entities, reactive
-state, mutation drafts, Drift persistence, durable synchronization, backend
-schema and security, typed queries, file-based routes, and a real in-memory test
-harness.
+The goal is simple: describe the product model once, keep it usable as ordinary
+Dart, and generate the mechanical layers from the same resolved meaning.
 
-The result is more than one UI codebase: it is one product meaning carried
-coherently through the application layers that must behave the same on every
-platform. **Vibe coding needs rails, too.** The same typed boundary gives people
-and coding agents a smaller surface to edit and deterministic infrastructure to
-inspect, regenerate, and test.
+> **Project status:** Nodus is at `0.1.0` and is not yet published on pub.dev.
+> It is ready for evaluation and new applications, but the API may change before
+> `1.0.0`.
 
-Nodus is currently at `0.1.0`. It is ready for evaluation and new applications,
-but its API may evolve before `1.0.0`. The package is not on pub.dev yet.
+## Why Nodus
 
-## From one multiplatform UI to one multiplatform system
+A Flutter application can share its UI across platforms while still duplicating
+the same model in many places: state objects, SQLite tables, API payloads,
+validation, synchronization code, backend policies, and test doubles. Those
+copies inevitably drift.
+
+Nodus replaces that duplication with a compiler-owned entity graph:
 
 ```mermaid
 flowchart LR
-  subgraph Intent["Handwritten intent"]
-    E["@Entity domain types"]
-    P["Filesystem pages"]
-    L["nodus.lock"]
-  end
-
+  E["Dart entity declarations<br/>fields · relationships · constraints · actions"]
+  K["nodus.lock<br/>target · schema version · fingerprint"]
   C["Nodus compiler"]
-  D["EntityGraphDefinition"]
-
-  subgraph Generated["Generated application boundary"]
-    A["Typed Dart APIs"]
-    DB["Drift schema + migrations"]
-    PG["PostgreSQL + RLS + sync protocol"]
-    R["Typed routes"]
-    T["In-memory test harness"]
-  end
 
   E --> C
-  P --> C
-  L --> C
-  C --> D
-  D --> A
-  D --> DB
-  D --> PG
-  D --> R
-  D --> T
+  K --> C
+
+  C --> A["Typed EntityGraph<br/>entities · drafts · queries · MobX state"]
+  C --> L["Local runtime<br/>Drift · migrations · durable work queue"]
+  C --> R["Remote contract<br/>Supabase schema · RLS · sync protocol"]
+  C --> T["Test harness<br/>real runtime · in-memory backend"]
 ```
 
-The resolved `EntityGraphDefinition` is the single compiler intermediate
-representation. Emitters consume resolved facts; they do not reinterpret
-annotations independently. At runtime, one stable MobX identity represents an
-entity while Drift owns accepted state, optimistic projection, pending
-operations, conflicts, cursors, and retryable work.
-
-That is also the AI-assisted development boundary: the agent edits concise
-domain intent; the compiler expands it consistently across every layer; stale
-output, invalid inference, schema drift, type errors, and behavioral regressions
-fail executable gates. This does not make generated code automatically correct.
-It makes more of the system derivable, reviewable, and falsifiable. See the
-[evidence and claim boundaries](https://github.com/sidux/nodus/blob/main/doc/ai-assisted-development.md).
+Your entity declarations remain the public domain types. Nodus resolves them
+once into an `EntityGraphDefinition`; entity, storage, and synchronization
+emitters consume that definition instead of independently interpreting
+annotations.
 
 ## Quick start
 
-Add Nodus after its pub.dev release:
+### 1. Add the package
 
-```sh
-flutter pub add nodus
-```
-
-Until then, use the Git repository:
+Until the pub.dev release, depend on the Git repository:
 
 ```yaml
 dependencies:
@@ -93,7 +63,11 @@ dependencies:
       ref: main
 ```
 
-Declare entities below `lib/**/domain/`:
+Then run `flutter pub get`.
+
+### 2. Declare an entity
+
+Place each entity in a `domain/` directory under `lib/`:
 
 ```dart
 import 'package:nodus/nodus.dart';
@@ -104,7 +78,7 @@ enum TaskStatus { todo, done }
 
 @Entity()
 abstract class Task
-    implements OwnedBy<Task, Account>, SoftDeletable, Archivable {
+    implements OwnedBy<Task, Account>, Archivable, SoftDeletable {
   @Persisted(minLength: 1, maxLength: 160)
   abstract final String title;
 
@@ -116,28 +90,42 @@ abstract class Task
 
   bool get isCompleted => status == TaskStatus.done;
 
-  @Action()
-  Future<void> edit({required String title});
-
   @Action(values: [ActionValue(#status, TaskStatus.done)])
   Future<void> complete();
 }
 ```
 
-Initialize the graph after the first entity declaration:
+Fields and annotations express persisted intent. Getters and pure business
+logic remain ordinary handwritten Dart on the same generated, observable
+`Task` identity.
+
+### 3. Initialize and generate
+
+From the application root, choose the default remote target:
 
 ```sh
 dart run nodus init --target supabase
 ```
 
-Nodus discovers the package, creates the reviewed `nodus.lock`, and emits one
-public `lib/nodus.g.dart` facade:
+Nodus discovers the entities, creates the reviewed `nodus.lock`, configures
+generation, and emits the public `lib/nodus.g.dart` facade.
+
+### 4. Use the generated graph
+
+For a local development session:
 
 ```dart
+import 'package:my_app/nodus.g.dart';
+
+final entityGraph = await MyAppEntityGraph.openInMemory(
+  accountId: LocalId<Account>('00000000-0000-0000-0000-000000000001'),
+  autoSync: false,
+);
+
 final task = await entityGraph.tasks.create(title: 'Ship Nodus');
 
 final draft = task.beginEdit()..title = 'Publish Nodus';
-await draft.save(); // Local state and durable sync intent are now committed.
+await draft.save();
 await task.complete();
 
 final openTasks = TaskList.all(
@@ -146,255 +134,88 @@ final openTasks = TaskList.all(
 );
 ```
 
-## Add custom code without rebuilding Nodus
+`create`, `draft.save()`, and actions commit local state atomically. For an
+entity that synchronizes, the same transaction also records durable work for
+the configured remote target; it does not block on the network.
 
-Nodus generates mechanics; application code still owns product decisions,
-presentation, and irreducible integrations. Put custom code at the narrowest
-boundary that owns its meaning:
+The reference app shows the complete
+[Supabase authentication and graph bootstrap](https://github.com/sidux/nodus/blob/main/example/tasks/lib/app_bootstrap.dart).
 
-| Need | Put the custom code here | Do not add |
-| --- | --- | --- |
-| A computed value or single-entity decision | A pure getter or method on the handwritten entity | A view model or service that copies entity fields |
-| Business vocabulary for a selection | A pure function returning generated predicates or ordering | A repository that executes or caches the query |
-| A normal create, edit, transition, relationship, or lifecycle change | The generated entity, draft, set, or list API | CRUD services, command handlers, or DTO mapping |
-| Ephemeral widget interaction | Local widget state or Flutter Hooks | Application-wide state for focus, forms, or animation |
-| Account lifecycle or a real external capability | Constructor/inherited-scope injection and, when stateful, a narrow MobX owner | A container that republishes Nodus entities or query state |
-| An online-only API, device, payment, or file operation | A typed stateless `Client` or `Gateway`, called from an entity-named operation | A `Repository`, service locator, entity cache, or direct remote entity write |
-| Another synchronization backend | A `SyncConnector` and the smallest generated adapter capability | Feature-selected adapters or handwritten entity routing |
+## What Nodus generates
 
-The `isCompleted` getter in the declaration above is ordinary handwritten Dart.
-The generated record inherits it, so callers use it on the same stable,
-MobX-observable `Task` identity:
-
-```dart
-if (!task.isCompleted) {
-  await task.complete();
-}
-```
-
-A reusable selection adds business vocabulary while Nodus continues to own the
-query, paging, observation, and cache lease:
-
-```dart
-EntityPredicate<Task> openTaskPredicate() =>
-    TaskFields.status.equals(TaskStatus.todo);
-
-final openTasks = TaskList.all(
-  entityGraph,
-  where: openTaskPredicate(),
-);
-```
-
-For irreducible online work, keep the returned boundary value minimal and
-commit any resulting entity change through the generated API. For example, an
-application-layer file can attach one explicitly named integration to the
-entity receiver:
-
-```dart
-import 'package:my_app/nodus.g.dart';
-
-abstract interface class TaskSummaryClient {
-  Future<String> summarize(String text);
-}
-
-extension TaskSummarization on Task {
-  Future<void> summarizeWith(TaskSummaryClient client) async {
-    final source = description;
-    if (source == null || source.trim().isEmpty) return;
-
-    final summary = await client.summarize(source);
-    final draft = beginEdit()..description = summary;
-    await draft.save();
-  }
-}
-```
-
-That exception can produce this feature shape:
-
-```text
-features/tasks/
-  domain/task.dart                              # Entity + pure decisions
-  application/task_summarization.dart           # Narrow external workflow
-  infrastructure/http_task_summary_client.dart  # Protocol adapter
-  presentation/...                              # Observes Task directly
-```
-
-The `application/` directory is not mandatory. Ordinary entity operations need
-none of it; it exists here only because an external request must be coordinated.
-There is still no task repository, CRUD service, DTO copy, query-state provider,
-or synchronization facade.
-
-Inject the `TaskSummaryClient` implementation at the application boundary; its
-HTTP adapter belongs in infrastructure. It must not load, cache, serialize, or
-synchronize `Task` itself. The network request is online-only, while
-`draft.save()` retains Nodus's local durability and synchronization semantics.
-If progress, retry, cancellation, audit, or offline execution is product state,
-model that work as a declared entity-owned process or projection instead of
-hiding it in a service.
-
-For custom transport code, the generated graph remains the composition root:
-
-```dart
-final graph = await ApplicationEntityGraph.openRestApi(
-  accountId: accountId,
-  connector: (context) => RestApiAdapter(
-    client: restApiClient,
-    definition: context.definition,
-  ),
-);
-```
-
-The adapter translates Nodus push/pull contracts only. The generated target
-definition supplies entity descriptors and routing, so the adapter never
-declares application entities or chooses their destination. See
-[Custom connectors](doc/capabilities.md#custom-connectors) for the complete
-adapter contract and the
-[artifact decision rules](doc/Architecture.md#2-artifact-decision-rules) when
-deciding whether custom code should exist at all.
-
-## One declaration, several schemas
-
-The `Task` declaration above is not just a Dart model. It becomes a consistent
-set of typed and physical schemas:
-
-| Boundary | Derived artifact |
+| Boundary | Generated result |
 | --- | --- |
-| Domain | Handwritten `Task` plus generated private implementation |
-| Mutation | Typed `create`, `beginEdit`, action, archive, delete, and restore APIs |
-| Local data | Drift table, constraints, indexes, migration strategy, and observable identity |
-| Remote data | PostgreSQL table, native scalar columns, checks, indexes, grants, and RLS |
-| Protocol | Typed codecs, versioned patches, push functions, pull history, and receipts |
-| Query | Typed fields, predicates, ordering, paging, named lists, and lookups |
-| Test | Real in-memory database, generated descriptors, clock, IDs, and sync backend |
+| Domain API | Stable typed entities, nominal IDs, sets, drafts, actions, relationships, and lifecycle operations |
+| Reactive state | Precise MobX observation on the same entity identities used by domain code |
+| Local data | Drift tables, constraints, indexes, migrations, paging, and durable operation state |
+| Synchronization | Typed codecs, target routing, retry, idempotency, cursors, conflict rebase, and recovery |
+| Supabase | PostgreSQL schema, native columns, checks, indexes, grants, RLS, push functions, and pull history |
+| Queries | Typed fields, predicates, ordering, lookups, inverse relationships, and bounded or keyset-paged lists |
+| Navigation (optional) | Typed GoRouter locations generated from route definition files |
+| Testing | An in-memory graph harness backed by the production descriptors and runtime |
 
-A simplified generated PostgreSQL shape looks like this:
+Generated files are reviewable artifacts, but they are never edited manually.
+Change the declaration, then regenerate.
 
-```sql
-create table if not exists public.tasks (
-  id uuid primary key,
-  owner_id uuid not null references auth.users (id) on delete cascade,
-  title text not null
-    check (char_length(btrim(title)) >= 1)
-    check (char_length(title) <= 160),
-  status text not null default 'todo'
-    check (status in ('todo', 'done')),
-  archived_at timestamptz,
-  deleted_at timestamptz,
-  server_version bigint not null default 1
-);
+## Local-first by construction
 
-alter table public.tasks enable row level security;
-
-create policy tasks_select_owner
-on public.tasks for select to authenticated
-using ((select auth.uid()) = owner_id);
-```
-
-The real emitter additionally generates locked push functions, durable
-operation receipts, ordered pull history, collaboration visibility, realtime
-wake-up hints, and target-specific migration artifacts when those capabilities
-are present.
-
-## Local-first mutation semantics
+Drift is the durable local source of truth. Flutter reads stable entity
+identities immediately; synchronization is retryable background work against a
+named remote target.
 
 ```mermaid
-sequenceDiagram
-  participant UI as Flutter UI
-  participant E as Stable entity identity
-  participant D as Drift transaction
-  participant Q as Durable work queue
-  participant S as Sync adapter
+flowchart LR
+  UI["Flutter UI"]
+  G["Generated EntityGraph<br/>typed API + MobX identities"]
+  D["Drift<br/>local state + pending operations"]
+  W["Sync worker<br/>generated protocol + target adapter"]
+  B["Remote target<br/>Supabase today or a custom backend"]
 
-  UI->>E: await draft.save()
-  E->>E: Apply optimistic MobX state
-  E->>D: Persist projection + operation atomically
-  D->>Q: Commit durable sync intent
-  D-->>UI: Mutation completes
-  Q->>S: Retry independently
-  S-->>E: Canonical acknowledgement / remote change
-  E->>D: Rebase accepted state and pending intent
+  UI -->|"create · edit · action"| G
+  G -->|"atomic local commit"| D
+  D -->|"durable queued work"| W
+  W <-->|"push · pull · acknowledge"| B
+  W -->|"accept or rebase remote state"| D
+  D -->|"update the same identities"| G
 ```
 
-Awaiting an entity mutation proves local durability and durable queue intent.
-It does not wait for the network. Local-only entities create no remote work;
-imported entities reject local writes; replicated and exported entities retain
-retryable intent across restarts.
+Nodus gives each non-local entity one explicit synchronization mode:
 
-## Capabilities
+| Mode | Meaning |
+| --- | --- |
+| `localOnly` | State remains on the device and creates no remote work. |
+| `replicated` | Local mutations are pushed and remote changes are pulled. |
+| `imported` | The remote system is authoritative; local mutation is rejected. |
+| `exported` | Local state is authoritative and is delivered outward. |
 
-- Stable MobX entity identities with precise field and query observation.
-- Typed create/edit drafts with validation, rollback, and field-level merge.
-- Bounded in-memory and unbounded keyset-paged Drift queries behind one API.
-- Generated inverse relationships, unique lookups, participant access, and
-  collaboration commands.
-- Optional `Ordered`, `Archivable`, `SoftDeletable`, `Collaborative`,
-  `ActivityTracked`, `ActivityOf`, `Component`, and `Activatable` capabilities.
-- Durable push/pull scheduling, retry, idempotency, conflict rebase, cursors,
-  remote signals, and account switching.
-- Generated Supabase tables, indexes, RLS, grants, push functions, change log,
-  and declarative migrations.
-- Custom typed sync connectors for non-Supabase transports.
-- Typed GoRouter locations generated from feature-owned filesystem pages.
-- Generated in-memory graph harnesses using production descriptors and runtime.
+Supabase is the only production-ready remote target bundled in `0.1.0`. The
+runtime contract is transport-neutral: a custom connector adapts Nodus's typed
+push/pull protocol to another remote system. It does not choose entities or
+redefine their schema. Other backend adapters are not bundled yet.
 
-The full capability reference is in
-[`doc/capabilities.md`](https://github.com/sidux/nodus/blob/main/doc/capabilities.md).
-The normative contract is
-[`doc/Architecture.md`](https://github.com/sidux/nodus/blob/main/doc/Architecture.md),
-with a companion
-[`doc/Architecture.puml`](https://github.com/sidux/nodus/blob/main/doc/Architecture.puml)
-atlas.
+## Core capabilities
 
-## Supabase today, other backends by contract
+- Stable entity identities with field-level observation and optimistic updates.
+- Typed creation and edit drafts with validation, rollback, and field-level
+  conflict detection.
+- Generated relationships, unique lookups, collaboration, activity history,
+  archiving, soft deletion, and scoped ordering.
+- Bounded in-memory collections and unbounded keyset-paged Drift queries behind
+  typed list APIs.
+- Durable account-scoped synchronization with retry, idempotency, cursors,
+  wake-up signals, conflict rebase, and restart recovery.
+- Deterministic generation with explanation output, schema fingerprints, and
+  stale-output checks.
 
-Supabase is the first built-in remote target because it can provision a complete
-PostgreSQL schema, RLS policies, grants, push functions, change history, and
-receipts. It is an implementation, not the architecture boundary.
+See the [capability reference](https://github.com/sidux/nodus/blob/main/doc/capabilities.md)
+for declarations, generated APIs, synchronization semantics, routing, and
+custom connector contracts.
 
-The runtime sync contract is transport-neutral:
+## Reference app
 
-- entities resolve to nominal `SyncTargetId` values and typed target
-  descriptors in the canonical graph;
-- generated graphs accept `openWithConnectors(...)` and construct custom
-  connectors from `SyncConnectorContext`;
-- queues, cursors, workers, signals, operation IDs, codecs, and conflict policy
-  are partitioned by target rather than by Supabase;
-- adapters implement directional push/pull capabilities and translate the
-  generic Nodus protocol to their transport;
-- a schema-capable target may add its own provisioning emitter without changing
-  entity declarations or the runtime protocol.
-
-Adding Firebase, a REST service, SQLite-to-SQLite replication, or another
-backend therefore means implementing an adapter (and, when needed, a
-provisioning emitter), not forking the application architecture. Nodus already
-generates and tests managed factories for inferred custom targets. Supabase is
-the only production-ready remote provisioning target in `0.1.0`; the extension
-contract is ready, but those additional adapters are not bundled yet.
-
-## AI-assisted engineering
-
-Codex with GPT-5.6 collaborated throughout Nodus development. It accelerated
-repository-wide tracing across compiler, runtime, generated-code, schema, and
-test boundaries; implementation of scoped changes; review of diffs; and the
-repeated generation, formatting, analysis, documentation, and
-production-behavior test loops.
-
-I retained the key product, engineering, and design decisions: one canonical
-graph, explicit domain intent, fatal ambiguity, local-first mutation semantics,
-and a transport-neutral backend boundary. Codex challenged inconsistencies and
-helped execute those decisions, but it did not replace the architecture
-contract. [`doc/Architecture.md`](https://github.com/sidux/nodus/blob/main/doc/Architecture.md)
-remained authoritative, and no AI-produced change bypassed generated-output,
-static-analysis, or production-behavior gates. The supporting evidence and the
-limits of the claim are documented in
-[`doc/ai-assisted-development.md`](https://github.com/sidux/nodus/blob/main/doc/ai-assisted-development.md).
-
-## Run the reference app
-
-The Tasks app exercises production Nodus behavior end to end: offline creation
-and editing, project-scoped ordering, transitions, collaboration, generated
-activity, tombstones, paging, adaptive UI, typed deep links, and the durable
-sync queue.
+The Tasks app demonstrates offline creation and editing, scoped ordering,
+actions, collaboration, generated activity, tombstones, paging, adaptive UI,
+typed deep links, and the durable sync queue.
 
 ```sh
 cd example/tasks
@@ -402,62 +223,39 @@ flutter pub get
 flutter run --dart-define=ALLOW_IN_MEMORY_DEMO=true
 ```
 
-The explicit in-memory demo starts with a seeded workspace created entirely
-through generated production APIs. The Sync badge intentionally exposes pending
-durable work without requiring Supabase credentials.
+The explicit demo mode uses the generated production APIs with an in-memory
+backend, so no Supabase credentials are required. See the
+[reference app guide](https://github.com/sidux/nodus/blob/main/example/tasks/README.md)
+for its architecture and verification steps.
 
-## Tool commands
+## CLI
 
 | Command | Purpose |
 | --- | --- |
-| `dart run nodus init --target NAME` | Create `nodus.lock`, builder configuration, and the first graph |
-| `dart run nodus generate` | Regenerate application APIs quickly |
-| `dart run nodus watch` | Regenerate while domain or page sources change |
-| `dart run nodus explain [ENTITY] [--json]` | Explain schema, sync, capability, and field inference |
-| `dart run nodus inventory [--write\|--check\|--json]` | Classify semantic migration debt from graph metadata and analyzer ASTs |
+| `dart run nodus init --target NAME` | Discover the package and create its graph configuration |
+| `dart run nodus generate` | Regenerate Dart artifacts without changing the schema version |
+| `dart run nodus watch` | Regenerate when domain or route sources change |
 | `dart run nodus migrate NAME` | Advance the schema and generate local and remote migrations |
-| `dart run nodus check` | Fail when generated output, the schema lock, or an opted-in semantic inventory is stale |
+| `dart run nodus explain [ENTITY] [--json]` | Show what Nodus inferred and why |
+| `dart run nodus inventory [--write\|--check\|--json]` | Classify semantic migration debt |
+| `dart run nodus check` | Fail on stale generated output, schema lock, or opted-in inventory |
 
-## Repository layout
+## Documentation
 
-```text
-bin/                 Nodus CLI entry point
-lib/                 Public libraries and internal compiler/runtime
-test/                Compiler, runtime, route, and adapter contract tests
-example/tasks/       Executable Flutter reference application
-doc/Architecture.md  Normative entity-first architecture contract
-doc/Architecture.puml Architecture atlas
-doc/ai-assisted-development.md Evidence behind the AI-assisted development claim
-```
+- [Capabilities](https://github.com/sidux/nodus/blob/main/doc/capabilities.md) — practical declarations and generated APIs.
+- [Writing custom application code](https://github.com/sidux/nodus/blob/main/doc/custom-code.md) — where irreducible business and integration code belongs.
+- [Architecture](https://github.com/sidux/nodus/blob/main/doc/Architecture.md) — the normative architecture contract.
+- [Architecture atlas](https://github.com/sidux/nodus/blob/main/doc/Architecture.puml) — detailed compiler, runtime, synchronization, and dependency views.
+- [Contributing](https://github.com/sidux/nodus/blob/main/CONTRIBUTING.md) — development workflow and quality gates.
+- [Security](https://github.com/sidux/nodus/blob/main/SECURITY.md) — supported reporting process.
 
-Generated files are reviewed artifacts but are never edited manually. A schema
-change uses `dart run nodus migrate <lower_snake_case_name>` so the local schema
-version, Drift history, remote schema, and migration remain one change.
+## Acknowledgements
 
-## Development
-
-```sh
-flutter pub get
-dart format --output=none --set-exit-if-changed .
-flutter analyze
-dart test --exclude-tags flutter
-flutter test --tags flutter
-dart doc --validate-links
-dart pub publish --dry-run
-
-cd example/tasks
-dart run nodus check
-flutter analyze
-flutter test
-```
-
-See [CONTRIBUTING.md](https://github.com/sidux/nodus/blob/main/CONTRIBUTING.md)
-before changing compiler inference,
-generated APIs, synchronization semantics, migrations, or architectural
-boundaries. Security reports should follow
-[SECURITY.md](https://github.com/sidux/nodus/blob/main/SECURITY.md).
+Nodus was developed with assistance from OpenAI Codex. Product and architecture
+decisions remain human-owned; the scope and evidence for the collaboration are
+documented in [AI-assisted development](https://github.com/sidux/nodus/blob/main/doc/ai-assisted-development.md).
 
 ## License
 
-Nodus is licensed under the
+Nodus is available under the
 [BSD 3-Clause License](https://github.com/sidux/nodus/blob/main/LICENSE).
