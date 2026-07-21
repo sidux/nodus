@@ -87,6 +87,7 @@ Map<String, Object?> _entitySchema(EntitySpec entity) => {
             'targetType': reference.targetClassName,
             'targetTable': reference.targetTableName,
             'onDelete': reference.onDelete.name,
+            'hierarchy': reference.hierarchy,
             'targetOwnerColumn': reference.targetOwnerColumnName,
             'ownershipSourceColumn': reference.ownershipSourceColumnName,
             'targetRelationshipAccess': [

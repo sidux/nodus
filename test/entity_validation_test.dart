@@ -413,6 +413,155 @@ final class Account {}
   });
 
   test(
+    'generates explicit paged query actions and lifecycle operations',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Notification
+    implements OwnedBy<Notification, Account>, SoftDeletable {
+  @Persisted(defaultValue: false)
+  abstract final bool read;
+
+  @Action(
+    values: [ActionValue(#read, true)],
+    bulk: true,
+  )
+  Future<void> markRead();
+}
+
+final class Account {}
+''';
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        _sources(source, fileName: 'notification.dart'),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            contains('"bulk": true'),
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('final TestGraphEntityGraph _entityGraph;'),
+              contains('Future<EntityBulkMutationResult> removeAll()'),
+              contains('Future<EntityBulkMutationResult> restoreAll()'),
+              contains('Future<EntityBulkMutationResult> markReadAll()'),
+              contains('runTransaction: _entityGraph.transaction'),
+            ]),
+          ),
+        },
+      );
+    },
+  );
+
+  test(
+    'generates paged lifecycle operations for a declared self hierarchy',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.delete, RlsPrincipal.owner),
+  ],
+)
+abstract class Task
+    implements OwnedBy<Task, Account>, SoftDeletable, Archivable {
+  @Reference(
+    inverse: 'children',
+    onDelete: ReferenceDeleteAction.cascade,
+    hierarchy: true,
+  )
+  abstract final LocalId<Task>? parentTaskId;
+}
+
+final class Account {}
+''';
+
+      final sources = _sources(source, fileName: 'task.dart');
+      await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/task.entity.g.dart': decodedMatches(
+            allOf([
+              contains('Future<EntityBulkMutationResult> removeHierarchy('),
+              contains('Future<EntityBulkMutationResult> restoreHierarchy('),
+              contains(
+                'Future<EntityBulkMutationResult> setHierarchyArchived(',
+              ),
+              contains("parentFieldName: 'parentTaskId'"),
+              contains('requireActiveExternalParent: true'),
+              contains('childrenFirst: archived'),
+            ]),
+          ),
+        },
+      );
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            contains('"hierarchy": true'),
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
+        },
+      );
+    },
+  );
+
+  test(
+    'does not infer soft-delete bulk actions from internal tombstones',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Selection
+    implements OwnedBy<Selection, Account>, Activatable {}
+
+final class Account {}
+''';
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        _sources(source, fileName: 'selection.dart'),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('final class SelectionList'),
+              isNot(contains('Future<EntityBulkMutationResult> removeAll()')),
+              isNot(contains('Future<EntityBulkMutationResult> restoreAll()')),
+            ]),
+          ),
+        },
+      );
+    },
+  );
+
+  test(
     'infers ordinary drafts and keeps explicit creation facts read-only',
     () async {
       const source = r'''

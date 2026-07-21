@@ -312,12 +312,14 @@ final class EntityReferenceDescriptor {
     required this.onDelete,
     this.composition = false,
     this.inverseCardinality,
+    this.hierarchy = false,
   });
 
   final String targetEntityType;
   final ReferenceDeleteAction onDelete;
   final bool composition;
   final Cardinality? inverseCardinality;
+  final bool hierarchy;
 }
 
 abstract interface class GeneratedEntityRecord {
@@ -2099,6 +2101,150 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
               }
             },
     );
+  }
+
+  /// Infrastructure entry point used by generated hierarchy lifecycle APIs.
+  ///
+  /// Descendants are selected by a recursive database query, retained and
+  /// committed one page at a time, then released before the next page. This
+  /// keeps unbounded hierarchies out of application memory while preserving
+  /// canonical entity identity and graph transaction semantics.
+  Future<EntityBulkMutationResult> runGeneratedHierarchyAction({
+    required String rootId,
+    required String parentFieldName,
+    required Future<bool> Function(E entity) action,
+    bool childrenFirst = false,
+    bool requireActiveExternalParent = false,
+    int pageSize = 100,
+  }) async {
+    if (_closing) throw StateError('The entity engine is closed.');
+    if (pageSize <= 0) {
+      throw RangeError.value(
+        pageSize,
+        'pageSize',
+        'Must be greater than zero.',
+      );
+    }
+    final parentField = _field(parentFieldName);
+    final reference = parentField.reference;
+    if (reference == null ||
+        !reference.hierarchy ||
+        reference.targetEntityType != descriptor.entityType) {
+      throw StateError(
+        '${descriptor.entityType}.$parentFieldName is not its declared '
+        'hierarchy parent.',
+      );
+    }
+    final rootRow = await _projectionRow(rootId);
+    if (rootRow == null) {
+      throw EntityNotFoundException(
+        entityType: descriptor.entityType,
+        entityId: rootId,
+      );
+    }
+    final deletedAtField = _field(EntityConventions.deletedAtFieldName);
+    if (requireActiveExternalParent) {
+      final parentId = rootRow.data[parentField.columnName] as String?;
+      if (parentId != null) {
+        final parentRow = await _projectionRow(parentId);
+        if (parentRow == null ||
+            parentRow.data[deletedAtField.columnName] != null) {
+          throw EntityValidationException(
+            entityType: descriptor.entityType,
+            field: parentFieldName,
+            message: 'Restore the parent entity before this hierarchy.',
+          );
+        }
+      }
+    }
+
+    final table = descriptor.tableName;
+    final idColumn = EntityConventions.idColumnName;
+    final parentColumn = parentField.columnName;
+    final cycle = await database
+        .customSelect(
+          'with recursive hierarchy(entity_id, path, cycle) as ('
+          'select $idColumn, ?, 0 from $table where $idColumn = ? '
+          'union all '
+          'select child.$idColumn, hierarchy.path || child.$idColumn || ?, '
+          'instr(hierarchy.path, ? || child.$idColumn || ?) > 0 '
+          'from $table child join hierarchy '
+          'on child.$parentColumn = hierarchy.entity_id '
+          'where hierarchy.cycle = 0) '
+          'select 1 from hierarchy where cycle = 1 limit 1',
+          variables: [
+            Variable.withString(',$rootId,'),
+            Variable.withString(rootId),
+            Variable.withString(','),
+            Variable.withString(','),
+            Variable.withString(','),
+          ],
+        )
+        .getSingleOrNull();
+    if (cycle != null) {
+      throw EntityValidationException(
+        entityType: descriptor.entityType,
+        field: parentFieldName,
+        message: 'The hierarchy contains a cycle.',
+      );
+    }
+
+    var matched = 0;
+    var changed = 0;
+    var offset = 0;
+    while (true) {
+      final rows = await database
+          .customSelect(
+            'with recursive hierarchy(entity_id, depth, path) as ('
+            'select $idColumn, 0, ? from $table where $idColumn = ? '
+            'union all '
+            'select child.$idColumn, hierarchy.depth + 1, '
+            'hierarchy.path || child.$idColumn || ? '
+            'from $table child join hierarchy '
+            'on child.$parentColumn = hierarchy.entity_id '
+            'where instr(hierarchy.path, ? || child.$idColumn || ?) = 0) '
+            'select entity.* from $table entity join hierarchy '
+            'on entity.$idColumn = hierarchy.entity_id '
+            'order by hierarchy.depth ${childrenFirst ? 'desc' : 'asc'}, '
+            'entity.$idColumn asc limit ? offset ?',
+            variables: [
+              Variable.withString(',$rootId,'),
+              Variable.withString(rootId),
+              Variable.withString(','),
+              Variable.withString(','),
+              Variable.withString(','),
+              Variable.withInt(pageSize),
+              Variable.withInt(offset),
+            ],
+          )
+          .get();
+      if (rows.isEmpty) break;
+      final entities = <E>[];
+      final retainedIds = <String>[];
+      for (final row in rows) {
+        final entity = _materializeRow(row);
+        entities.add(entity.generatedDomain);
+        if (descriptor.cardinality == Cardinality.unbounded) {
+          _retainIdentity(entity.generatedEntityId);
+          retainedIds.add(entity.generatedEntityId);
+        }
+      }
+      try {
+        await graphCoordinator.transaction(() async {
+          for (final entity in entities) {
+            matched++;
+            if (await action(entity)) changed++;
+          }
+        });
+      } finally {
+        for (final id in retainedIds) {
+          _releaseIdentity(id);
+        }
+      }
+      offset += rows.length;
+      if (rows.length < pageSize) break;
+    }
+    return EntityBulkMutationResult(matched: matched, changed: changed);
   }
 
   String _predicateSql(

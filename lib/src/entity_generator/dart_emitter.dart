@@ -137,7 +137,7 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
         '    normalization: FieldNormalization.${field.normalization.name},',
       )
       ..writeln(
-        '    reference: ${field.reference == null ? 'null' : 'EntityReferenceDescriptor(targetEntityType: \'${field.reference!.targetClassName}\', onDelete: ReferenceDeleteAction.${field.reference!.onDelete.name}${field.isComposition ? ', composition: true' : ''}${field.reference!.inverseCardinality == null ? '' : ', inverseCardinality: Cardinality.${field.reference!.inverseCardinality!.name}'})'},',
+        '    reference: ${field.reference == null ? 'null' : 'EntityReferenceDescriptor(targetEntityType: \'${field.reference!.targetClassName}\', onDelete: ReferenceDeleteAction.${field.reference!.onDelete.name}${field.isComposition ? ', composition: true' : ''}${field.reference!.inverseCardinality == null ? '' : ', inverseCardinality: Cardinality.${field.reference!.inverseCardinality!.name}'}${field.reference!.hierarchy ? ', hierarchy: true' : ''})'},',
       );
     if (field.transitions.isNotEmpty) {
       buffer.writeln(
@@ -2922,6 +2922,66 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
     '${spec.cardinality == Cardinality.bounded ? 'watchRawId' : 'watchLoadedRawId'}'
     '(id.value);',
   );
+  if (spec.hierarchyParentField case final parentField?) {
+    buffer
+      ..writeln('  Future<EntityBulkMutationResult> removeHierarchy(')
+      ..writeln('    LocalId<${spec.className}> rootId, {')
+      ..writeln('    int pageSize = 100,')
+      ..writeln('  }) => _engine.runGeneratedHierarchyAction(')
+      ..writeln('    rootId: rootId.value,')
+      ..writeln("    parentFieldName: '${parentField.name}',")
+      ..writeln('    childrenFirst: true,')
+      ..writeln('    pageSize: pageSize,')
+      ..writeln('    action: (entity) async {')
+      ..writeln(
+        '      if (entity.${spec.deletedAtField!.name} != null) return false;',
+      )
+      ..writeln('      await entity.remove();')
+      ..writeln('      return true;')
+      ..writeln('    },')
+      ..writeln('  );')
+      ..writeln('  Future<EntityBulkMutationResult> restoreHierarchy(')
+      ..writeln('    LocalId<${spec.className}> rootId, {')
+      ..writeln('    int pageSize = 100,')
+      ..writeln('  }) => _engine.runGeneratedHierarchyAction(')
+      ..writeln('    rootId: rootId.value,')
+      ..writeln("    parentFieldName: '${parentField.name}',")
+      ..writeln('    requireActiveExternalParent: true,')
+      ..writeln('    pageSize: pageSize,')
+      ..writeln('    action: (entity) async {')
+      ..writeln(
+        '      if (entity.${spec.deletedAtField!.name} == null) return false;',
+      )
+      ..writeln('      await entity.restore();')
+      ..writeln('      return true;')
+      ..writeln('    },')
+      ..writeln('  );');
+    if (spec.hasArchivableCapability) {
+      buffer
+        ..writeln('  Future<EntityBulkMutationResult> setHierarchyArchived(')
+        ..writeln('    LocalId<${spec.className}> rootId, {')
+        ..writeln('    required bool archived,')
+        ..writeln('    int pageSize = 100,')
+        ..writeln('  }) => _engine.runGeneratedHierarchyAction(')
+        ..writeln('    rootId: rootId.value,')
+        ..writeln("    parentFieldName: '${parentField.name}',")
+        ..writeln('    childrenFirst: archived,')
+        ..writeln('    pageSize: pageSize,')
+        ..writeln('    action: (entity) async {')
+        ..writeln(
+          '      if (entity.${spec.deletedAtField!.name} != null || '
+          '(entity.${spec.archivedAtField!.name} != null) == archived) return false;',
+        )
+        ..writeln('      if (archived) {')
+        ..writeln('        await entity.archive();')
+        ..writeln('      } else {')
+        ..writeln('        await entity.unarchive();')
+        ..writeln('      }')
+        ..writeln('      return true;')
+        ..writeln('    },')
+        ..writeln('  );');
+    }
+  }
   if (spec.cardinality == Cardinality.bounded) {
     buffer
       ..writeln(

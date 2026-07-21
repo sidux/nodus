@@ -645,6 +645,7 @@ final class Reference {
     required this.onDelete,
     this.inverseCardinality,
     this.aggregateMember = false,
+    this.hierarchy = false,
   });
 
   /// Domain name of the generated inverse query on the target entity.
@@ -667,6 +668,14 @@ final class Reference {
   /// This declaration owns editing durability; it does not change independent
   /// entity identity, synchronization, or reference authorization.
   final bool aggregateMember;
+
+  /// Whether this nullable self-reference is the parent edge of a hierarchy.
+  ///
+  /// Nodus generates paged subtree remove/restore operations and, for
+  /// [Archivable] entities, archive/unarchive operations. A hierarchy must
+  /// target its declaring entity and use cascade deletion so descendants
+  /// cannot outlive their parent lifecycle.
+  final bool hierarchy;
 }
 
 /// Declares that this entity owns one independently persisted [Component].
@@ -771,9 +780,16 @@ final class OwnerReference {
 /// Name the action for its domain meaning; the generic name `edit` is reserved
 /// for ordinary generated draft behavior.
 final class Action {
-  const Action({this.values = const []});
+  const Action({this.values = const [], this.bulk = false});
 
   final List<ActionValue> values;
+
+  /// Generates the same semantic action on a typed entity selection.
+  ///
+  /// The resulting `<Entity>List.<action>All(...)` processes canonical pages
+  /// through graph transactions. Opt in only when applying one value/parameter
+  /// set independently to every selected entity is the complete domain intent.
+  final bool bulk;
 }
 
 /// One non-parameter assignment performed by an [Action].

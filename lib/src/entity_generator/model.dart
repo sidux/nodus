@@ -12,6 +12,7 @@ final class EntitySpec {
     required this.cardinality,
     required this.authenticatedReadSync,
     this.hasOrderedCapability = false,
+    this.hasSoftDeletableCapability = false,
     this.hasArchivableCapability = false,
     this.hasActivityTrackedCapability = false,
     this.activitySubjectClassName,
@@ -43,6 +44,7 @@ final class EntitySpec {
   final Cardinality cardinality;
   final AuthenticatedReadSync authenticatedReadSync;
   final bool hasOrderedCapability;
+  final bool hasSoftDeletableCapability;
   final bool hasArchivableCapability;
   final bool hasActivityTrackedCapability;
   final String? activitySubjectClassName;
@@ -474,6 +476,9 @@ final class EntitySpec {
       ? null
       : fields.singleWhere((field) => field.name == 'archivedAt');
 
+  FieldSpec? get hierarchyParentField =>
+      fields.where((field) => field.reference?.hierarchy == true).firstOrNull;
+
   EntitySpec withGraphAccess(
     Map<String, Set<RlsOperation>> relationshipOperations,
   ) {
@@ -501,6 +506,7 @@ final class EntitySpec {
       cardinality: cardinality,
       authenticatedReadSync: authenticatedReadSync,
       hasOrderedCapability: hasOrderedCapability,
+      hasSoftDeletableCapability: hasSoftDeletableCapability,
       hasArchivableCapability: hasArchivableCapability,
       hasActivityTrackedCapability: hasActivityTrackedCapability,
       activitySubjectClassName: activitySubjectClassName,
@@ -1303,11 +1309,13 @@ final class ActionSpec {
     required this.methodName,
     required this.parameters,
     required this.assignments,
+    this.bulk = false,
   });
 
   final String methodName;
   final List<ActionParameterSpec> parameters;
   final List<ActionAssignmentSpec> assignments;
+  final bool bulk;
 
   List<String> get targetFields => [
     ...parameters.map((parameter) => parameter.fieldName),
@@ -1569,6 +1577,7 @@ final class ReferenceSpec {
     required this.onDelete,
     required this.inverseCardinality,
     required this.aggregateMember,
+    required this.hierarchy,
     required this.targetSelectPrincipals,
     required this.targetOwnerOperations,
     required this.targetOwnerDartType,
@@ -1588,6 +1597,7 @@ final class ReferenceSpec {
   final ReferenceDeleteAction onDelete;
   final Cardinality? inverseCardinality;
   final bool aggregateMember;
+  final bool hierarchy;
   final List<RlsPrincipal> targetSelectPrincipals;
   final List<RlsOperation> targetOwnerOperations;
   final String targetOwnerDartType;
@@ -1617,6 +1627,7 @@ final class ReferenceSpec {
       onDelete: onDelete,
       inverseCardinality: inverseCardinality,
       aggregateMember: aggregateMember,
+      hierarchy: hierarchy,
       targetSelectPrincipals: targetSelectPrincipals,
       targetOwnerOperations: targetOwnerOperations,
       targetOwnerDartType: targetOwnerDartType,

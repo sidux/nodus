@@ -479,6 +479,14 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
     final exhaustiveOrdering = entity.cardinality == Cardinality.bounded
         ? ordered
         : null;
+    final bulkActions = entity.actions
+        .where((action) => action.bulk)
+        .toList(growable: false);
+    final retainsEntityGraph =
+        exhaustiveOrdering != null ||
+        entity.hasSoftDeletableCapability ||
+        entity.hasArchivableCapability ||
+        bulkActions.isNotEmpty;
     buffer
       ..writeln(
         'final class $listName extends EntityList<${entity.className}> {',
@@ -494,7 +502,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
     buffer
       ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
       ..writeln(
-        '  }) :${exhaustiveOrdering == null ? '' : ' _entityGraph = entityGraph,'}',
+        '  }) :${retainsEntityGraph ? ' _entityGraph = entityGraph,' : ''}',
       )
       ..writeln('       super(entityGraph.${entity.setAccessor}.query(')
       ..writeln('         where: where,')
@@ -511,7 +519,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         entityGraphName: entityGraphName,
         constructorName: 'active',
         visibility: 'exclude',
-        retainEntityGraph: exhaustiveOrdering != null,
+        retainEntityGraph: retainsEntityGraph,
       );
       _emitGraphArchiveConstructor(
         buffer,
@@ -519,7 +527,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         entityGraphName: entityGraphName,
         constructorName: 'archived',
         visibility: 'only',
-        retainEntityGraph: exhaustiveOrdering != null,
+        retainEntityGraph: retainsEntityGraph,
       );
     }
 
@@ -528,7 +536,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         buffer,
         entity: entity,
         entityGraphName: entityGraphName,
-        retainEntityGraph: exhaustiveOrdering != null,
+        retainEntityGraph: retainsEntityGraph,
       );
       _emitGraphListSelectionConstructor(
         buffer,
@@ -538,7 +546,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         parameterName: 'ownerId',
         parameterType: entity.ownerField.dartType,
         predicate: '${entity.className}Fields.ownerId.equals(ownerId)',
-        retainEntityGraph: exhaustiveOrdering != null,
+        retainEntityGraph: retainsEntityGraph,
       );
 
       if (entity.participantFields.isNotEmpty) {
@@ -551,7 +559,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
           parameterType: entity.ownerField.dartType,
           predicate:
               '(${['${entity.className}Fields.ownerId.equals(accountId)', for (final field in entity.participantFields) '${entity.className}Fields.${field.name}.equals(accountId)'].join(' | ')})',
-          retainEntityGraph: exhaustiveOrdering != null,
+          retainEntityGraph: retainsEntityGraph,
         );
       }
     }
@@ -571,7 +579,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         parameterType: field.dartType.replaceAll('?', ''),
         predicate:
             '${entity.className}Fields.${field.name}.equals(${field.name})',
-        retainEntityGraph: exhaustiveOrdering != null,
+        retainEntityGraph: retainsEntityGraph,
       );
     }
 
@@ -586,7 +594,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         parameterName: parameterName,
         parameterType: 'LocalId<$subject>',
         predicate: '${entity.className}Fields.subjectId.equals($parameterName)',
-        retainEntityGraph: exhaustiveOrdering != null,
+        retainEntityGraph: retainsEntityGraph,
       );
     }
 
@@ -598,6 +606,12 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         entityGraphName: entityGraphName,
       );
     }
+    if (retainsEntityGraph) {
+      buffer
+        ..writeln('  final $entityGraphName _entityGraph;')
+        ..writeln();
+    }
+    _emitGraphBulkActions(buffer, entity: entity, bulkActions: bulkActions);
     buffer
       ..writeln('}')
       ..writeln();
@@ -632,6 +646,76 @@ void _emitGraphArchiveConstructor(
     ..writeln('         archives: ArchiveVisibility.$visibility,')
     ..writeln('         pageSize: pageSize,')
     ..writeln('       ));');
+}
+
+void _emitGraphBulkActions(
+  StringBuffer buffer, {
+  required EntitySpec entity,
+  required List<ActionSpec> bulkActions,
+}) {
+  void emit(String methodName, String invocation) {
+    buffer
+      ..writeln('  Future<EntityBulkMutationResult> $methodName() =>')
+      ..writeln('      runGeneratedBulkAction(')
+      ..writeln('        (entity) async {')
+      ..writeln(
+        '          final before = entity.generatedAccess.generatedLocalRevision;',
+      )
+      ..writeln('          await entity.$invocation;')
+      ..writeln(
+        '          return entity.generatedAccess.generatedLocalRevision != before;',
+      )
+      ..writeln('        },')
+      ..writeln('        runTransaction: _entityGraph.transaction,')
+      ..writeln('      );')
+      ..writeln();
+  }
+
+  if (entity.hasSoftDeletableCapability) {
+    emit('removeAll', 'remove()');
+    emit('restoreAll', 'restore()');
+  }
+  if (entity.hasArchivableCapability) {
+    emit('archiveAll', 'archive()');
+    emit('unarchiveAll', 'unarchive()');
+  }
+  for (final action in bulkActions) {
+    final positional = action.parameters
+        .where((parameter) => !parameter.named)
+        .toList(growable: false);
+    final named = action.parameters
+        .where((parameter) => parameter.named)
+        .toList(growable: false);
+    final parameterParts = <String>[
+      ...positional.map(
+        (parameter) => '${parameter.dartType} ${parameter.name}',
+      ),
+      if (named.isNotEmpty)
+        '{${named.map((parameter) => 'required ${parameter.dartType} ${parameter.name}').join(', ')}}',
+    ];
+    final arguments = <String>[
+      ...positional.map((parameter) => parameter.name),
+      ...named.map((parameter) => '${parameter.name}: ${parameter.name}'),
+    ].join(', ');
+    buffer
+      ..writeln(
+        '  Future<EntityBulkMutationResult> ${action.methodName}All('
+        '${parameterParts.join(', ')}) =>',
+      )
+      ..writeln('      runGeneratedBulkAction(')
+      ..writeln('        (entity) async {')
+      ..writeln(
+        '          final before = entity.generatedAccess.generatedLocalRevision;',
+      )
+      ..writeln('          await entity.${action.methodName}($arguments);')
+      ..writeln(
+        '          return entity.generatedAccess.generatedLocalRevision != before;',
+      )
+      ..writeln('        },')
+      ..writeln('        runTransaction: _entityGraph.transaction,')
+      ..writeln('      );')
+      ..writeln();
+  }
 }
 
 void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
@@ -830,8 +914,6 @@ void _emitOrderedCollection(
   final orderField = ordered.orderField;
   final idType = entity.idField.dartType;
   buffer
-    ..writeln('  final $entityGraphName _entityGraph;')
-    ..writeln()
     ..writeln('  Future<void> reorder(Iterable<$idType> entityIds) async {')
     ..writeln('    final ordered = entityIds.toList(growable: false);')
     ..writeln('    if (ordered.toSet().length != ordered.length) {')

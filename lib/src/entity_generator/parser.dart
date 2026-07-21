@@ -1174,6 +1174,7 @@ Future<EntitySpec?> parseEntityAsset(
     cardinality: cardinality,
     authenticatedReadSync: authenticatedReadSync,
     hasOrderedCapability: hasOrderedCapability,
+    hasSoftDeletableCapability: isDeletable,
     hasArchivableCapability: hasArchivableCapability,
     hasActivityTrackedCapability: hasActivityTrackedCapability,
     activitySubjectClassName: activitySubjectClassName,
@@ -3348,6 +3349,47 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
           );
         }
       }
+      if (reference.hierarchy) {
+        final hierarchyFields = entity.fields
+            .where((candidate) => candidate.reference?.hierarchy == true)
+            .toList(growable: false);
+        if (hierarchyFields.length != 1) {
+          throw InvalidGenerationSourceError(
+            '`${entity.className}` must declare exactly one hierarchy parent '
+            'reference.',
+            element: element,
+          );
+        }
+        if (target.className != entity.className ||
+            target.inputImport != entity.inputImport) {
+          throw InvalidGenerationSourceError(
+            '`${entity.className}.${field.name}` is a hierarchy parent but '
+            'does not reference `${entity.className}` itself.',
+            element: element,
+          );
+        }
+        if (!field.nullable) {
+          throw InvalidGenerationSourceError(
+            'Hierarchy parent references must be nullable so the hierarchy '
+            'can contain roots.',
+            element: element,
+          );
+        }
+        if (reference.onDelete != ReferenceDeleteAction.cascade) {
+          throw InvalidGenerationSourceError(
+            'Hierarchy parent references require '
+            'ReferenceDeleteAction.cascade.',
+            element: element,
+          );
+        }
+        if (!entity.canDelete || !entity.hasSoftDeletableCapability) {
+          throw InvalidGenerationSourceError(
+            'Hierarchy entities must implement SoftDeletable and expose '
+            'generated delete authorization.',
+            element: element,
+          );
+        }
+      }
       if (field.isAccessReference &&
           target.security.grants.any(
             (grant) =>
@@ -3723,6 +3765,7 @@ ReferenceSpec _parseReference(
       : _readEnum(annotation.read('inverseCardinality'), Cardinality.values);
   final aggregateMember =
       annotation.peek('aggregateMember')?.boolValue ?? false;
+  final hierarchy = annotation.peek('hierarchy')?.boolValue ?? false;
   return ReferenceSpec(
     targetClassName: target.name!,
     targetInputImport: target.library.uri.toString(),
@@ -3734,6 +3777,7 @@ ReferenceSpec _parseReference(
     onDelete: onDelete,
     inverseCardinality: inverseCardinality,
     aggregateMember: aggregateMember,
+    hierarchy: hierarchy,
     targetSelectPrincipals:
         targetSecurity.grants
             .where((grant) => grant.operation == RlsOperation.select)
@@ -3953,6 +3997,7 @@ List<ActionSpec> _parseActions(
         methodName: method.name!,
         parameters: List.unmodifiable(parameters),
         assignments: List.unmodifiable(assignments),
+        bulk: annotation.read('bulk').boolValue,
       ),
     );
   }

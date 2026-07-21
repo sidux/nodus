@@ -2016,6 +2016,64 @@ final class LocalEntityQuery<E> {
     }
   }
 
+  /// Runs a generated semantic action over this selection in retained pages.
+  ///
+  /// This method is public only because application-generated code lives in a
+  /// separate library. Domain callers use the named operation emitted on their
+  /// concrete `EntityList`; exposing arbitrary callbacks from feature code is
+  /// not a supported application surface.
+  Future<EntityBulkMutationResult> runGeneratedBulkAction(
+    Future<bool> Function(E entity) action, {
+    required Future<void> Function(FutureOr<void> Function() body)
+    runTransaction,
+  }) async {
+    if (_released.value) {
+      throw StateError('Cannot mutate through a disposed entity query.');
+    }
+    var matched = 0;
+    var changed = 0;
+    try {
+      if (!_controller.databaseBacked) {
+        final entities = await loadAll();
+        await runTransaction(() async {
+          for (final entity in entities) {
+            matched++;
+            if (await action(entity)) changed++;
+          }
+        });
+        return EntityBulkMutationResult(matched: matched, changed: changed);
+      }
+
+      EntityQueryCursor? cursor;
+      while (true) {
+        final page = await _controller.loadDetachedPage(
+          after: cursor,
+          limit: spec.pageSize,
+        );
+        final nextCursor = page.nextCursor;
+        try {
+          if (page.items.isEmpty) break;
+          await runTransaction(() async {
+            for (final entity in page.items) {
+              matched++;
+              if (await action(entity)) changed++;
+            }
+          });
+        } finally {
+          page.release?.call();
+        }
+        if (!page.hasMore) break;
+        if (nextCursor == null) {
+          throw StateError('Generated bulk paging did not return a cursor.');
+        }
+        cursor = nextCursor;
+      }
+      return EntityBulkMutationResult(matched: matched, changed: changed);
+    } finally {
+      dispose();
+    }
+  }
+
   /// Emits exhaustive query state after each observable projection change.
   ///
   /// Each invocation creates one single-subscription bridge. The caller owns
@@ -2269,6 +2327,20 @@ class EntityList<E> {
   Future<R> useAll<R>(FutureOr<R> Function(List<E> items) action) =>
       query.useAll(action);
 
+  /// Infrastructure entry point used by generated query-owned actions.
+  ///
+  /// Application code receives named methods such as `removeAll` or
+  /// `markReadAll` on its generated entity list. Each database-backed batch is
+  /// retained only for its transaction, committed in canonical query order,
+  /// and released before the next page is loaded.
+  Future<EntityBulkMutationResult> runGeneratedBulkAction(
+    Future<bool> Function(E entity) action, {
+    required Future<void> Function(FutureOr<void> Function() body)
+    runTransaction,
+  }) {
+    return query.runGeneratedBulkAction(action, runTransaction: runTransaction);
+  }
+
   Stream<EntityQueryState<E>> watchStates({
     Iterable<PersistedEntityFieldReference<E>> observeFields = const [],
   }) => query.watchStates(observeFields: observeFields);
@@ -2278,6 +2350,19 @@ class EntityList<E> {
   }) => query.watchCompleteStates(observeFields: observeFields);
 
   void dispose() => query.dispose();
+}
+
+/// Result of one generated query-owned or hierarchy lifecycle operation.
+final class EntityBulkMutationResult {
+  const EntityBulkMutationResult({
+    required this.matched,
+    required this.changed,
+  });
+
+  final int matched;
+  final int changed;
+
+  int get skipped => matched - changed;
 }
 
 final class _EntityQueryObservation<E> {
@@ -2600,6 +2685,22 @@ final class _LocalEntityQueryController<E> {
   Future<void>? _activeLoad;
   Completer<void>? _pendingReload;
   late final Computed<EntityQueryState<E>> state;
+
+  bool get databaseBacked => _loader != null;
+
+  Future<EntityQueryPage<E>> loadDetachedPage({
+    required EntityQueryCursor? after,
+    required int limit,
+  }) {
+    final loader = _loader;
+    if (loader == null) {
+      throw StateError('Only database-backed queries expose detached pages.');
+    }
+    if (_disposed.value) {
+      throw StateError('Cannot load a disposed entity query.');
+    }
+    return loader(spec, after: after, limit: limit);
+  }
 
   Future<void> loadNextPage() async {
     if (_disposed.value || !state.value.hasMore) return;
