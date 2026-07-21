@@ -962,7 +962,48 @@ enum LocalEntityBackgroundTask {
   queueRefresh,
   remoteSignal,
   synchronization,
+  durableProcess,
+  secondaryProjection,
   shutdown,
+}
+
+enum GeneratedDurableWorkKind { process, projection }
+
+/// Stable identity and retry metadata for one generated process/projection run.
+final class GeneratedDurableWorkContext {
+  const GeneratedDurableWorkContext({
+    required this.operationId,
+    required this.attempt,
+  });
+
+  final SyncOperationId operationId;
+  final int attempt;
+}
+
+/// Internal binding emitted from an [EntityProcess] or [SecondaryProjection].
+///
+/// Application code receives a domain-named generated installer and supplies
+/// only [run]. Direct construction is public solely because generated code is
+/// emitted into the consuming package.
+final class GeneratedDurableWorkBinding {
+  GeneratedDurableWorkBinding({
+    required this.name,
+    required this.kind,
+    required Iterable<Stream<Object?>> triggers,
+    required this.run,
+  }) : triggers = List.unmodifiable(triggers) {
+    if (!RegExp(r'^[a-z][A-Za-z0-9]*$').hasMatch(name)) {
+      throw ArgumentError.value(name, 'name', 'Expected lowerCamelCase.');
+    }
+    if (this.triggers.isEmpty) {
+      throw ArgumentError.value(triggers, 'triggers', 'Must not be empty.');
+    }
+  }
+
+  final String name;
+  final GeneratedDurableWorkKind kind;
+  final List<Stream<Object?>> triggers;
+  final Future<void> Function(GeneratedDurableWorkContext context) run;
 }
 
 final class BackgroundTaskFailureDiagnostic extends LocalEntityDiagnostic {
@@ -1721,6 +1762,12 @@ final class EntityProjectionChange<E> {
   final bool affectsMembership;
   final Set<String> _fieldNames;
 
+  bool affectsFields(Iterable<String> fieldNames) {
+    if (isUnknown || affectsMembership) return true;
+    final selected = fieldNames.toSet();
+    return selected.isEmpty || selected.any(_fieldNames.contains);
+  }
+
   EntityProjectionChange<E> _merge(EntityProjectionChange<E> other) {
     if (isUnknown || other.isUnknown) {
       return EntityProjectionChange<E>.unknown();
@@ -2074,6 +2121,49 @@ final class LocalEntityQuery<E> {
     }
   }
 
+  /// Runs one declaration-generated durable process over canonical pages.
+  ///
+  /// No database transaction surrounds [action], so a typed external process
+  /// may perform I/O and then commit its outcome through an entity action. The
+  /// generated durable lane retries the complete deterministic scan.
+  Future<void> runGeneratedProcess(
+    Future<void> Function(E entity) action,
+  ) async {
+    if (_released.value) {
+      throw StateError('Cannot process through a disposed entity query.');
+    }
+    try {
+      if (!_controller.databaseBacked) {
+        for (final entity in await loadAll()) {
+          await action(entity);
+        }
+        return;
+      }
+      EntityQueryCursor? cursor;
+      while (true) {
+        final page = await _controller.loadDetachedPage(
+          after: cursor,
+          limit: spec.pageSize,
+        );
+        final nextCursor = page.nextCursor;
+        try {
+          for (final entity in page.items) {
+            await action(entity);
+          }
+        } finally {
+          page.release?.call();
+        }
+        if (!page.hasMore) return;
+        if (nextCursor == null) {
+          throw StateError('Generated process paging returned no cursor.');
+        }
+        cursor = nextCursor;
+      }
+    } finally {
+      dispose();
+    }
+  }
+
   /// Emits exhaustive query state after each observable projection change.
   ///
   /// Each invocation creates one single-subscription bridge. The caller owns
@@ -2340,6 +2430,10 @@ class EntityList<E> {
   }) {
     return query.runGeneratedBulkAction(action, runTransaction: runTransaction);
   }
+
+  /// Infrastructure entry point used by a named generated process binding.
+  Future<void> runGeneratedProcess(Future<void> Function(E entity) action) =>
+      query.runGeneratedProcess(action);
 
   Stream<EntityQueryState<E>> watchStates({
     Iterable<PersistedEntityFieldReference<E>> observeFields = const [],

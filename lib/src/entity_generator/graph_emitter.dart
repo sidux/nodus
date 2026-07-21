@@ -2636,6 +2636,50 @@ void _emitEntityGraphRuntime(
       ..writeln('    );')
       ..writeln('  }');
   }
+  for (final binding in graph.durableWorkBindings) {
+    buffer
+      ..writeln('  void ${binding.installMethodName}({')
+      ..writeln(
+        binding.kind == DurableWorkBindingKind.process
+            ? '    required Future<void> Function(${binding.sources.single.entityClassName} source, GeneratedDurableWorkContext context) run,'
+            : '    required Future<void> Function(GeneratedDurableWorkContext context) run,',
+      )
+      ..writeln('  }) {')
+      ..writeln(
+        '    _coordinator.registerGeneratedDurableWork('
+        'GeneratedDurableWorkBinding(',
+      )
+      ..writeln("      name: '${binding.name}',")
+      ..writeln('      kind: GeneratedDurableWorkKind.${binding.kind.name},')
+      ..writeln('      triggers: [');
+    for (final source in binding.sources) {
+      final engine = '_${_lowerCamel(source.entityClassName)}Engine';
+      buffer.write('        $engine.projectionChanges');
+      if (source.fieldNames.isNotEmpty) {
+        buffer.write(
+          '.where((change) => change.affectsFields(const {'
+          '${source.fieldNames.map((name) => "'$name'").join(', ')}'
+          '}))',
+        );
+      }
+      buffer.writeln('.map<Object?>((change) => change),');
+    }
+    buffer
+      ..writeln('      ],')
+      ..writeln(
+        binding.kind == DurableWorkBindingKind.process
+            ? '      run: (context) => ${binding.sources.single.entityClassName}List.all(this).runGeneratedProcess((source) => run(source, context)),'
+            : '      run: run,',
+      )
+      ..writeln('    ));')
+      ..writeln('  }');
+    if (binding.kind == DurableWorkBindingKind.projection) {
+      buffer.writeln(
+        '  Future<void> ${binding.triggerMethodName}() => '
+        "_coordinator.triggerGeneratedDurableWork('${binding.name}');",
+      );
+    }
+  }
   buffer
     ..writeln(
       '  ReadOnlyObservableList<LocalPersistenceFailure> '

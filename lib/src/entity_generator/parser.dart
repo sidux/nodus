@@ -44,6 +44,14 @@ const _syncCommandChecker = TypeChecker.typeNamed(
   inPackage: 'nodus',
 );
 const _actionChecker = TypeChecker.typeNamed(Action, inPackage: 'nodus');
+const _entityProcessChecker = TypeChecker.typeNamed(
+  EntityProcess,
+  inPackage: 'nodus',
+);
+const _secondaryProjectionChecker = TypeChecker.typeNamed(
+  SecondaryProjection,
+  inPackage: 'nodus',
+);
 const _transientChecker = TypeChecker.typeNamed(Transient, inPackage: 'nodus');
 const _ownedByChecker = TypeChecker.typeNamed(OwnedBy, inPackage: 'nodus');
 const _softDeletableChecker = TypeChecker.typeNamed(
@@ -2875,6 +2883,10 @@ Future<EntityGraphSpec> parseInferredEntityGraph(
     );
   }
   final packageName = buildStep.inputId.package;
+  final durableWorkBindings = await _discoverDurableWorkBindings(
+    buildStep,
+    entities,
+  );
   final packagePrefix = 'package:$packageName/';
   final firstEntityAsset = AssetId(
     packageName,
@@ -2898,6 +2910,156 @@ Future<EntityGraphSpec> parseInferredEntityGraph(
     element: element,
     outputBaseName: 'nodus.g',
     emitsSyncTargetEnum: true,
+    durableWorkBindings: durableWorkBindings,
+  );
+}
+
+Future<List<DurableWorkBindingSpec>> _discoverDurableWorkBindings(
+  BuildStep buildStep,
+  List<EntitySpec> entities,
+) async {
+  final bindings = <DurableWorkBindingSpec>[];
+  final entitiesByClass = {
+    for (final entity in entities) entity.className: entity,
+  };
+  final names = <String>{};
+  await for (final asset in buildStep.findAssets(Glob('lib/**.dart'))) {
+    if (!await buildStep.resolver.isLibrary(asset)) continue;
+    final library = LibraryReader(await buildStep.resolver.libraryFor(asset));
+    for (final annotated in library.annotatedWith(_entityProcessChecker)) {
+      final reader = annotated.annotation;
+      final name = reader.read('name').stringValue;
+      _validateDurableWorkName(name, annotated.element, names);
+      bindings.add(
+        DurableWorkBindingSpec(
+          name: name,
+          kind: DurableWorkBindingKind.process,
+          declarationImport: annotated.element.library!.uri.toString(),
+          sources: [
+            _parseDurableWorkSource(
+              ConstantReader(reader.read('source').objectValue),
+              annotated.element,
+              entitiesByClass,
+            ),
+          ],
+        ),
+      );
+    }
+    for (final annotated in library.annotatedWith(
+      _secondaryProjectionChecker,
+    )) {
+      final reader = annotated.annotation;
+      final name = reader.read('name').stringValue;
+      _validateDurableWorkName(name, annotated.element, names);
+      final sources = reader
+          .read('sources')
+          .listValue
+          .map(
+            (source) => _parseDurableWorkSource(
+              ConstantReader(source),
+              annotated.element,
+              entitiesByClass,
+            ),
+          )
+          .toList(growable: false);
+      if (sources.isEmpty) {
+        throw InvalidGenerationSourceError(
+          'SecondaryProjection.sources must contain at least one WorkSource.',
+          element: annotated.element,
+        );
+      }
+      final seenSources = <String>{};
+      final duplicateSource = sources
+          .map((source) => source.entityClassName)
+          .where((source) => !seenSources.add(source))
+          .firstOrNull;
+      if (duplicateSource != null) {
+        throw InvalidGenerationSourceError(
+          'SecondaryProjection `$name` repeats source `$duplicateSource`.',
+          element: annotated.element,
+        );
+      }
+      bindings.add(
+        DurableWorkBindingSpec(
+          name: name,
+          kind: DurableWorkBindingKind.projection,
+          declarationImport: annotated.element.library!.uri.toString(),
+          sources: sources,
+        ),
+      );
+    }
+  }
+  bindings.sort((left, right) => left.name.compareTo(right.name));
+  return List.unmodifiable(bindings);
+}
+
+void _validateDurableWorkName(String name, Element element, Set<String> names) {
+  if (!_isLowerCamelDartIdentifier(name)) {
+    throw InvalidGenerationSourceError(
+      'Durable work names must be lowerCamelCase Dart identifiers.',
+      element: element,
+    );
+  }
+  if (!names.add(name)) {
+    throw InvalidGenerationSourceError(
+      'Durable work name `$name` is declared more than once.',
+      element: element,
+    );
+  }
+}
+
+DurableWorkSourceSpec _parseDurableWorkSource(
+  ConstantReader reader,
+  Element element,
+  Map<String, EntitySpec> entitiesByClass,
+) {
+  final type = reader.read('entity').typeValue;
+  if (type is! InterfaceType || type.element is! ClassElement) {
+    throw InvalidGenerationSourceError(
+      'WorkSource.entity must be an @Entity class.',
+      element: element,
+    );
+  }
+  final classElement = type.element as ClassElement;
+  final entity = entitiesByClass[classElement.name];
+  if (entity == null ||
+      entity.inputImport != classElement.library.uri.toString()) {
+    throw InvalidGenerationSourceError(
+      'WorkSource `${classElement.name}` is not an entity in this graph.',
+      element: element,
+    );
+  }
+  final fieldNames = reader
+      .read('fields')
+      .listValue
+      .map((field) => field.toSymbolValue())
+      .toList(growable: false);
+  if (fieldNames.any((field) => field == null)) {
+    throw InvalidGenerationSourceError(
+      'WorkSource.fields must contain public field symbols.',
+      element: element,
+    );
+  }
+  final resolved = fieldNames.cast<String>();
+  final available = entity.fields.map((field) => field.name).toSet();
+  final unknown = resolved.where((field) => !available.contains(field));
+  if (unknown.isNotEmpty) {
+    throw InvalidGenerationSourceError(
+      'WorkSource `${entity.className}` references unknown field '
+      '`${unknown.first}`.',
+      element: element,
+    );
+  }
+  if (resolved.toSet().length != resolved.length) {
+    throw InvalidGenerationSourceError(
+      'WorkSource `${entity.className}` repeats a field.',
+      element: element,
+    );
+  }
+  return DurableWorkSourceSpec(
+    entityClassName: entity.className,
+    entityInputImport: entity.inputImport,
+    fieldNames: List.unmodifiable(resolved),
   );
 }
 
@@ -2924,6 +3086,7 @@ EntityGraphSpec _resolveEntityGraph({
   required Element element,
   String outputBaseName = 'nodus.g',
   bool emitsSyncTargetEnum = false,
+  List<DurableWorkBindingSpec> durableWorkBindings = const [],
 }) {
   if (entities.isEmpty) {
     throw InvalidGenerationSourceError(
@@ -3024,6 +3187,7 @@ EntityGraphSpec _resolveEntityGraph({
     syncBindings: syncBindings,
     outputBaseName: outputBaseName,
     emitsSyncTargetEnum: emitsSyncTargetEnum,
+    durableWorkBindings: durableWorkBindings,
   );
 }
 

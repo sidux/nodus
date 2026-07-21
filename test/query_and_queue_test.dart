@@ -2817,6 +2817,48 @@ void main() {
   );
 
   test(
+    'generated processes stream retained pages without a transaction',
+    () async {
+      final invalidations =
+          StreamController<EntityProjectionChange<_Item>>.broadcast(sync: true);
+      addTearDown(invalidations.close);
+      final records = [
+        _Item('A'),
+        _Item('B'),
+        _Item('C'),
+        _Item('D'),
+        _Item('E'),
+      ];
+      var releases = 0;
+      final cache = LocalEntityQueryCache<_Item>.database(
+        invalidations: invalidations.stream,
+        loader: (_, {required after, required limit}) async {
+          final offset = (after as _TestQueryCursor?)?.offset ?? 0;
+          final end = (offset + limit).clamp(0, records.length);
+          return EntityQueryPage(
+            items: records.sublist(offset.clamp(0, end), end),
+            hasMore: end < records.length,
+            nextCursor: _TestQueryCursor(end),
+            release: () => releases++,
+          );
+        },
+      );
+      addTearDown(cache.dispose);
+      final query = cache.acquire(EntityQuerySpec(pageSize: 2));
+      await Future<void>.delayed(Duration.zero);
+      final processed = <String>[];
+
+      await query.runGeneratedProcess((item) async {
+        processed.add(item.name);
+      });
+
+      expect(processed, ['A', 'B', 'C', 'D', 'E']);
+      expect(releases, 4); // Three detached pages plus the cached first page.
+      expect(query.state.value, isA<EntityQueryDisposed<_Item>>());
+    },
+  );
+
+  test(
     'lease callbacks release identities and queries on every exit',
     () async {
       var identityReleases = 0;

@@ -14,6 +14,11 @@ enum EntityFieldKind { text, uuid, boolean, integer, real, date, timestamp }
   "ON local_entity_sync_work "
   "(sync_target, status, next_attempt_at, direction, id)",
 )
+@TableIndex.sql(
+  "CREATE UNIQUE INDEX local_entity_durable_lane_idx "
+  "ON local_entity_sync_work (direction, sync_target) "
+  "WHERE direction IN ('process', 'projection')",
+)
 class LocalEntitySyncWorkRows extends Table {
   @override
   String get tableName => 'local_entity_sync_work';
@@ -3844,6 +3849,12 @@ final class LocalEntityGraphCoordinator
   final Set<SyncTargetId> _remoteSignalRerunRequested = {};
   final Map<SyncTargetId, Timer> _retryTimers = {};
   final Map<SyncTargetId, DateTime> _scheduledRetryAt = {};
+  final Map<String, GeneratedDurableWorkBinding> _durableWorkBindings = {};
+  final Map<String, List<StreamSubscription<Object?>>> _durableSubscriptions =
+      {};
+  final Map<String, Timer> _durableRetryTimers = {};
+  final Map<String, Future<void>> _activeDurableWork = {};
+  final Set<String> _durableRerunRequested = {};
   bool _started = false;
   bool _closed = false;
   Future<void>? _closeFuture;
@@ -4380,6 +4391,325 @@ final class LocalEntityGraphCoordinator
 
   Future<void> flushLocal() => _mutationCoordinator.flush();
 
+  /// Installs one declaration-generated process or projection lane.
+  void registerGeneratedDurableWork(GeneratedDurableWorkBinding binding) {
+    if (_closed) throw StateError('The entity graph is closed.');
+    if (_durableWorkBindings.containsKey(binding.name)) {
+      throw StateError('Durable work `${binding.name}` is already installed.');
+    }
+    _durableWorkBindings[binding.name] = binding;
+    _durableSubscriptions[binding.name] = [
+      for (final trigger in binding.triggers)
+        trigger.listen(
+          (_) => _requestDurableEnqueue(binding),
+          onError: (Object error, StackTrace stackTrace) {
+            _recordDiagnosticSafely(
+              diagnostics,
+              BackgroundTaskFailureDiagnostic(
+                occurredAt: clock.nowUtc(),
+                task: _durableBackgroundTask(binding.kind),
+                target: null,
+                entityType: null,
+                error: error,
+                stackTrace: stackTrace,
+              ),
+            );
+            _requestDurableEnqueue(binding);
+          },
+        ),
+    ];
+    _requestDurableEnqueue(binding);
+  }
+
+  /// Explicit rebuild entry point emitted only for secondary projections.
+  Future<void> triggerGeneratedDurableWork(String name) async {
+    final binding = _durableWorkBindings[name];
+    if (binding == null) {
+      throw StateError('Durable work `$name` is not installed.');
+    }
+    await _enqueueDurableWork(binding);
+    while (!_closed) {
+      await _requestDurableWork(binding);
+      final remaining = await database
+          .customSelect(
+            'select 1 from local_entity_sync_work where direction = ? and '
+            'sync_target = ? limit 1',
+            variables: [
+              Variable.withString(binding.kind.name),
+              Variable.withString('${binding.kind.name}:${binding.name}'),
+            ],
+          )
+          .getSingleOrNull();
+      if (remaining == null) return;
+      final retry = await database
+          .customSelect(
+            'select next_attempt_at from local_entity_sync_work where '
+            'direction = ? and sync_target = ? limit 1',
+            variables: [
+              Variable.withString(binding.kind.name),
+              Variable.withString('${binding.kind.name}:${binding.name}'),
+            ],
+          )
+          .getSingle();
+      if (retry.readNullable<int>('next_attempt_at') != null) return;
+    }
+  }
+
+  void _requestDurableEnqueue(GeneratedDurableWorkBinding binding) {
+    _runInBackground(
+      _enqueueDurableWork(binding).then((_) => _requestDurableWork(binding)),
+      task: _durableBackgroundTask(binding.kind),
+    );
+  }
+
+  Future<void> _enqueueDurableWork(GeneratedDurableWorkBinding binding) async {
+    if (_closed) return;
+    final direction = binding.kind.name;
+    final target = '$direction:${binding.name}';
+    await database.transaction(() async {
+      final existing = await database
+          .customSelect(
+            'select id, status, payload from local_entity_sync_work '
+            'where direction = ? and sync_target = ? limit 1',
+            variables: [
+              Variable.withString(direction),
+              Variable.withString(target),
+            ],
+          )
+          .getSingleOrNull();
+      final generation = existing == null
+          ? 1
+          : _durableGeneration(existing.read<String>('payload')) + 1;
+      final payload = jsonEncode({'generation': generation});
+      if (existing == null) {
+        final now = clock.nowUtc().millisecondsSinceEpoch;
+        await database.customStatement(
+          'insert into local_entity_sync_work '
+          '(sync_target, direction, kind, status, entity_type, entity_id, '
+          'operation_id, base_server_version, local_revision, '
+          'protocol_version, payload, attempt_count, created_at) '
+          'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            target,
+            direction,
+            'reactive',
+            'pending',
+            '__graph__',
+            binding.name,
+            idGenerator.nextOperationId().value,
+            0,
+            0,
+            1,
+            payload,
+            0,
+            now,
+          ],
+        );
+        return;
+      }
+      final processing = existing.read<String>('status') == 'processing';
+      if (processing) {
+        await database.customStatement(
+          'update local_entity_sync_work set payload = ? where id = ?',
+          [payload, existing.read<int>('id')],
+        );
+      } else {
+        await database.customStatement(
+          "update local_entity_sync_work set payload = ?, status = 'pending', "
+          'operation_id = ?, attempt_count = 0, next_attempt_at = null, '
+          'lease_until = null, last_error_code = null, '
+          'last_error_detail = null where id = ?',
+          [
+            payload,
+            idGenerator.nextOperationId().value,
+            existing.read<int>('id'),
+          ],
+        );
+      }
+    });
+  }
+
+  Future<void> _requestDurableWork(GeneratedDurableWorkBinding binding) {
+    final active = _activeDurableWork[binding.name];
+    if (active != null) {
+      _durableRerunRequested.add(binding.name);
+      return active;
+    }
+    late final Future<void> work;
+    work = _drainDurableWork(binding).whenComplete(() {
+      if (identical(_activeDurableWork[binding.name], work)) {
+        _activeDurableWork.remove(binding.name);
+      }
+      if (_durableRerunRequested.remove(binding.name) && !_closed) {
+        _runInBackground(
+          _requestDurableWork(binding),
+          task: _durableBackgroundTask(binding.kind),
+        );
+      }
+    });
+    _activeDurableWork[binding.name] = work;
+    return work;
+  }
+
+  Future<void> _drainDurableWork(GeneratedDurableWorkBinding binding) async {
+    while (!_closed) {
+      final claim = await _claimDurableWork(binding);
+      if (claim == null) {
+        await _scheduleNextDurableRetry(binding);
+        return;
+      }
+      try {
+        await binding.run(claim.context);
+      } catch (error, stackTrace) {
+        await _failDurableWork(binding, claim, error, stackTrace);
+        return;
+      }
+      await _completeDurableWork(claim);
+    }
+  }
+
+  Future<_GeneratedDurableWorkClaim?> _claimDurableWork(
+    GeneratedDurableWorkBinding binding,
+  ) => database.transaction(() async {
+    final now = clock.nowUtc();
+    final direction = binding.kind.name;
+    final target = '$direction:${binding.name}';
+    final row = await database
+        .customSelect(
+          'select * from local_entity_sync_work where direction = ? and '
+          'sync_target = ? and ((status in (?, ?) and '
+          '(next_attempt_at is null or next_attempt_at <= ?)) or '
+          '(status = ? and (lease_until is null or lease_until <= ?))) '
+          'limit 1',
+          variables: [
+            Variable.withString(direction),
+            Variable.withString(target),
+            Variable.withString('pending'),
+            Variable.withString('retryableFailure'),
+            Variable.withInt(now.millisecondsSinceEpoch),
+            Variable.withString('processing'),
+            Variable.withInt(now.millisecondsSinceEpoch),
+          ],
+        )
+        .getSingleOrNull();
+    if (row == null) return null;
+    await database.customStatement(
+      "update local_entity_sync_work set status = 'processing', "
+      'lease_until = ?, next_attempt_at = null where id = ?',
+      [
+        now.add(const Duration(seconds: 30)).millisecondsSinceEpoch,
+        row.read<int>('id'),
+      ],
+    );
+    return _GeneratedDurableWorkClaim(
+      rowId: row.read<int>('id'),
+      generation: _durableGeneration(row.read<String>('payload')),
+      context: GeneratedDurableWorkContext(
+        operationId: parseSyncOperationId(row.read<String>('operation_id')),
+        attempt: row.read<int>('attempt_count') + 1,
+      ),
+    );
+  });
+
+  Future<void> _completeDurableWork(_GeneratedDurableWorkClaim claim) async {
+    await database.transaction(() async {
+      final current = await database
+          .customSelect(
+            'select payload from local_entity_sync_work where id = ?',
+            variables: [Variable.withInt(claim.rowId)],
+          )
+          .getSingleOrNull();
+      if (current == null) return;
+      final generation = _durableGeneration(current.read<String>('payload'));
+      if (generation == claim.generation) {
+        await database.customStatement(
+          'delete from local_entity_sync_work where id = ?',
+          [claim.rowId],
+        );
+      } else {
+        await database.customStatement(
+          "update local_entity_sync_work set status = 'pending', "
+          'operation_id = ?, attempt_count = 0, lease_until = null, '
+          'next_attempt_at = null, last_error_code = null, '
+          'last_error_detail = null where id = ?',
+          [idGenerator.nextOperationId().value, claim.rowId],
+        );
+      }
+    });
+  }
+
+  Future<void> _failDurableWork(
+    GeneratedDurableWorkBinding binding,
+    _GeneratedDurableWorkClaim claim,
+    Object error,
+    StackTrace stackTrace,
+  ) async {
+    final exponent = (claim.context.attempt - 1).clamp(0, 5);
+    final retryAt = clock.nowUtc().add(Duration(seconds: 1 << exponent));
+    await database.customStatement(
+      "update local_entity_sync_work set status = 'retryableFailure', "
+      'attempt_count = ?, lease_until = null, next_attempt_at = ?, '
+      'last_error_code = ?, last_error_detail = ? where id = ?',
+      [
+        claim.context.attempt,
+        retryAt.millisecondsSinceEpoch,
+        'handler_failure',
+        error.toString(),
+        claim.rowId,
+      ],
+    );
+    _recordDiagnosticSafely(
+      diagnostics,
+      BackgroundTaskFailureDiagnostic(
+        occurredAt: clock.nowUtc(),
+        task: _durableBackgroundTask(binding.kind),
+        target: null,
+        entityType: null,
+        error: error,
+        stackTrace: stackTrace,
+      ),
+    );
+    _scheduleDurableRetry(binding, retryAt);
+  }
+
+  Future<void> _scheduleNextDurableRetry(
+    GeneratedDurableWorkBinding binding,
+  ) async {
+    final row = await database
+        .customSelect(
+          'select next_attempt_at from local_entity_sync_work where '
+          'direction = ? and sync_target = ? and next_attempt_at is not null '
+          'order by next_attempt_at limit 1',
+          variables: [
+            Variable.withString(binding.kind.name),
+            Variable.withString('${binding.kind.name}:${binding.name}'),
+          ],
+        )
+        .getSingleOrNull();
+    final millis = row?.read<int>('next_attempt_at');
+    if (millis != null) {
+      _scheduleDurableRetry(
+        binding,
+        DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true),
+      );
+    }
+  }
+
+  void _scheduleDurableRetry(
+    GeneratedDurableWorkBinding binding,
+    DateTime retryAt,
+  ) {
+    _durableRetryTimers.remove(binding.name)?.cancel();
+    final delay = retryAt.difference(clock.nowUtc());
+    _durableRetryTimers[binding.name] = Timer(
+      delay.isNegative ? Duration.zero : delay,
+      () {
+        _durableRetryTimers.remove(binding.name);
+        if (!_closed) _requestDurableWork(binding);
+      },
+    );
+  }
+
   Future<void> _persistMutationBatch(
     List<LocalEntityMutation> mutations,
   ) async {
@@ -4494,7 +4824,10 @@ final class LocalEntityGraphCoordinator
   Future<void> refreshSyncWork() async {
     final request = ++_syncWorkRefreshRequest;
     final rows = await database
-        .customSelect('select * from local_entity_sync_work order by id')
+        .customSelect(
+          "select * from local_entity_sync_work where direction in "
+          "('push', 'pull') order by id",
+        )
         .get();
     if (request != _syncWorkRefreshRequest || _closed) return;
     final items = rows
@@ -4560,7 +4893,8 @@ final class LocalEntityGraphCoordinator
   Future<void> retryNow() async {
     await database.customStatement(
       "update local_entity_sync_work set next_attempt_at = null "
-      "where status = 'retryableFailure'",
+      "where direction in ('push', 'pull') and "
+      "status = 'retryableFailure'",
     );
     await _performSync();
   }
@@ -4581,7 +4915,8 @@ final class LocalEntityGraphCoordinator
     final terminal = await database
         .customSelect(
           "select status, last_error_detail from local_entity_sync_work "
-          "where status in ('rejected', 'conflict') order by id limit 1",
+          "where direction in ('push', 'pull') and "
+          "status in ('rejected', 'conflict') order by id limit 1",
         )
         .getSingleOrNull();
     if (terminal != null) {
@@ -4596,7 +4931,8 @@ final class LocalEntityGraphCoordinator
     final retry = await database
         .customSelect(
           "select last_error_detail from local_entity_sync_work "
-          "where status = 'retryableFailure' order by id limit 1",
+          "where direction in ('push', 'pull') and "
+          "status = 'retryableFailure' order by id limit 1",
         )
         .getSingleOrNull();
     runInAction(
@@ -5057,6 +5393,10 @@ final class LocalEntityGraphCoordinator
     }
     _retryTimers.clear();
     _scheduledRetryAt.clear();
+    for (final timer in _durableRetryTimers.values) {
+      timer.cancel();
+    }
+    _durableRetryTimers.clear();
     Object? firstError;
     StackTrace? firstStackTrace;
     Future<void> release(Future<void> Function() action) async {
@@ -5081,6 +5421,11 @@ final class LocalEntityGraphCoordinator
 
     for (final subscription in _remoteSignalSubscriptions.values) {
       await release(subscription.cancel);
+    }
+    for (final subscriptions in _durableSubscriptions.values) {
+      for (final subscription in subscriptions) {
+        await release(subscription.cancel);
+      }
     }
     await release(() async => _queueUpdateSubscription?.cancel());
     await release(flushLocal);
@@ -5147,6 +5492,34 @@ final class LocalEntityGraphCoordinator
     throw FormatException('Unknown generated sync target `$wireName`.');
   }
 }
+
+final class _GeneratedDurableWorkClaim {
+  const _GeneratedDurableWorkClaim({
+    required this.rowId,
+    required this.generation,
+    required this.context,
+  });
+
+  final int rowId;
+  final int generation;
+  final GeneratedDurableWorkContext context;
+}
+
+int _durableGeneration(String payload) {
+  final decoded = jsonDecode(payload);
+  if (decoded case {'generation': final int generation} when generation > 0) {
+    return generation;
+  }
+  throw const FormatException('Invalid generated durable-work payload.');
+}
+
+LocalEntityBackgroundTask _durableBackgroundTask(
+  GeneratedDurableWorkKind kind,
+) => switch (kind) {
+  GeneratedDurableWorkKind.process => LocalEntityBackgroundTask.durableProcess,
+  GeneratedDurableWorkKind.projection =>
+    LocalEntityBackgroundTask.secondaryProjection,
+};
 
 SyncWorkItem _syncWorkItemFromRow(
   QueryRow row,

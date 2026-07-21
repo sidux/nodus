@@ -678,6 +678,43 @@ final class Reference {
   final bool hierarchy;
 }
 
+/// Selects one entity and the persisted fields that can trigger declared work.
+///
+/// An empty [fields] list observes every projection change. Field symbols are
+/// validated against the source entity and let generation avoid scheduling a
+/// process or projection for irrelevant patches.
+final class WorkSource {
+  const WorkSource(this.entity, {this.fields = const []});
+
+  final Type entity;
+  final List<Symbol> fields;
+}
+
+/// Declares one durable, entity-triggered process owned by domain outcomes.
+///
+/// Generation exposes a domain-named installer on the entity graph. Nodus owns
+/// trigger coalescing, durable intent, operation identity, leasing, restart
+/// recovery, and retry/backoff; application code supplies only the domain
+/// handler that applies the outcome through generated entity APIs.
+final class EntityProcess {
+  const EntityProcess({required this.name, required this.source});
+
+  final String name;
+  final WorkSource source;
+}
+
+/// Declares a derived, non-authoritative destination projection.
+///
+/// The named generated lane receives source-change notifications and rebuilds
+/// deterministically through the supplied mapper/adapter. Projection failure
+/// never rolls back authoritative entity state.
+final class SecondaryProjection {
+  const SecondaryProjection({required this.name, required this.sources});
+
+  final String name;
+  final List<WorkSource> sources;
+}
+
 /// Declares that this entity owns one independently persisted [Component].
 ///
 /// The nominal target type and generated accessors are inferred exactly as for

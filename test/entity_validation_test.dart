@@ -562,6 +562,66 @@ final class Account {}
   );
 
   test(
+    'generates named durable process and secondary projection lanes',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Notification implements OwnedBy<Notification, Account> {
+  abstract final String status;
+  abstract final String message;
+}
+
+@EntityProcess(
+  name: 'applyOutcomes',
+  source: WorkSource(Notification, fields: [#status]),
+)
+abstract final class ApplyOutcomesProcess {}
+
+@SecondaryProjection(
+  name: 'homeWidgets',
+  sources: [WorkSource(Notification, fields: [#status, #message])],
+)
+abstract final class HomeWidgetsProjection {}
+
+final class Account {}
+''';
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        _sources(source, fileName: 'notification.dart'),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            allOf([
+              contains('"name": "applyOutcomes"'),
+              contains('"kind": "process"'),
+              contains('"name": "homeWidgets"'),
+              contains('"kind": "projection"'),
+            ]),
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('void installApplyOutcomesProcess({'),
+              contains('void installHomeWidgetsProjection({'),
+              contains('Future<void> runHomeWidgetsProjectionNow()'),
+              contains("name: 'applyOutcomes'"),
+              contains('GeneratedDurableWorkKind.process'),
+              contains('GeneratedDurableWorkKind.projection'),
+              contains("change.affectsFields(const {'status'})"),
+              contains("change.affectsFields(const {'status', 'message'})"),
+            ]),
+          ),
+        },
+      );
+    },
+  );
+
+  test(
     'infers ordinary drafts and keeps explicit creation facts read-only',
     () async {
       const source = r'''

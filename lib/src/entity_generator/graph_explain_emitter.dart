@@ -13,6 +13,17 @@ String emitEntityGraphExplanation(EntityGraphSpec graph) {
     'package': graph.packageName,
     'schemaVersion': graph.schemaVersion,
     'targets': [for (final target in graph.syncTargets) target.wireName],
+    'durableWork': [
+      for (final binding in graph.durableWorkBindings) {
+          'name': binding.name,
+          'kind': binding.kind.name,
+          'sources': [
+            for (final source in binding.sources) {'entity': source.entityClassName, 'fields': source.fieldNames},
+          ],
+          'generatedInstall': binding.installMethodName,
+          'generatedTrigger': binding.kind == DurableWorkBindingKind.projection ? binding.triggerMethodName : null,
+        },
+    ],
     'entities': [
       for (final entity in graph.entities) {
           'name': entity.className,

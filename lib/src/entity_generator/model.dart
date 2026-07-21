@@ -934,7 +934,9 @@ final class EntityGraphSpec {
     List<SyncBindingSpec>? syncBindings,
     this.outputBaseName = 'nodus.g',
     this.emitsSyncTargetEnum = false,
+    List<DurableWorkBindingSpec> durableWorkBindings = const [],
   }) : entities = List.unmodifiable(entities),
+       durableWorkBindings = List.unmodifiable(durableWorkBindings),
        syncBindings = List.unmodifiable(
          syncBindings ??
              [
@@ -958,6 +960,7 @@ final class EntityGraphSpec {
   final List<SyncBindingSpec> syncBindings;
   final String outputBaseName;
   final bool emitsSyncTargetEnum;
+  final List<DurableWorkBindingSpec> durableWorkBindings;
   final List<ActiveRelationshipCollectionSpec> relationships;
   final List<ActivityTrackingSpec> activityTrackings;
 
@@ -1065,6 +1068,39 @@ final class EntityGraphSpec {
 
   String get sourceBaseName =>
       inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
+}
+
+enum DurableWorkBindingKind { process, projection }
+
+final class DurableWorkSourceSpec {
+  const DurableWorkSourceSpec({
+    required this.entityClassName,
+    required this.entityInputImport,
+    this.fieldNames = const [],
+  });
+
+  final String entityClassName;
+  final String entityInputImport;
+  final List<String> fieldNames;
+}
+
+final class DurableWorkBindingSpec {
+  const DurableWorkBindingSpec({
+    required this.name,
+    required this.kind,
+    required this.declarationImport,
+    required this.sources,
+  });
+
+  final String name;
+  final DurableWorkBindingKind kind;
+  final String declarationImport;
+  final List<DurableWorkSourceSpec> sources;
+
+  String get installMethodName =>
+      'install${pascalCase(name)}${kind == DurableWorkBindingKind.process ? 'Process' : 'Projection'}';
+
+  String get triggerMethodName => 'run${pascalCase(name)}ProjectionNow';
 }
 
 final class ActivityTrackingSpec {
