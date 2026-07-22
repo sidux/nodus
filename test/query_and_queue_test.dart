@@ -8,6 +8,29 @@ import 'package:test/test.dart';
 import 'support/test_descriptor.dart';
 
 void main() {
+  test('query states expose shared lifecycle facts', () {
+    const loading = EntityQueryInitialLoading<int>();
+    const refreshing = EntityQueryStaleData<int>(items: [1], hasMore: true);
+    final blockingFailure = EntityQueryFailure<int>(
+      error: StateError('blocking'),
+      items: const [],
+      hasMore: false,
+    );
+    final refreshFailure = EntityQueryFailure<int>(
+      error: StateError('refresh'),
+      items: const [1],
+      hasMore: true,
+    );
+
+    expect(loading.isInitialLoading, isTrue);
+    expect(loading.isRefreshing, isFalse);
+    expect(refreshing.isRefreshing, isTrue);
+    expect(blockingFailure.blockingError, same(blockingFailure.error));
+    expect(blockingFailure.refreshError, isNull);
+    expect(refreshFailure.blockingError, isNull);
+    expect(refreshFailure.refreshError, same(refreshFailure.error));
+  });
+
   test(
     'query state streams expose immutable resolved item snapshots',
     () async {

@@ -2076,6 +2076,29 @@ final class EntityQueryDisposed<E> extends EntityQueryState<E> {
   const EntityQueryDisposed() : super(items: const <Never>[], hasMore: false);
 }
 
+/// Presentation-neutral lifecycle facts shared by every query consumer.
+///
+/// These getters keep widgets from repeatedly matching the same sealed states
+/// merely to read loading and failure metadata. The entity identities remain
+/// available directly through [EntityQueryState.items].
+extension EntityQueryStateLifecycle<E> on EntityQueryState<E> {
+  bool get isInitialLoading => this is EntityQueryInitialLoading<E>;
+
+  bool get isRefreshing => this is EntityQueryStaleData<E>;
+
+  Object? get blockingError => switch (this) {
+    EntityQueryFailure<E>(:final error, :final items) when items.isEmpty =>
+      error,
+    _ => null,
+  };
+
+  Object? get refreshError => switch (this) {
+    EntityQueryFailure<E>(:final error, :final items) when items.isNotEmpty =>
+      error,
+    _ => null,
+  };
+}
+
 /// Adapts typed query state to immutable item snapshots for legacy stream
 /// composition boundaries without hiding query failures.
 ///

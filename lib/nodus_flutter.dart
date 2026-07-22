@@ -323,31 +323,22 @@ final class ObservedEntityQueryGroup {
   final List<ObservedEntityQuery<dynamic>> queries;
 
   bool get isInitialLoading =>
-      queries.any((query) => query.state is EntityQueryInitialLoading<dynamic>);
+      queries.any((query) => query.state.isInitialLoading);
 
-  bool get isRefreshing =>
-      queries.any((query) => query.state is EntityQueryStaleData<dynamic>);
+  bool get isRefreshing => queries.any((query) => query.state.isRefreshing);
 
   Object? get failure {
     for (final query in queries) {
-      if (query.state case EntityQueryFailure<dynamic>(
-        :final error,
-        :final items,
-      ) when items.isEmpty) {
-        return error;
-      }
+      final error = query.state.blockingError;
+      if (error != null) return error;
     }
     return null;
   }
 
   Object? get refreshError {
     for (final query in queries) {
-      if (query.state case EntityQueryFailure<dynamic>(
-        :final error,
-        :final items,
-      ) when items.isNotEmpty) {
-        return error;
-      }
+      final error = query.state.refreshError;
+      if (error != null) return error;
     }
     return null;
   }
