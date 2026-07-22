@@ -1,11 +1,12 @@
 // GENERATED FILE. DO NOT EDIT.
 // Source: package:tasks_example/nodus.lock
-// Schema fingerprint: 5f46422090594d7937d67351faab45cb11cfe6065d469f20b989b9a4dcb658b4
+// Schema fingerprint: 7334f12ec59899f4b251b9f440b7f3c19e93e49767c73eb47cf4936620984f32
 // ignore_for_file: unused_field, type=lint
 
 import 'dart:async';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/widgets.dart' hide Table;
 import 'package:nodus/nodus_flutter.dart';
 import 'package:nodus/nodus_supabase.dart';
 import 'package:supabase/supabase.dart';
@@ -58,7 +59,7 @@ final class TasksExampleDatabase extends _$TasksExampleDatabase {
     : _migrationOverride = migrationOverride;
   final MigrationStrategy? _migrationOverride;
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 1;
   @override
   MigrationStrategy get migration {
     final configured =
@@ -98,7 +99,7 @@ abstract final class TasksExampleMetadata {
     wireName: 'supabase',
   );
   static final definition = EntityGraphDefinition(
-    schemaVersion: 5,
+    schemaVersion: 1,
     descriptors: [
       taskDescriptor,
       taskActivityDescriptor,
@@ -331,6 +332,36 @@ final class TasksExampleEntityGraph {
   }
 }
 
+final class TasksExampleEntityGraphScope extends StatelessWidget {
+  const TasksExampleEntityGraphScope({
+    required this.session,
+    required this.child,
+    super.key,
+  });
+  final AccountEntityGraphSession<TasksExampleEntityGraph, Account> session;
+  final Widget child;
+  @override
+  Widget build(BuildContext context) =>
+      AccountEntityGraphScope<TasksExampleEntityGraph, Account>(
+        session: session,
+        child: child,
+      );
+}
+
+extension TasksExampleEntityGraphBuildContext on BuildContext {
+  AccountEntityGraphSessionState<TasksExampleEntityGraph, Account>
+  get tasksExampleEntityGraphState =>
+      AccountEntityGraphScope.stateOf<TasksExampleEntityGraph, Account>(this);
+  AccountEntityGraphReady<TasksExampleEntityGraph, Account>?
+  get tasksExampleEntityGraphReady =>
+      AccountEntityGraphScope.maybeReadyOf<TasksExampleEntityGraph, Account>(
+        this,
+      );
+  AccountEntityGraphSession<TasksExampleEntityGraph, Account>
+  get tasksExampleEntityGraphSession =>
+      AccountEntityGraphScope.sessionOf<TasksExampleEntityGraph, Account>(this);
+}
+
 final class TaskList extends EntityList<Task> {
   TaskList.all(
     TasksExampleEntityGraph entityGraph, {
@@ -339,7 +370,8 @@ final class TaskList extends EntityList<Task> {
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     ArchiveVisibility archives = ArchiveVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.tasks.query(
            where: where,
            orderBy: orderBy ?? entityGraph.tasks.canonicalOrder,
@@ -354,7 +386,8 @@ final class TaskList extends EntityList<Task> {
     EntityOrder<Task>? orderBy,
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.tasks.query(
            where: where,
            orderBy: orderBy ?? entityGraph.tasks.canonicalOrder,
@@ -369,7 +402,8 @@ final class TaskList extends EntityList<Task> {
     EntityOrder<Task>? orderBy,
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.tasks.query(
            where: where,
            orderBy: orderBy ?? entityGraph.tasks.canonicalOrder,
@@ -385,7 +419,8 @@ final class TaskList extends EntityList<Task> {
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     ArchiveVisibility archives = ArchiveVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.tasks.query(
            where:
                TaskFields.ownerId.equals(entityGraph.accountId) &
@@ -404,7 +439,8 @@ final class TaskList extends EntityList<Task> {
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     ArchiveVisibility archives = ArchiveVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.tasks.query(
            where:
                TaskFields.ownerId.equals(ownerId) &
@@ -423,7 +459,8 @@ final class TaskList extends EntityList<Task> {
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     ArchiveVisibility archives = ArchiveVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.tasks.query(
            where:
                TaskFields.projectId.equals(projectId) &
@@ -434,6 +471,35 @@ final class TaskList extends EntityList<Task> {
            pageSize: pageSize,
          ),
        );
+  final TasksExampleEntityGraph _entityGraph;
+
+  Future<EntityBulkMutationResult> removeAll() =>
+      runGeneratedBulkAction((entity) async {
+        final before = entity.generatedAccess.generatedLocalRevision;
+        await entity.remove();
+        return entity.generatedAccess.generatedLocalRevision != before;
+      }, runTransaction: _entityGraph.transaction);
+
+  Future<EntityBulkMutationResult> restoreAll() =>
+      runGeneratedBulkAction((entity) async {
+        final before = entity.generatedAccess.generatedLocalRevision;
+        await entity.restore();
+        return entity.generatedAccess.generatedLocalRevision != before;
+      }, runTransaction: _entityGraph.transaction);
+
+  Future<EntityBulkMutationResult> archiveAll() =>
+      runGeneratedBulkAction((entity) async {
+        final before = entity.generatedAccess.generatedLocalRevision;
+        await entity.archive();
+        return entity.generatedAccess.generatedLocalRevision != before;
+      }, runTransaction: _entityGraph.transaction);
+
+  Future<EntityBulkMutationResult> unarchiveAll() =>
+      runGeneratedBulkAction((entity) async {
+        final before = entity.generatedAccess.generatedLocalRevision;
+        await entity.unarchive();
+        return entity.generatedAccess.generatedLocalRevision != before;
+      }, runTransaction: _entityGraph.transaction);
 }
 
 final class TaskActivityList extends EntityList<TaskActivity> {
@@ -510,7 +576,8 @@ final class TaskProjectList extends EntityList<TaskProject> {
     EntityOrder<TaskProject>? orderBy,
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.taskProjects.query(
            where: where,
            orderBy: orderBy ?? entityGraph.taskProjects.canonicalOrder,
@@ -524,7 +591,8 @@ final class TaskProjectList extends EntityList<TaskProject> {
     EntityOrder<TaskProject>? orderBy,
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.taskProjects.query(
            where:
                TaskProjectFields.ownerId.equals(entityGraph.accountId) &
@@ -541,7 +609,8 @@ final class TaskProjectList extends EntityList<TaskProject> {
     EntityOrder<TaskProject>? orderBy,
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,
     int pageSize = EntityQuerySpec.defaultPageSize,
-  }) : super(
+  }) : _entityGraph = entityGraph,
+       super(
          entityGraph.taskProjects.query(
            where:
                TaskProjectFields.ownerId.equals(ownerId) &
@@ -551,6 +620,21 @@ final class TaskProjectList extends EntityList<TaskProject> {
            pageSize: pageSize,
          ),
        );
+  final TasksExampleEntityGraph _entityGraph;
+
+  Future<EntityBulkMutationResult> removeAll() =>
+      runGeneratedBulkAction((entity) async {
+        final before = entity.generatedAccess.generatedLocalRevision;
+        await entity.remove();
+        return entity.generatedAccess.generatedLocalRevision != before;
+      }, runTransaction: _entityGraph.transaction);
+
+  Future<EntityBulkMutationResult> restoreAll() =>
+      runGeneratedBulkAction((entity) async {
+        final before = entity.generatedAccess.generatedLocalRevision;
+        await entity.restore();
+        return entity.generatedAccess.generatedLocalRevision != before;
+      }, runTransaction: _entityGraph.transaction);
 }
 
 final class TaskActivityLookup extends EntityLookup<TaskActivity> {

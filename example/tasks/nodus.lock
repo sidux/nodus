@@ -2,8 +2,8 @@
   "formatVersion": 1,
   "packageName": "tasks_example",
   "graphName": "TasksExample",
-  "schemaVersion": 5,
-  "schemaFingerprint": "d762aed39721e02cc88ac78486bc759193dff7a08514b6fe527c847ccc3f1c31",
+  "schemaVersion": 1,
+  "schemaFingerprint": "7334f12ec59899f4b251b9f440b7f3c19e93e49767c73eb47cf4936620984f32",
   "targets": [
     "supabase"
   ],

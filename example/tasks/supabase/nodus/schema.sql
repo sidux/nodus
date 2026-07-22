@@ -1300,8 +1300,9 @@ begin
             );
             if rebalance_step > 0 then
               with positioned as (
-                select member_id, ordinality::numeric as position
+                select unnested.member_id, unnested.ordinality::numeric as position
                 from unnest(rebalance_member_ids) with ordinality
+                  as unnested(member_id, ordinality)
               )
               update public.tasks member
               set order_rank = lpad((
@@ -1617,8 +1618,9 @@ begin
     );
     if rebalance_step > 0 then
       with positioned as (
-        select member_id, ordinality::numeric as position
+        select unnested.member_id, unnested.ordinality::numeric as position
         from unnest(rebalance_member_ids) with ordinality
+          as unnested(member_id, ordinality)
       )
       update public.tasks member
       set order_rank = lpad((
@@ -1835,8 +1837,9 @@ begin
     );
     if rebalance_step > 0 then
       with positioned as (
-        select member_id, ordinality::numeric as position
+        select unnested.member_id, unnested.ordinality::numeric as position
         from unnest(rebalance_member_ids) with ordinality
+          as unnested(member_id, ordinality)
       )
       update public.tasks member
       set order_rank = lpad((

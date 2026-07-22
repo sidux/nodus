@@ -10,7 +10,7 @@
 create table if not exists public.task_projects (
   id uuid not null primary key,
   owner_id uuid not null references auth.users (id) on delete cascade,
-  title text not null check (char_length(btrim(title)) >= 1) check (char_length(title) <= 80),
+  title text not null check (title = btrim(title)) check (char_length(btrim(title)) >= 1) check (char_length(title) <= 80),
   order_rank text not null default '057896044618658097711785492504343953926634992332820282019728792003956564819967' check (order_rank ~ '^[0-9]{78}$' and order_rank::numeric > 0 and order_rank::numeric < 115792089237316195423570985008687907853269984665640564039457584007913129639935::numeric),
   deleted_at timestamptz,
   server_version bigint not null default 1
@@ -843,8 +843,8 @@ create table if not exists public.tasks (
   id uuid not null primary key,
   owner_id uuid not null references auth.users (id) on delete cascade,
   project_id uuid references public.task_projects (id) on delete set null deferrable initially deferred,
-  title text not null check (char_length(btrim(title)) >= 1) check (char_length(title) <= 160),
-  description text check (char_length(description) <= 1000),
+  title text not null check (title = btrim(title)) check (char_length(btrim(title)) >= 1) check (char_length(title) <= 160),
+  description text check (description is null or (description = btrim(description) and char_length(description) > 0)) check (char_length(description) <= 1000),
   status text not null default 'todo' check (status in ('todo', 'in_progress', 'done')),
   priority text not null default 'normal' check (priority in ('low', 'normal', 'high')),
   due_at timestamptz,
@@ -1300,8 +1300,9 @@ begin
             );
             if rebalance_step > 0 then
               with positioned as (
-                select member_id, ordinality::numeric as position
+                select unnested.member_id, unnested.ordinality::numeric as position
                 from unnest(rebalance_member_ids) with ordinality
+                  as unnested(member_id, ordinality)
               )
               update public.tasks member
               set order_rank = lpad((
@@ -1617,8 +1618,9 @@ begin
     );
     if rebalance_step > 0 then
       with positioned as (
-        select member_id, ordinality::numeric as position
+        select unnested.member_id, unnested.ordinality::numeric as position
         from unnest(rebalance_member_ids) with ordinality
+          as unnested(member_id, ordinality)
       )
       update public.tasks member
       set order_rank = lpad((
@@ -1835,8 +1837,9 @@ begin
     );
     if rebalance_step > 0 then
       with positioned as (
-        select member_id, ordinality::numeric as position
+        select unnested.member_id, unnested.ordinality::numeric as position
         from unnest(rebalance_member_ids) with ordinality
+          as unnested(member_id, ordinality)
       )
       update public.tasks member
       set order_rank = lpad((

@@ -1,10 +1,11 @@
 {
   "graph": "TasksExample",
   "package": "tasks_example",
-  "schemaVersion": 5,
+  "schemaVersion": 1,
   "targets": [
     "supabase"
   ],
+  "durableWork": [],
   "entities": [
     {
       "name": "Task",
@@ -36,6 +37,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -49,6 +51,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -62,6 +65,7 @@
           "normalization": "none",
           "reference": "TaskProject",
           "inverseCardinality": "unbounded",
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -75,6 +79,7 @@
           "normalization": "trim",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -88,6 +93,7 @@
           "normalization": "trimToNull",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -101,6 +107,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -114,6 +121,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -127,6 +135,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -140,6 +149,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -153,6 +163,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -166,6 +177,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -179,6 +191,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "generated convention or capability"
         },
         {
@@ -192,6 +205,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -205,6 +219,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         }
       ],
@@ -238,6 +253,7 @@
       "actions": [
         {
           "name": "moveToProject",
+          "bulk": false,
           "parameters": [
             {
               "name": "projectId",
@@ -251,6 +267,7 @@
         },
         {
           "name": "start",
+          "bulk": false,
           "parameters": [],
           "fields": [
             "status",
@@ -259,6 +276,7 @@
         },
         {
           "name": "complete",
+          "bulk": false,
           "parameters": [],
           "fields": [
             "status",
@@ -267,6 +285,7 @@
         },
         {
           "name": "reopen",
+          "bulk": false,
           "parameters": [],
           "fields": [
             "status",
@@ -275,6 +294,7 @@
         },
         {
           "name": "archive",
+          "bulk": false,
           "parameters": [],
           "fields": [
             "archivedAt"
@@ -282,6 +302,7 @@
         },
         {
           "name": "unarchive",
+          "bulk": false,
           "parameters": [],
           "fields": [
             "archivedAt"
@@ -327,6 +348,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -340,6 +362,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -353,6 +376,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -366,6 +390,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -379,6 +404,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -392,6 +418,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -405,6 +432,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -418,6 +446,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -431,6 +460,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -444,6 +474,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         }
       ],
@@ -520,6 +551,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -533,6 +565,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -546,6 +579,7 @@
           "normalization": "trim",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -559,6 +593,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "generated convention or capability"
         },
         {
@@ -572,6 +607,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         },
         {
@@ -585,6 +621,7 @@
           "normalization": "none",
           "reference": null,
           "inverseCardinality": null,
+          "hierarchy": false,
           "source": "entity declaration"
         }
       ],

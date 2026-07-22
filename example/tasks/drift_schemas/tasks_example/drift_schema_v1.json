@@ -179,6 +179,8 @@
         "is_virtual": false,
         "without_rowid": false,
         "constraints": [
+          "CHECK (title = trim(title))",
+          "CHECK (description IS NULL OR (description = trim(description) AND length(description) > 0))",
           "CHECK (length(trim(title)) >= 1)",
           "CHECK (length(title) <= 160)",
           "CHECK (length(description) <= 1000)",
@@ -426,6 +428,7 @@
         "is_virtual": false,
         "without_rowid": false,
         "constraints": [
+          "CHECK (title = trim(title))",
           "CHECK (length(trim(title)) >= 1)",
           "CHECK (length(title) <= 80)"
         ],
@@ -846,7 +849,7 @@
       "sql": [
         {
           "dialect": "sqlite",
-          "sql": "CREATE TABLE IF NOT EXISTS \"tasks\" (\"id\" TEXT NOT NULL, \"owner_id\" TEXT NOT NULL, \"project_id\" TEXT NULL, \"title\" TEXT NOT NULL, \"description\" TEXT NULL, \"status\" TEXT NOT NULL DEFAULT 'todo', \"priority\" TEXT NOT NULL DEFAULT 'normal', \"due_at\" TEXT NULL, \"completed_at\" TEXT NULL, \"archived_at\" TEXT NULL, \"created_at\" TEXT NOT NULL, \"order_rank\" TEXT NOT NULL DEFAULT '057896044618658097711785492504343953926634992332820282019728792003956564819967', \"deleted_at\" TEXT NULL, \"server_version\" INTEGER NOT NULL DEFAULT 0, \"local_revision\" INTEGER NOT NULL, \"accepted_snapshot\" TEXT NULL, PRIMARY KEY (\"id\"), CHECK (length(trim(title)) >= 1), CHECK (length(title) <= 160), CHECK (length(description) <= 1000), CHECK (status IN ('todo', 'in_progress', 'done')), CHECK (priority IN ('low', 'normal', 'high')));"
+          "sql": "CREATE TABLE IF NOT EXISTS \"tasks\" (\"id\" TEXT NOT NULL, \"owner_id\" TEXT NOT NULL, \"project_id\" TEXT NULL, \"title\" TEXT NOT NULL, \"description\" TEXT NULL, \"status\" TEXT NOT NULL DEFAULT 'todo', \"priority\" TEXT NOT NULL DEFAULT 'normal', \"due_at\" TEXT NULL, \"completed_at\" TEXT NULL, \"archived_at\" TEXT NULL, \"created_at\" TEXT NOT NULL, \"order_rank\" TEXT NOT NULL DEFAULT '057896044618658097711785492504343953926634992332820282019728792003956564819967', \"deleted_at\" TEXT NULL, \"server_version\" INTEGER NOT NULL DEFAULT 0, \"local_revision\" INTEGER NOT NULL, \"accepted_snapshot\" TEXT NULL, PRIMARY KEY (\"id\"), CHECK (title = trim(title)), CHECK (description IS NULL OR (description = trim(description) AND length(description) > 0)), CHECK (length(trim(title)) >= 1), CHECK (length(title) <= 160), CHECK (length(description) <= 1000), CHECK (status IN ('todo', 'in_progress', 'done')), CHECK (priority IN ('low', 'normal', 'high')));"
         }
       ]
     },
@@ -864,7 +867,7 @@
       "sql": [
         {
           "dialect": "sqlite",
-          "sql": "CREATE TABLE IF NOT EXISTS \"task_projects\" (\"id\" TEXT NOT NULL, \"owner_id\" TEXT NOT NULL, \"title\" TEXT NOT NULL, \"order_rank\" TEXT NOT NULL DEFAULT '057896044618658097711785492504343953926634992332820282019728792003956564819967', \"deleted_at\" TEXT NULL, \"server_version\" INTEGER NOT NULL DEFAULT 0, \"local_revision\" INTEGER NOT NULL, \"accepted_snapshot\" TEXT NULL, PRIMARY KEY (\"id\"), CHECK (length(trim(title)) >= 1), CHECK (length(title) <= 80));"
+          "sql": "CREATE TABLE IF NOT EXISTS \"task_projects\" (\"id\" TEXT NOT NULL, \"owner_id\" TEXT NOT NULL, \"title\" TEXT NOT NULL, \"order_rank\" TEXT NOT NULL DEFAULT '057896044618658097711785492504343953926634992332820282019728792003956564819967', \"deleted_at\" TEXT NULL, \"server_version\" INTEGER NOT NULL DEFAULT 0, \"local_revision\" INTEGER NOT NULL, \"accepted_snapshot\" TEXT NULL, PRIMARY KEY (\"id\"), CHECK (title = trim(title)), CHECK (length(trim(title)) >= 1), CHECK (length(title) <= 80));"
         }
       ]
     },
