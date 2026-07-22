@@ -433,17 +433,20 @@ final class _EntityQueryPagingBoundaryState
   bool _metricsCheckScheduled = false;
 
   bool _onScroll(ScrollNotification notification) {
-    _scheduleMaybeLoad(notification.metrics, notification.depth);
+    _scheduleMaybeLoad(notification.metrics);
     return false;
   }
 
   bool _onMetrics(ScrollMetricsNotification notification) {
-    _scheduleMaybeLoad(notification.metrics, notification.depth);
+    _scheduleMaybeLoad(notification.metrics);
     return false;
   }
 
-  void _scheduleMaybeLoad(ScrollMetrics metrics, int depth) {
-    if (depth != 0 || metrics.axis != widget.axis) return;
+  void _scheduleMaybeLoad(ScrollMetrics metrics) {
+    // A matching-axis list may sit inside a cross-axis PageView/TabBarView,
+    // which increases notification depth before it reaches this boundary.
+    // Axis filtering keeps the surrounding pager from activating the query.
+    if (metrics.axis != widget.axis) return;
     _pendingMetrics = metrics;
     if (_metricsCheckScheduled) return;
     _metricsCheckScheduled = true;

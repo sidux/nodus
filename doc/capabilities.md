@@ -232,7 +232,7 @@ subscriptions release their reaction and lease when cancelled.
 | `watchCompleteQuery` / `watchCompleteStates` | Load and emit only exhaustive snapshots |
 | `useObservedEntityList` | Bind list lease and loading/data/empty/failure rendering to a widget; its `when` fold pages descendant scroll views automatically |
 | `useObservedEntityLookup` | Render typed zero-or-one lookup state |
-| `EntityQueryPagingBoundary` / observed `pagingBoundary` | Add the same automatic paging when observed state is rendered manually; groups page through one boundary |
+| `EntityQueryPagingBoundary` / observed `pagingBoundary` | Add the same automatic paging when observed state is rendered manually; groups page through one boundary, including lists nested in cross-axis tab/page views |
 | `useEntityQueryScrollController` | Low-level controller binding for a custom scroll integration that cannot emit ordinary scroll notifications |
 | `useEntityAction` | Own reusable busy/error feedback for awaited operations |
 

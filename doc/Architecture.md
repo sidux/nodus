@@ -1902,6 +1902,9 @@ over the generated computed index and retains no query lease.
 Observed list/query data installs an automatic paging boundary by default.
 Vertical scroll and scroll-metrics notifications load the next page before the
 visible extent is exhausted, including enough initial pages to fill a viewport.
+The boundary follows matching-axis notifications through cross-axis scroll
+containers such as tab/page views; the container's own axis does not activate
+the query.
 The query runtime coalesces concurrent page requests and publishes failures;
 the boundary MUST NOT hot-retry a failed page. A multi-query projection uses
 one group boundary, and UI that renders observed state manually wraps its scroll
