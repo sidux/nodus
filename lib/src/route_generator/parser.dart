@@ -220,9 +220,9 @@ FileRouteSpec _parsePageAsset(
   }
   final pageFunction = pageFunctions.firstOrNull;
   if (pageFunction != null) {
-    if (pageFunction.returnType.getDisplayString() != 'Widget') {
+    if (!_isWidgetType(pageFunction.returnType)) {
       throw InvalidGenerationSourceError(
-        '`${pageFunction.name}` must return Widget.',
+        '`${pageFunction.name}` must return Widget or a Widget subtype.',
         element: pageFunction,
       );
     }
@@ -233,7 +233,9 @@ FileRouteSpec _parsePageAsset(
       name: pageFunction.name!,
       formalParameters: pageFunction.formalParameters,
       owner: pageFunction,
-      buildsPage: false,
+      buildsPage: _implementsFileRoutePagePresentation(
+        pageFunction.returnType,
+      ),
       isPageFunction: true,
     );
   }
@@ -263,6 +265,22 @@ FileRouteSpec _parsePageAsset(
     ),
     isPageFunction: false,
   );
+}
+
+bool _isWidgetType(DartType type) {
+  final element = type.element;
+  return element is InterfaceElement &&
+      (element.name == 'Widget' ||
+          element.allSupertypes.any((type) => type.element.name == 'Widget'));
+}
+
+bool _implementsFileRoutePagePresentation(DartType type) {
+  final element = type.element;
+  return element is InterfaceElement &&
+      (element.name == 'FileRoutePagePresentation' ||
+          element.allSupertypes.any(
+            (type) => type.element.name == 'FileRoutePagePresentation',
+          ));
 }
 
 FileRouteSpec _pageSpec({

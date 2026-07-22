@@ -204,6 +204,33 @@ void main() {
     expect(nestedAccountId, _firstId);
   });
 
+  test('graph-only ready work preserves the account lease', () async {
+    final action = Completer<void>();
+    final events = <String>[];
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (accountId) async => _TestEntityGraph(accountId),
+      close: (entityGraph) async =>
+          events.add('close:${entityGraph.accountId.value}'),
+    );
+    addTearDown(session.dispose);
+    await session.switchAccount(_firstId);
+
+    final use = session.withReadyGraph((entityGraph) async {
+      events.add('use:${entityGraph.accountId.value}');
+      await action.future;
+    });
+    final signOut = session.switchAccount(null);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(events, ['use:${_firstId.value}']);
+    action.complete();
+    await Future.wait([use, signOut]);
+    expect(events, [
+      'use:${_firstId.value}',
+      'close:${_firstId.value}',
+    ]);
+  });
+
   test('ready work rejects signed-out sessions', () async {
     final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
       open: (accountId) async => _TestEntityGraph(accountId),

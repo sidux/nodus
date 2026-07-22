@@ -40,6 +40,19 @@ final class FileRouteMatch {
 typedef FileRouterRedirect =
     FutureOr<String?> Function(BuildContext context, GoRouterState state);
 
+/// App-wide presentation for ordinary generated file-route pages.
+///
+/// A page implementing [FileRoutePagePresentation] keeps precedence for real
+/// page-owned intent such as a transparent launcher or adaptive transition.
+/// When this callback is absent, ordinary routes retain GoRouter's native
+/// builder behavior.
+typedef FileRouteDefaultPageBuilder =
+    Page<void> Function(
+      BuildContext context,
+      GoRouterState state,
+      Widget child,
+    );
+
 /// App-level lifecycle options that cannot be inferred from feature files.
 ///
 /// Route paths, hierarchy, parameters, guards, layouts, and page presentation
@@ -50,6 +63,7 @@ final class FileRouterConfiguration {
     this.navigatorKey,
     this.refreshListenable,
     this.redirect,
+    this.defaultPageBuilder,
     this.debugLogDiagnostics = false,
     this.observers = const [],
   });
@@ -57,6 +71,7 @@ final class FileRouterConfiguration {
   final GlobalKey<NavigatorState>? navigatorKey;
   final Listenable? refreshListenable;
   final FileRouterRedirect? redirect;
+  final FileRouteDefaultPageBuilder? defaultPageBuilder;
   final bool debugLogDiagnostics;
   final List<NavigatorObserver> observers;
 }

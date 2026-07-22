@@ -613,6 +613,8 @@ final class Account {}
               contains("import 'package:flutter/widgets.dart' hide Table;"),
               contains('final class TestGraphEntityGraphScope'),
               contains('extension TestGraphEntityGraphBuildContext'),
+              contains('withReadyTestGraphEntityGraph<R>'),
+              contains('testGraphEntityGraphSession.withReadyGraph(action)'),
               contains("name: 'applyOutcomes'"),
               contains('GeneratedDurableWorkKind.process'),
               contains('GeneratedDurableWorkKind.projection'),

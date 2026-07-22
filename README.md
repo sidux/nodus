@@ -265,10 +265,14 @@ application must reconcile:
   archiving, soft deletion, and scoped ordering.
 - Present-entity loaders, typed heterogeneous future records, multi-query
   lease composition, and async generated-draft lifecycle hooks.
+- Graph-only ready-session leases and generated Flutter context entry points,
+  without repeated unused account callback parameters.
 - Aggregate-boundary inference from unique bounded links and exact child-set
   replacement without handwritten reconciliation loops.
 - Bounded in-memory collections and unbounded keyset-paged Drift queries behind
   typed list APIs.
+- Typed filesystem routes with one optional default page transition and
+  concrete page-owned overrides for adaptive, no-transition, or sheet intent.
 - Durable account-scoped synchronization with retry, idempotency, cursors,
   wake-up signals, conflict rebase, and restart recovery.
 - Deterministic generation with explanation output, schema fingerprints, and

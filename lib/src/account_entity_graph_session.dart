@@ -267,6 +267,14 @@ final class AccountEntityGraphSession<G, A> {
     });
   }
 
+  /// Runs account-scoped work when only the ready entity graph is needed.
+  ///
+  /// This is the graph-only spelling of [withReadyEntityGraph]. It preserves
+  /// the same serialized lease, reentrancy, and account-switch guarantees
+  /// without forcing callers to declare an unused account identifier.
+  Future<R> withReadyGraph<R>(FutureOr<R> Function(G entityGraph) action) =>
+      withReadyEntityGraph((_, entityGraph) => action(entityGraph));
+
   Future<void> _transition(LocalId<A>? accountId, int generation) async {
     if (generation != _requestGeneration) return;
     if (_currentEntityGraph != null && _currentAccountId == accountId) return;

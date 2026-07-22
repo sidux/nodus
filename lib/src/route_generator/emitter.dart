@@ -409,7 +409,20 @@ void _emitGoRoute(
   } else if (route.buildsPage) {
     buffer.writeln('$indent  pageBuilder: _buildFileRoute$index,');
   } else {
-    buffer.writeln('$indent  builder: _buildFileRoute$index,');
+    buffer
+      ..writeln('$indent  builder: configuration.defaultPageBuilder == null')
+      ..writeln('$indent      ? _buildFileRoute$index')
+      ..writeln('$indent      : null,')
+      ..writeln(
+        '$indent  pageBuilder: configuration.defaultPageBuilder == null',
+      )
+      ..writeln('$indent      ? null')
+      ..writeln('$indent      : (context, state) =>')
+      ..writeln('$indent          configuration.defaultPageBuilder!(')
+      ..writeln('$indent            context,')
+      ..writeln('$indent            state,')
+      ..writeln('$indent            _buildFileRoute$index(context, state),')
+      ..writeln('$indent          ),');
   }
   buffer.writeln('$indent),');
 }

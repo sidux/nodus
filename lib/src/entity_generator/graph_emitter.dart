@@ -327,6 +327,11 @@ void _emitTypedGraphScope(StringBuffer buffer, EntityGraphSpec graph) {
       '  AccountEntityGraphSession<$graphName, $account> get '
       '${prefix}EntityGraphSession => AccountEntityGraphScope.sessionOf<$graphName, $account>(this);',
     )
+    ..writeln(
+      '  Future<R> withReady${graph.className}EntityGraph<R>('
+      'FutureOr<R> Function($graphName entityGraph) action) => '
+      '${prefix}EntityGraphSession.withReadyGraph(action);',
+    )
     ..writeln('}')
     ..writeln();
 }

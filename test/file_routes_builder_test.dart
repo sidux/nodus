@@ -169,6 +169,51 @@ Widget notFoundPage(
     );
   });
 
+  test(
+    'preserves presentation from a concrete Widget function return type',
+    () async {
+      await testBuilder(
+        fileRoutesBuilder(BuilderOptions.empty),
+        {
+          'example|lib/features/home/presentation/pages/page.dart': '''
+class BuildContext {}
+class GoRouterState {}
+class Widget { const Widget(); }
+abstract interface class FileRoutePagePresentation {
+  Object buildRoutePage(BuildContext context, GoRouterState state);
+}
+
+final class HomeScreen extends Widget implements FileRoutePagePresentation {
+  const HomeScreen();
+
+  @override
+  Object buildRoutePage(BuildContext context, GoRouterState state) => Object();
+}
+
+HomeScreen homePage() => const HomeScreen();
+''',
+          'example|lib/features/shell/presentation/pages/not_found.dart': '''
+final class Widget {}
+
+Widget notFoundPage(Object error) => Widget();
+''',
+        },
+        rootPackage: 'example',
+        outputs: {
+          'example|lib/features/shell/presentation/pages/not_found.routes.g.dart':
+              decodedMatches(
+                allOf([
+                  contains('Page<void> _buildFileRoute0('),
+                  contains('final page = route0.homePage();'),
+                  contains('return page.buildRoutePage(context, state);'),
+                  contains('pageBuilder: _buildFileRoute0'),
+                ]),
+              ),
+        },
+      );
+    },
+  );
+
   test('omits type imports already re-exported by a route dependency', () async {
     await testBuilder(
       fileRoutesBuilder(BuilderOptions.empty),
@@ -291,6 +336,7 @@ Widget notFoundPage(Object error) => Widget();
               decodedMatches(
                 allOf([
                   contains('return route1.homePage(key: state.pageKey);'),
+                  contains('configuration.defaultPageBuilder == null'),
                   contains('FileRouteMatch.page(route1.homePage)'),
                   contains('identical(redirect.target, route1.homePage)'),
                   isNot(contains('route1.homePage.new')),

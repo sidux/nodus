@@ -307,6 +307,11 @@ idempotent durable work remains recoverable by the next compatible session.
 Foreground operations acquire bounded session leases. A lease keeps the graph
 alive only until its local operation or query acquisition completes; it cannot
 keep sign-out blocked through an unbounded stream or remote retry.
+`withReadyEntityGraph` exposes both the authenticated nominal account and the
+ready graph when both are meaningful. Its `withReadyGraph` shorthand and the
+generated `BuildContext.withReady<Application>EntityGraph` method preserve the
+same lease while omitting an unused account argument; applications MUST NOT
+recreate either forwarding helper.
 
 `AccountEntityGraphScope` exposes signed-out, opening, ready, and failure
 lifecycle transitions only; entity/query mutations remain direct MobX
@@ -2466,11 +2471,16 @@ Conventions MUST derive:
 - typed locations and navigation values.
 
 A page file contains exactly one typed public entry: either the real public
-widget and its constructor contract, or a top-level `Widget ...Page(...)`
-function that composes reusable presentation without introducing a forwarding
-widget class. A second route declaration, manual path constant, forwarding
-widget, central mirror tree, string concatenation, or untyped `$extra` payload
-is forbidden.
+widget and its constructor contract, or a top-level `Widget`-subtype
+`...Page(...)` function that composes reusable presentation without introducing
+a forwarding widget class. The concrete function return type is preserved so
+generation can detect `FileRoutePagePresentation`; erasing it to `Widget` is
+valid only when no page-owned presentation exists. One optional application
+default page builder owns ordinary transition policy. A page-owned presentation
+overrides that default only for real UI intent such as an adaptive detail page,
+no-transition shell destination, or transparent sheet launcher. A second route
+declaration, manual path constant, forwarding widget, central mirror tree,
+string concatenation, or untyped `$extra` payload is forbidden.
 
 Routing owns URL and navigation composition, not entity state. Guards read
 typed entity-graph/session state without creating a parallel store.
