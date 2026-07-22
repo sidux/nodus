@@ -10,6 +10,8 @@
 - Adds `nodus init`, `generate`, `watch`, `check`, `explain`, `inventory`, and
   `migrate` commands. The deterministic semantic inventory combines resolved
   graph metadata with analyzer ASTs and supports write/check CI drift gates.
+- Allows source-boundary policies to forbid directories, package prefixes, or
+  both without requiring an unused restriction kind.
 - Includes direct collaboration, ordering, archiving, soft deletion, activity
   tracking, and deterministic in-memory synchronization support.
 - Enforces immutable persisted declarations and routes durable changes through

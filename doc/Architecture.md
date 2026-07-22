@@ -247,8 +247,9 @@ version changes tied to actual resolved schema changes.
 
 Applications MAY opt into generic source dependency boundaries in
 `nodus.lock`. A boundary names the source-directory segments it governs plus
-forbidden directory segments and package-name prefixes. `nodus check` analyzes
-imports and fails configured violations; it does not assume that every project
+one or both of forbidden directory segments and package-name prefixes. Empty
+restriction kinds are omitted. `nodus check` analyzes imports and fails
+configured violations; it does not assume that every project
 uses `domain`, `application`, or `infrastructure` folder names. The policy
 enforces dependency direction only. It MUST NOT infer business layers, move
 files, or make framework-specific packages mandatory or forbidden by default.

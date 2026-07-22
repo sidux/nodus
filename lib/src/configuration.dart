@@ -126,8 +126,8 @@ final class NodusSourceBoundary {
   const NodusSourceBoundary({
     required this.name,
     required this.sourceDirectories,
-    required this.forbiddenDirectories,
-    required this.forbiddenPackages,
+    this.forbiddenDirectories = const [],
+    this.forbiddenPackages = const [],
   });
 
   final String name;
@@ -138,8 +138,9 @@ final class NodusSourceBoundary {
   Map<String, Object?> toJson() => {
     'name': name,
     'sourceDirectories': sourceDirectories,
-    'forbiddenDirectories': forbiddenDirectories,
-    'forbiddenPackages': forbiddenPackages,
+    if (forbiddenDirectories.isNotEmpty)
+      'forbiddenDirectories': forbiddenDirectories,
+    if (forbiddenPackages.isNotEmpty) 'forbiddenPackages': forbiddenPackages,
   };
 }
 
@@ -161,15 +162,26 @@ List<NodusSourceBoundary> _decodeSourceBoundaries(Object? source) {
     if (!names.add(name)) {
       throw FormatException('Duplicate source boundary `$name`.');
     }
+    final forbiddenDirectories = _optionalPathSegments(
+      json,
+      'forbiddenDirectories',
+    );
+    final forbiddenPackages = _optionalPackagePrefixes(
+      json,
+      'forbiddenPackages',
+    );
+    if (forbiddenDirectories.isEmpty && forbiddenPackages.isEmpty) {
+      throw const FormatException(
+        'A nodus.lock source boundary must forbid at least one directory or '
+        'package prefix.',
+      );
+    }
     result.add(
       NodusSourceBoundary(
         name: name,
         sourceDirectories: _requiredPathSegments(json, 'sourceDirectories'),
-        forbiddenDirectories: _requiredPathSegments(
-          json,
-          'forbiddenDirectories',
-        ),
-        forbiddenPackages: _requiredPackagePrefixes(json, 'forbiddenPackages'),
+        forbiddenDirectories: forbiddenDirectories,
+        forbiddenPackages: forbiddenPackages,
       ),
     );
   }
@@ -179,8 +191,32 @@ List<NodusSourceBoundary> _decodeSourceBoundaries(Object? source) {
 List<String> _requiredPathSegments(Map<String, Object?> json, String key) =>
     _requiredUniqueStrings(json, key, RegExp(r'^[A-Za-z][A-Za-z0-9_]*$'));
 
-List<String> _requiredPackagePrefixes(Map<String, Object?> json, String key) =>
-    _requiredUniqueStrings(json, key, RegExp(r'^[a-z][a-z0-9_]*$'));
+List<String> _optionalPathSegments(Map<String, Object?> json, String key) =>
+    _optionalUniqueStrings(json, key, RegExp(r'^[A-Za-z][A-Za-z0-9_]*$'));
+
+List<String> _optionalPackagePrefixes(Map<String, Object?> json, String key) =>
+    _optionalUniqueStrings(json, key, RegExp(r'^[a-z][a-z0-9_]*$'));
+
+List<String> _optionalUniqueStrings(
+  Map<String, Object?> json,
+  String key,
+  RegExp pattern,
+) {
+  final raw = json[key];
+  if (raw == null) return const [];
+  if (raw is! List) {
+    throw FormatException('nodus.lock source boundary $key must be a list.');
+  }
+  final result = <String>[];
+  for (final value in raw) {
+    if (value is! String ||
+        !pattern.hasMatch(value) ||
+        !result.addUnique(value)) {
+      throw FormatException('Invalid or duplicate source boundary $key value.');
+    }
+  }
+  return List.unmodifiable(result);
+}
 
 List<String> _requiredUniqueStrings(
   Map<String, Object?> json,

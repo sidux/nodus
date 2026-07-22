@@ -52,6 +52,68 @@ void main() {
     ]);
   });
 
+  test('source boundaries only require the restrictions they use', () {
+    final directoryOnly = NodusLock.decode('''
+{
+  "formatVersion": 1,
+  "packageName": "tasks_example",
+  "graphName": "TasksExample",
+  "schemaVersion": 1,
+  "targets": ["supabase"],
+  "defaultTarget": "supabase",
+  "sourceBoundaries": [{
+    "name": "application",
+    "sourceDirectories": ["application", "infrastructure"],
+    "forbiddenDirectories": ["presentation"]
+  }]
+}
+''');
+    expect(directoryOnly.sourceBoundaries.single.forbiddenDirectories, [
+      'presentation',
+    ]);
+    expect(directoryOnly.sourceBoundaries.single.forbiddenPackages, isEmpty);
+    expect(directoryOnly.encode(), isNot(contains('"forbiddenPackages"')));
+
+    final packageOnly = NodusLock.decode('''
+{
+  "formatVersion": 1,
+  "packageName": "tasks_example",
+  "graphName": "TasksExample",
+  "schemaVersion": 1,
+  "targets": ["supabase"],
+  "defaultTarget": "supabase",
+  "sourceBoundaries": [{
+    "name": "domain",
+    "sourceDirectories": ["domain"],
+    "forbiddenPackages": ["flutter"]
+  }]
+}
+''');
+    expect(packageOnly.sourceBoundaries.single.forbiddenDirectories, isEmpty);
+    expect(packageOnly.sourceBoundaries.single.forbiddenPackages, ['flutter']);
+    expect(packageOnly.encode(), isNot(contains('"forbiddenDirectories"')));
+  });
+
+  test('source boundaries reject an empty restriction', () {
+    expect(
+      () => NodusLock.decode('''
+{
+  "formatVersion": 1,
+  "packageName": "tasks_example",
+  "graphName": "TasksExample",
+  "schemaVersion": 1,
+  "targets": ["supabase"],
+  "defaultTarget": "supabase",
+  "sourceBoundaries": [{
+    "name": "domain",
+    "sourceDirectories": ["domain"]
+  }]
+}
+'''),
+      throwsFormatException,
+    );
+  });
+
   test('init derives the graph and owns standard Drift setup', () {
     final root = Directory.systemTemp.createTempSync('nodus_init_');
     addTearDown(() => root.deleteSync(recursive: true));
