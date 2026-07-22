@@ -233,9 +233,7 @@ FileRouteSpec _parsePageAsset(
       name: pageFunction.name!,
       formalParameters: pageFunction.formalParameters,
       owner: pageFunction,
-      buildsPage: _implementsFileRoutePagePresentation(
-        pageFunction.returnType,
-      ),
+      buildsPage: _implementsFileRoutePagePresentation(pageFunction.returnType),
       isPageFunction: true,
     );
   }

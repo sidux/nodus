@@ -225,10 +225,7 @@ void main() {
     expect(events, ['use:${_firstId.value}']);
     action.complete();
     await Future.wait([use, signOut]);
-    expect(events, [
-      'use:${_firstId.value}',
-      'close:${_firstId.value}',
-    ]);
+    expect(events, ['use:${_firstId.value}', 'close:${_firstId.value}']);
   });
 
   test('ready work rejects signed-out sessions', () async {
