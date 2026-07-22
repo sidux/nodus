@@ -530,6 +530,37 @@ void main() {
     ]);
   });
 
+  test('greenfield orchestration recreates the Drift test schema', () async {
+    final fixture = _Fixture(createPackage: true);
+    addTearDown(fixture.dispose);
+    fixture.writeSchema(4, [_column('id')]);
+    fixture.file('supabase/nodus/schema.sql')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('create table public.example(id uuid);\n');
+    final commands = <String>[];
+    final generator = fixture.generator(
+      runCommand: (executable, arguments, {required workingDirectory}) async {
+        commands.add('$executable ${arguments.join(' ')}');
+        if (arguments.join(' ') == 'run drift_dev make-migrations') {
+          fixture.writeSchema(1, [_column('id')]);
+        }
+      },
+    );
+
+    await generator.generate(
+      const NodusGenerationOptions(resetDriftBaseline: true),
+    );
+
+    expect(commands, [
+      'dart run build_runner build',
+      'dart run build_runner build',
+      'dart run drift_dev make-migrations',
+      'dart run drift_dev schema generate '
+          'drift_schemas/application test/drift/application/generated',
+      'dart format lib',
+    ]);
+  });
+
   test(
     'fast generation runs only compile-complete application outputs',
     () async {

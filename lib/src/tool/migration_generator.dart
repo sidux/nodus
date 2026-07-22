@@ -241,6 +241,9 @@ final class NodusGenerator {
       await _run('dart', ['run', 'build_runner', 'build']);
     }
     await _run('dart', ['run', 'drift_dev', 'make-migrations']);
+    if (options.resetDriftBaseline) {
+      await generateDriftTestSchema();
+    }
     normalizeDriftStepsAccessors();
     normalizeDriftTestSchemaAccessors();
     normalizeDriftMigrationTests();
@@ -768,6 +771,26 @@ final class NodusGenerator {
       );
     }
     return candidates.single;
+  }
+
+  /// Recreates Drift's versioned test helper even for a version-1-only graph.
+  ///
+  /// `make-migrations` does not recreate this helper for an initial snapshot,
+  /// but an existing generated migration matrix still imports it after a
+  /// greenfield reset.
+  Future<void> generateDriftTestSchema() async {
+    final schemaDirectory = inferDriftSchemaDirectory();
+    final databaseName = schemaDirectory.uri.pathSegments
+        .where((segment) => segment.isNotEmpty)
+        .last;
+    await _run('dart', [
+      'run',
+      'drift_dev',
+      'schema',
+      'generate',
+      _relativePath(schemaDirectory.path),
+      'test/drift/$databaseName/generated',
+    ]);
   }
 
   /// Restores the declared Dart getter names in Drift's versioned schema.
