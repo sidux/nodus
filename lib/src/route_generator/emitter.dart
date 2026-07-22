@@ -467,6 +467,8 @@ void _emitScopeShell(
     buffer.writeln(
       '$indent  builder: _buildFileRouteLayout${router.layouts.indexOf(layout)},',
     );
+  } else {
+    buffer.writeln('$indent  builder: (context, state, child) => child,');
   }
   if (node.guard case final guard?) {
     buffer.writeln(

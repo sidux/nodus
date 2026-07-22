@@ -344,6 +344,7 @@ Widget notFoundPage(Object error) => Widget();
                 allOf([
                   contains('return route1.homePage(key: state.pageKey);'),
                   contains('configuration.defaultPageBuilder == null'),
+                  contains('builder: (context, state, child) => child,'),
                   contains('FileRouteMatch.page(route1.homePage)'),
                   contains('identical(redirect.target, route1.homePage)'),
                   isNot(contains('route1.homePage.new')),
