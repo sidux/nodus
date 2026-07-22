@@ -2478,8 +2478,10 @@ generation can detect `FileRoutePagePresentation`; erasing it to `Widget` is
 valid only when no page-owned presentation exists. One optional application
 default page builder owns ordinary transition policy. A page-owned presentation
 overrides that default only for real UI intent such as an adaptive detail page,
-no-transition shell destination, or transparent sheet launcher. A second route
-declaration, manual path constant, forwarding widget, central mirror tree,
+no-transition shell destination, or transparent sheet launcher, and returns
+`null` when a runtime condition should fall back to the configured default. A
+deferred page without a configured default is an explicit runtime error. A
+second route declaration, manual path constant, forwarding widget, central mirror tree,
 string concatenation, or untyped `$extra` payload is forbidden.
 
 Routing owns URL and navigation composition, not entity state. Guards read

@@ -129,7 +129,7 @@ class BuildContext {}
 class GoRouterState {}
 class Widget { const Widget(); }
 abstract interface class FileRoutePagePresentation {
-  Object buildRoutePage(BuildContext context, GoRouterState state);
+  Object? buildRoutePage(BuildContext context, GoRouterState state);
 }
 
 final class HomePage extends Widget implements FileRoutePagePresentation {
@@ -156,8 +156,12 @@ Widget notFoundPage(
             decodedMatches(
               allOf([
                 contains('Page<void> _buildFileRoute0('),
-                contains('return page.buildRoutePage(context, state);'),
-                contains('pageBuilder: _buildFileRoute0'),
+                contains(
+                  'final routePage = page.buildRoutePage(context, state);',
+                ),
+                contains('if (routePage != null) return routePage;'),
+                contains('return defaultPageBuilder(context, state, page);'),
+                contains('configuration.defaultPageBuilder'),
                 contains('FileRouterConfiguration configuration ='),
                 contains('navigatorKey: configuration.navigatorKey'),
                 contains('refreshListenable: configuration.refreshListenable'),
@@ -180,7 +184,7 @@ class BuildContext {}
 class GoRouterState {}
 class Widget { const Widget(); }
 abstract interface class FileRoutePagePresentation {
-  Object buildRoutePage(BuildContext context, GoRouterState state);
+  Object? buildRoutePage(BuildContext context, GoRouterState state);
 }
 
 final class HomeScreen extends Widget implements FileRoutePagePresentation {
@@ -205,8 +209,11 @@ Widget notFoundPage(Object error) => Widget();
                 allOf([
                   contains('Page<void> _buildFileRoute0('),
                   contains('final page = route0.homePage();'),
-                  contains('return page.buildRoutePage(context, state);'),
-                  contains('pageBuilder: _buildFileRoute0'),
+                  contains(
+                    'final routePage = page.buildRoutePage(context, state);',
+                  ),
+                  contains('if (routePage != null) return routePage;'),
+                  contains('return defaultPageBuilder(context, state, page);'),
                 ]),
               ),
         },

@@ -201,8 +201,11 @@ void _emitRouteBuilder(StringBuffer buffer, FileRouteSpec route, int index) {
   buffer
     ..writeln('$returnType _buildFileRoute$index(')
     ..writeln('  BuildContext context,')
-    ..writeln('  GoRouterState state,')
-    ..writeln(') {');
+    ..writeln('  GoRouterState state,');
+  if (route.buildsPage) {
+    buffer.writeln('  FileRouteDefaultPageBuilder? defaultPageBuilder,');
+  }
+  buffer.writeln(') {');
   final decoded = [...route.pathParameters, ...route.queryParameters];
   for (final parameter in decoded) {
     buffer.writeln('  late final ${parameter.dartType} ${parameter.name};');
@@ -241,7 +244,14 @@ void _emitRouteBuilder(StringBuffer buffer, FileRouteSpec route, int index) {
       ..writeln(
         '  final page = ${route.importPrefix}.${route.functionName}(${_arguments(route)});',
       )
-      ..writeln('  return page.buildRoutePage(context, state);');
+      ..writeln('  final routePage = page.buildRoutePage(context, state);')
+      ..writeln('  if (routePage != null) return routePage;')
+      ..writeln('  if (defaultPageBuilder == null) {')
+      ..writeln(
+        "    throw StateError('A file-route page deferred presentation, but FileRouterConfiguration.defaultPageBuilder is not configured.');",
+      )
+      ..writeln('  }')
+      ..writeln('  return defaultPageBuilder(context, state, page);');
   } else {
     buffer.writeln(
       '  return ${route.importPrefix}.${route.functionName}(${_arguments(route)});',
@@ -407,7 +417,13 @@ void _emitGoRoute(
       '${route.importPrefix}.${route.functionName}(${_arguments(route)})),',
     );
   } else if (route.buildsPage) {
-    buffer.writeln('$indent  pageBuilder: _buildFileRoute$index,');
+    buffer
+      ..writeln('$indent  pageBuilder: (context, state) =>')
+      ..writeln('$indent      _buildFileRoute$index(')
+      ..writeln('$indent        context,')
+      ..writeln('$indent        state,')
+      ..writeln('$indent        configuration.defaultPageBuilder,')
+      ..writeln('$indent      ),');
   } else {
     buffer
       ..writeln('$indent  builder: configuration.defaultPageBuilder == null')

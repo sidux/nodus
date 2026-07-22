@@ -17,7 +17,12 @@ abstract interface class FileRouteLocation {
 /// sheet launcher or a no-transition adaptive shell destination. Keeping the
 /// override on the page prevents a second central route registry.
 abstract interface class FileRoutePagePresentation {
-  Page<void> buildRoutePage(BuildContext context, GoRouterState state);
+  /// Returns a page override, or `null` to use the configured router default.
+  ///
+  /// Deferring requires [FileRouterConfiguration.defaultPageBuilder]. A page
+  /// that owns presentation must return a concrete page when no app-wide
+  /// default exists.
+  Page<void>? buildRoutePage(BuildContext context, GoRouterState state);
 }
 
 /// The generated page identity for the current match.
@@ -42,10 +47,10 @@ typedef FileRouterRedirect =
 
 /// App-wide presentation for ordinary generated file-route pages.
 ///
-/// A page implementing [FileRoutePagePresentation] keeps precedence for real
-/// page-owned intent such as a transparent launcher or adaptive transition.
-/// When this callback is absent, ordinary routes retain GoRouter's native
-/// builder behavior.
+/// A page implementing [FileRoutePagePresentation] can override this for real
+/// page-owned intent such as a transparent launcher or adaptive transition,
+/// or return `null` to defer to this callback. When this callback is absent,
+/// ordinary routes retain GoRouter's native builder behavior.
 typedef FileRouteDefaultPageBuilder =
     Page<void> Function(
       BuildContext context,

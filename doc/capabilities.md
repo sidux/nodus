@@ -393,7 +393,8 @@ Nodus generates typed GoRouter locations from those entries:
 
 `FileRouteDependency<T>` provides statically typed route dependencies.
 `FileRoutePagePresentation` keeps an exceptional sheet or transition beside the
-page that owns it. Reusable non-route widgets live under
+page that owns it and may return `null` to defer a runtime branch to the
+configured default page builder. Reusable non-route widgets live under
 `presentation/components/`.
 
 ## Generation, migrations, and testing

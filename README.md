@@ -272,7 +272,8 @@ application must reconcile:
 - Bounded in-memory collections and unbounded keyset-paged Drift queries behind
   typed list APIs.
 - Typed filesystem routes with one optional default page transition and
-  concrete page-owned overrides for adaptive, no-transition, or sheet intent.
+  concrete page-owned overrides for adaptive, no-transition, or sheet intent;
+  conditional overrides can defer back to the configured default.
 - Durable account-scoped synchronization with retry, idempotency, cursors,
   wake-up signals, conflict rebase, and restart recovery.
 - Deterministic generation with explanation output, schema fingerprints, and
