@@ -97,6 +97,15 @@ sealed class NodusMigrationPlan<D extends GeneratedDatabase> {
 
   const factory NodusMigrationPlan.generated() = _GeneratedMigrationPlan<D>;
 
+  /// Explicitly accepts generated table rebuilds for a semantic transition.
+  ///
+  /// Use this only after the application has established that existing rows
+  /// already satisfy newly declared constraints. Unlike [generated], this is
+  /// an affirmative application decision and therefore satisfies a generated
+  /// manual-change guard without adding an empty callback.
+  const factory NodusMigrationPlan.acknowledgeGenerated() =
+      _AcknowledgedGeneratedMigrationPlan<D>;
+
   const factory NodusMigrationPlan.augment(NodusManualMigration<D> apply) =
       _AugmentedMigrationPlan<D>;
 
@@ -119,6 +128,20 @@ final class _GeneratedMigrationPlan<D extends GeneratedDatabase>
 
   @override
   bool get handlesManualChanges => false;
+
+  @override
+  Future<void> apply(NodusMigrationContext<D> context) async {}
+}
+
+final class _AcknowledgedGeneratedMigrationPlan<D extends GeneratedDatabase>
+    extends NodusMigrationPlan<D> {
+  const _AcknowledgedGeneratedMigrationPlan() : super._();
+
+  @override
+  bool get runsGeneratedSteps => true;
+
+  @override
+  bool get handlesManualChanges => true;
 
   @override
   Future<void> apply(NodusMigrationContext<D> context) async {}

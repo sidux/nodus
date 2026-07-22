@@ -1983,11 +1983,32 @@ final class TaskSet {
     LocalId<Task> id, {
     bool refresh = false,
   }) => _engine.loadRawId(id.value, refresh: refresh);
+  Future<EntityLookupLease<Task>?> loadPresentById(
+    LocalId<Task> id, {
+    bool refresh = false,
+  }) async {
+    final lease = await loadById(id, refresh: refresh);
+    if (lease != null && lease.value.deletedAt != null) {
+      lease.release();
+      return null;
+    }
+    return lease;
+  }
+
   Future<R> useById<R>(
     LocalId<Task> id,
     LeaseAction<Task, R> action, {
     bool refresh = false,
   }) => loadById(id, refresh: refresh).use(
+    action,
+    ifAbsent: () =>
+        throw EntityNotFoundException(entityType: 'Task', entityId: id.value),
+  );
+  Future<R> usePresentById<R>(
+    LocalId<Task> id,
+    LeaseAction<Task, R> action, {
+    bool refresh = false,
+  }) => loadPresentById(id, refresh: refresh).use(
     action,
     ifAbsent: () =>
         throw EntityNotFoundException(entityType: 'Task', entityId: id.value),

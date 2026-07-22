@@ -713,6 +713,15 @@ abstract interface class Collaborative<Principal> {
   });
 }
 
+abstract interface class WorkflowMembership<Target, Principal, Status> {
+  LocalId<Principal> get memberId;
+  Status get status;
+  Future<void> accept();
+  Future<void> decline();
+  Future<void> revoke();
+  Future<void> reinvite();
+}
+
 abstract interface class ActivityTracked {
   String get activityLabel;
 }
@@ -793,10 +802,20 @@ Capability visibility conventions are:
   tombstone so an explicit lifecycle operation can restore or inspect it;
 - `Archivable` entities are excluded from ordinary active lists and have
   generated active and archived list constructors;
-- `Activatable` relationships expose active links by default and require an
-  explicit inactive or raw view for administration or recovery. Generation
-  supplies `active = true`, `activate()`, and `deactivate()`; the entity repeats
-  none of them;
+- `Activatable` relationships expose active links by default. Every generated
+  query and list constructor defaults to
+  `inactive: InactiveVisibility.exclude`; administration and recovery opt into
+  `.include` or `.only`. Generation supplies `active = true`, `activate()`, and
+  `deactivate()`; the entity repeats none of them. Generated relationship
+  mutation internals include inactive identities so link and exact replacement
+  reactivate the unique canonical row instead of creating a duplicate;
+- `WorkflowMembership<Target, Principal, Status>` is the conventional
+  invite/accept/decline/revoke workflow relationship. The entity declares its
+  target reference and any product-specific payload; generation supplies the
+  participant reference, the four-state status contract, transition actions,
+  self-membership inequality, unique-pair reuse, and `inviteOrReuse`. `Status`
+  remains a domain enum but MUST define exactly `pending`, `accepted`,
+  `declined`, and `revoked`;
 - `Collaborative<Principal>` generates the collaboration relationship,
   authorization metadata, durable semantic operation, and the direct
   `entity.setCollaborator(principalId, active: ...)` API. A separate
@@ -1158,13 +1177,18 @@ Flutter bindings own only ephemeral controller/busy/error state. Generated
 `EntityDraftField<T>` values remain the form candidate, `useEntityMutationDraft`
 discards an abandoned draft, text/value bindings write directly to its typed
 fields, and `useEntityAction` owns action feedback. These hooks MUST NOT create
-a second persisted or query-state authority.
+a second persisted or query-state authority. When aggregate acquisition is
+asynchronous, `useAsyncEntityMutationDraft` owns the future, stale acquisition,
+and unconsumed-tree disposal; feature widgets MUST NOT repeat mounted checks or
+draft cleanup around generated aggregate loaders.
 
 When one bounded domain form owns more than one entity, generation emits a
 typed `<Root>AggregateDraft` in addition to the ordinary entity drafts. The
 aggregate boundary is inferred only from declared non-null compositions,
 references marked as bounded `aggregateMember`s, and bounded active
-relationship collections. Feature code MUST NOT restate that topology in a
+relationship collections. A unique link from an aggregate member to one
+bounded target proves the same bounded inverse and MUST NOT require the
+consumer to repeat `aggregateMember`. Feature code MUST NOT restate that topology in a
 repository, form model, transaction helper, or ID bundle.
 
 An aggregate creation draft allocates stable identities for its complete tree
@@ -1672,9 +1696,11 @@ round-trips, a generic ID cast, or an undeclared conversion remain forbidden.
 
 Generated sets provide:
 
-- synchronous `byId` for safely bounded complete sets;
+- synchronous `byId`, tombstone-filtered `byPresentId`, and throwing
+  `requirePresent` for safely bounded complete sets;
 - lease-scoped `loadById` for advanced unbounded-set lifetime control and
-  canonical `useById(id, action)` for ordinary imperative work;
+  canonical `useById(id, action)` for recovery/inspection; ordinary domain work
+  uses tombstone-filtered `loadPresentById` or `usePresentById`;
 - an unbounded set's generated `lookup(id)` returns an `EntityLookup<E>`
   whose lease is owned by `useObservedEntityLookup` for the widget lifetime;
 - synchronous generated `by...` lookup for a bounded complete set and a
@@ -1781,6 +1807,13 @@ when the product result is intentionally complete and measured scale permits
 it; otherwise move the calculation to paging, a secondary projection, or a
 durable process. Conformance inventory reports these sites for review even when
 their lease and paging behavior is architecturally valid.
+
+When several exhaustive reads form one result, record `.useAll` runs two to
+six `EntityList` or `LocalEntityQuery` values concurrently and disposes every
+lease on all exits. Heterogeneous non-query futures use record `.waitAll`,
+which preserves each static result type without `Future.wait<Object?>`, list
+positions, or casts. These helpers own mechanics only; they do not make an
+otherwise unbounded business read acceptable.
 
 Collections owned by the runtime are read-only outside it. Mutable backing
 collections never escape.
@@ -1927,6 +1960,13 @@ epochs are allocated at open time and never enter schema or protocol metadata.
 Migration output is reviewed before application, especially for destructive or
 semantic changes. Data backfills and external-resource changes remain explicit
 reviewed migrations because they cannot be inferred safely.
+
+Constraint-only Drift changes generate `TableMigration` rebuilds. When existing
+rows are already known to satisfy the new semantic constraint, the application
+uses `NodusMigrationPlan.acknowledgeGenerated()` as the explicit reviewed
+decision. It MUST NOT add an empty manual callback merely to satisfy the
+semantic-change guard; a real backfill or transformation uses the manual or
+augmented plan instead.
 
 A coordinated rewrite MAY reset generated local migration history only when
 the deployment owner has declared every existing local store disposable and a
@@ -2549,7 +2589,12 @@ The generated target factory owns local storage and registry assembly, so a
 connector package stays transport-only and can be tested against an in-memory
 target definition. A reusable process or projection adapter likewise consumes
 a generated typed contract and cannot expose a feature-level workflow registry
-or become another writable authority. Every other retained non-generated
+or become another writable authority. A reusable immediate external-capability
+adapter MAY consume a transport-neutral typed request/response contract and
+normalize transport failures, but it remains stateless and transport-only. It
+MUST NOT select feature workflows, persist or cache results, enqueue hidden
+retries, or replace an entity-owned durable process when the outcome has a
+domain-visible lifecycle. Every other retained non-generated
 boundary is labeled **Permanent exception** in the implementation inventory
 with its concrete external-system, security, or platform reason. Such an
 exception MUST NOT own entity lookup, persistence, caching, serialization,

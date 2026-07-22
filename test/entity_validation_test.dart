@@ -6288,6 +6288,71 @@ abstract class Child implements OwnedBy<Child, Account>, SoftDeletable {
   });
 
   test(
+    'infers a bounded aggregate inverse from a unique bounded-target link',
+    () async {
+      const parentSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Parent implements OwnedBy<Parent, Account> {}
+''';
+      const optionSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Option implements OwnedBy<Option, Account> {}
+''';
+      const childSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/option.dart';
+import 'package:nodus/parent.dart';
+
+@Entity(
+  indexes: [CompoundIndex([#parentId, #optionId], unique: true)],
+)
+abstract class Child implements OwnedBy<Child, Account>, SoftDeletable {
+  @OwnerReference()
+  @Reference(
+    inverse: 'children',
+    onDelete: ReferenceDeleteAction.cascade,
+    aggregateMember: true,
+  )
+  abstract final LocalId<Parent> parentId;
+
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Option> optionId;
+
+  abstract final String value;
+}
+''';
+      final sources = _sources(childSource, fileName: 'child.dart')
+        ..['nodus|lib/account.dart'] = 'final class Account {}'
+        ..['nodus|lib/parent.dart'] = parentSource
+        ..['nodus|lib/option.dart'] = optionSource;
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            contains('Future<ParentChildrenDraft> beginChildrenDraft('),
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+        },
+      );
+    },
+  );
+
+  test(
     'generates one durable mutation handle for conventional active relationships',
     () async {
       const noteSource = r'''
@@ -6357,6 +6422,14 @@ abstract class NoteTagLink
                 '      _deletedAtStore.value == null && _activeStore.value;',
               ),
               contains(
+                'InactiveVisibility inactive = InactiveVisibility.exclude',
+              ),
+              contains('_inactivePredicate(inactive)'),
+              contains(
+                'InactiveVisibility.only => '
+                'NoteTagLinkFields.active.equals(false)',
+              ),
+              contains(
                 'String get generatedOrderScopeKey => '
                 '_noteIdStore.value.value',
               ),
@@ -6402,10 +6475,15 @@ abstract class NoteTagLink
               contains('await _entityGraph.noteTagLinks.create('),
               contains('await existing.activate();'),
               contains('await existing.deactivate();'),
+              contains('inactive: InactiveVisibility.include'),
               contains('noteId: _noteId'),
               contains('taskTagId: targetId'),
               contains('NoteTagLinkRelationship tagLinks('),
               contains('NoteTagLinkList noteLinks('),
+              contains(
+                'InactiveVisibility inactive = InactiveVisibility.exclude',
+              ),
+              contains('inactive: inactive'),
               contains('NoteTagLinkFields.active.equals(true)'),
               contains('NoteTagLinkFields.deletedAt.isNull'),
               contains('orderBy ?? entityGraph.noteTagLinks.canonicalOrder'),
@@ -7517,59 +7595,13 @@ import 'package:nodus/goal.dart';
     RlsGrant(RlsOperation.update, RlsPrincipal.participant),
   ],
 )
-abstract class GoalMember implements OwnedBy<GoalMember, Account> {
+abstract class GoalMember
+    implements
+        OwnedBy<GoalMember, Account>,
+        WorkflowMembership<Goal, Account, MembershipStatus> {
   @OwnerReference()
   @Reference(onDelete: ReferenceDeleteAction.cascade)
   abstract final LocalId<Goal> goalId;
-
-  @AccessParticipant()
-  abstract final LocalId<Account> memberId;
-
-  @Persisted(defaultValue: MembershipStatus.pending, transitions: [
-    AllowedTransition(
-      MembershipStatus.pending,
-      MembershipStatus.accepted,
-      by: [RlsPrincipal.participant],
-    ),
-    AllowedTransition(
-      MembershipStatus.pending,
-      MembershipStatus.declined,
-      by: [RlsPrincipal.participant],
-    ),
-    AllowedTransition(
-      MembershipStatus.accepted,
-      MembershipStatus.declined,
-      by: [RlsPrincipal.participant],
-    ),
-    AllowedTransition(
-      MembershipStatus.accepted,
-      MembershipStatus.revoked,
-      by: [RlsPrincipal.owner],
-    ),
-    AllowedTransition(
-      MembershipStatus.declined,
-      MembershipStatus.pending,
-      by: [RlsPrincipal.owner],
-    ),
-    AllowedTransition(
-      MembershipStatus.revoked,
-      MembershipStatus.pending,
-      by: [RlsPrincipal.owner],
-    ),
-  ])
-  abstract final MembershipStatus status;
-
-  @Action(values: [ActionValue(#status, MembershipStatus.accepted)])
-  Future<void> accept();
-
-  @Action(values: [ActionValue(#status, MembershipStatus.declined)])
-  Future<void> decline();
-
-  @Action(values: [ActionValue(#status, MembershipStatus.revoked)])
-  Future<void> revoke();
-
-  @Action(values: [ActionValue(#status, MembershipStatus.pending)])
-  Future<void> reinvite();
 }
 
 enum MembershipStatus { pending, accepted, declined, revoked }
@@ -7610,7 +7642,10 @@ abstract class GoalRequirement
           ),
           'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
           'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
-            anything,
+            allOf([
+              contains('required LocalId<Account> memberId'),
+              contains('GoalMemberFields.memberId.equals(accountId)'),
+            ]),
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
@@ -8046,6 +8081,15 @@ abstract interface class Collaborative<Principal> {
     LocalId<Principal> collaboratorId, {
     required bool active,
   });
+}
+
+abstract interface class WorkflowMembership<Target, Principal, Status> {
+  LocalId<Principal> get memberId;
+  Status get status;
+  Future<void> accept();
+  Future<void> decline();
+  Future<void> revoke();
+  Future<void> reinvite();
 }
 
 abstract interface class ActivityTracked {

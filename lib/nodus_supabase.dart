@@ -8,6 +8,258 @@ import 'dart:async';
 import 'package:nodus/nodus.dart';
 import 'package:supabase/supabase.dart';
 
+typedef _TestFunctionInvoker =
+    Future<Object?> Function(String name, Object? body);
+typedef _TestRpcInvoker =
+    Future<Object?> Function(String name, Map<String, Object?>? params);
+
+/// Executes typed, irreducible Supabase RPC and Edge Function capabilities.
+///
+/// This adapter owns only transport mechanics and failure normalization. It is
+/// deliberately separate from [SupabaseSyncBackend]: capability calls are
+/// immediate online request/response boundaries and never become an alternate
+/// entity persistence, cache, synchronization, or retry path.
+final class SupabaseExternalCapabilityAdapter {
+  const SupabaseExternalCapabilityAdapter(SupabaseClient client)
+    : _client = client,
+      _testFunctionInvoker = null,
+      _testRpcInvoker = null;
+
+  /// Creates a transport-free adapter for focused capability tests.
+  const SupabaseExternalCapabilityAdapter.forTesting({
+    Future<Object?> Function(String name, Object? body)? invokeFunction,
+    Future<Object?> Function(String name, Map<String, Object?>? params)?
+    callRpc,
+  }) : _client = null,
+       _testFunctionInvoker = invokeFunction,
+       _testRpcInvoker = callRpc;
+
+  final SupabaseClient? _client;
+  final _TestFunctionInvoker? _testFunctionInvoker;
+  final _TestRpcInvoker? _testRpcInvoker;
+
+  Future<Response> invokeFunction<Request, Response>(
+    ExternalCapabilityContract<Request, Response> contract,
+    Request request,
+  ) async {
+    final body = _encode(contract, request);
+    final Object? data;
+    try {
+      final testInvoker = _testFunctionInvoker;
+      data = testInvoker == null
+          ? (await _requireClient().functions.invoke(
+              contract.name,
+              body: body,
+            )).data
+          : await testInvoker(contract.name, body);
+    } on ExternalCapabilityException {
+      rethrow;
+    } on FunctionException catch (error) {
+      throw _functionFailure(contract.name, error);
+    } on FormatException catch (error) {
+      throw _invalidResponse(contract.name, null, error);
+    } on TimeoutException catch (error) {
+      throw _unavailableFailure(contract.name, error);
+    } catch (error) {
+      throw _transportFailure(contract.name, error);
+    }
+    return _decode(contract, data);
+  }
+
+  Future<Response> callRpc<Request, Response>(
+    ExternalCapabilityContract<Request, Response> contract,
+    Request request,
+  ) async {
+    final encoded = _encode(contract, request);
+    final params = _rpcParams(contract.name, encoded);
+    final Object? data;
+    try {
+      final testInvoker = _testRpcInvoker;
+      data = testInvoker == null
+          ? await _requireClient().rpc(contract.name, params: params)
+          : await testInvoker(contract.name, params);
+    } on ExternalCapabilityException {
+      rethrow;
+    } on PostgrestException catch (error) {
+      throw _rpcFailure(contract.name, error);
+    } on FormatException catch (error) {
+      throw _invalidResponse(contract.name, null, error);
+    } on TimeoutException catch (error) {
+      throw _unavailableFailure(contract.name, error);
+    } catch (error) {
+      throw _transportFailure(contract.name, error);
+    }
+    return _decode(contract, data);
+  }
+
+  SupabaseClient _requireClient() =>
+      _client ??
+      (throw StateError(
+        'This test adapter has no invoker for the requested capability.',
+      ));
+
+  static Object? _encode<Request, Response>(
+    ExternalCapabilityContract<Request, Response> contract,
+    Request request,
+  ) {
+    try {
+      return contract.encodeRequest(request);
+    } on ExternalCapabilityException {
+      rethrow;
+    } catch (error) {
+      throw ExternalCapabilityException(
+        capability: contract.name,
+        kind: ExternalCapabilityFailureKind.invalidRequest,
+        code: 'invalid_request',
+        message: 'Failed to encode the external capability request.',
+        cause: error,
+      );
+    }
+  }
+
+  static Response _decode<Request, Response>(
+    ExternalCapabilityContract<Request, Response> contract,
+    Object? response,
+  ) {
+    try {
+      return contract.decodeResponse(response);
+    } on ExternalCapabilityException {
+      rethrow;
+    } on FormatException catch (error) {
+      throw _invalidResponse(contract.name, response, error);
+    } on TypeError catch (error) {
+      throw _invalidResponse(contract.name, response, error);
+    } on ArgumentError catch (error) {
+      throw _invalidResponse(contract.name, response, error);
+    }
+  }
+
+  static ExternalCapabilityException _invalidResponse(
+    String capability,
+    Object? response,
+    Object error,
+  ) => ExternalCapabilityException(
+    capability: capability,
+    kind: ExternalCapabilityFailureKind.invalidResponse,
+    code: 'invalid_response',
+    message: 'The external capability returned an invalid response.',
+    details: response,
+    cause: error,
+  );
+
+  static Map<String, Object?>? _rpcParams(String capability, Object? encoded) {
+    if (encoded == null) return null;
+    if (encoded is Map<String, Object?>) return encoded;
+    if (encoded is Map) {
+      final params = <String, Object?>{};
+      for (final entry in encoded.entries) {
+        if (entry.key is! String) {
+          throw ExternalCapabilityException(
+            capability: capability,
+            kind: ExternalCapabilityFailureKind.invalidRequest,
+            code: 'invalid_rpc_params',
+            message: 'Supabase RPC parameter names must be strings.',
+            details: encoded,
+          );
+        }
+        params[entry.key as String] = entry.value;
+      }
+      return params;
+    }
+    throw ExternalCapabilityException(
+      capability: capability,
+      kind: ExternalCapabilityFailureKind.invalidRequest,
+      code: 'invalid_rpc_params',
+      message: 'Supabase RPC requests must encode to a map or null.',
+      details: encoded,
+    );
+  }
+
+  static ExternalCapabilityException _functionFailure(
+    String capability,
+    FunctionException error,
+  ) {
+    final kind = switch (error.status) {
+      401 => ExternalCapabilityFailureKind.authentication,
+      403 => ExternalCapabilityFailureKind.authorization,
+      408 || 429 => ExternalCapabilityFailureKind.unavailable,
+      >= 500 => ExternalCapabilityFailureKind.unavailable,
+      _ => ExternalCapabilityFailureKind.rejected,
+    };
+    final code = _remoteErrorCode(error.details) ?? 'function_${error.status}';
+    return ExternalCapabilityException(
+      capability: capability,
+      kind: kind,
+      code: code,
+      message:
+          _remoteErrorMessage(error.details) ??
+          error.reasonPhrase ??
+          'Supabase Edge Function request failed.',
+      statusCode: error.status,
+      details: error.details,
+      cause: error,
+    );
+  }
+
+  static ExternalCapabilityException _rpcFailure(
+    String capability,
+    PostgrestException error,
+  ) {
+    final kind = switch (error.code) {
+      'PGRST301' => ExternalCapabilityFailureKind.authentication,
+      '42501' => ExternalCapabilityFailureKind.authorization,
+      final code when code != null && code.startsWith('08') =>
+        ExternalCapabilityFailureKind.unavailable,
+      _ => ExternalCapabilityFailureKind.rejected,
+    };
+    return ExternalCapabilityException(
+      capability: capability,
+      kind: kind,
+      code: error.code ?? 'rpc_rejected',
+      message: error.message,
+      details: error.details,
+      cause: error,
+    );
+  }
+
+  static ExternalCapabilityException _unavailableFailure(
+    String capability,
+    Object error,
+  ) => ExternalCapabilityException(
+    capability: capability,
+    kind: ExternalCapabilityFailureKind.unavailable,
+    code: 'request_timeout',
+    message: 'The external capability timed out.',
+    cause: error,
+  );
+
+  static ExternalCapabilityException _transportFailure(
+    String capability,
+    Object error,
+  ) => ExternalCapabilityException(
+    capability: capability,
+    kind: ExternalCapabilityFailureKind.unavailable,
+    code: 'transport_unavailable',
+    message: 'The external capability transport is unavailable.',
+    cause: error,
+  );
+
+  static String? _remoteErrorCode(Object? details) {
+    if (details is! Map) return null;
+    final error = details['error'];
+    if (error is Map) return error['code']?.toString();
+    return details['code']?.toString();
+  }
+
+  static String? _remoteErrorMessage(Object? details) {
+    if (details is! Map) return null;
+    final error = details['error'];
+    if (error is Map) return error['message']?.toString();
+    if (error is String && error.trim().isNotEmpty) return error;
+    return details['message']?.toString();
+  }
+}
+
 /// Generic Supabase transport for a generated entity graph.
 ///
 /// Entity-specific RPC names, Realtime subscriptions, and row decoding are

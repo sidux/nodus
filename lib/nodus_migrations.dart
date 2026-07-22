@@ -3,4 +3,4 @@ library;
 
 export 'nodus.dart';
 export 'package:drift/drift.dart'
-    show GeneratedDatabase, MigrationStrategy, Migrator;
+    show GeneratedDatabase, MigrationStrategy, Migrator, TableMigration;

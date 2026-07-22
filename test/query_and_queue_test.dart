@@ -3007,7 +3007,8 @@ void main() {
     final second = query('B');
     final third = query('C');
     final fourth = query('D');
-    final fifth = query('E');
+    final fifthQuery = query('E');
+    final fifth = EntityList(fifthQuery);
     final sixth = query('F');
 
     final names = await (first, second, third, fourth, fifth, sixth).useAll(
@@ -3022,9 +3023,48 @@ void main() {
     );
 
     expect(names, ['A', 'B', 'C', 'D', 'E', 'F']);
-    for (final query in [first, second, third, fourth, fifth, sixth]) {
+    for (final query in [first, second, third, fourth, fifthQuery, sixth]) {
       expect(query.state.value, isA<EntityQueryDisposed<_Item>>());
     }
+  });
+
+  test('typed future records preserve heterogeneous values', () async {
+    final values = await (
+      Future<int>.value(1),
+      Future<String>.value('two'),
+      Future<bool>.value(true),
+      Future<double>.value(4.0),
+      Future<List<int>>.value(const [5]),
+      Future<Set<String>>.value(const {'six'}),
+      Future<Duration>.value(const Duration(seconds: 7)),
+    ).waitAll;
+
+    expect(values.$1, 1);
+    expect(values.$2, 'two');
+    expect(values.$3, isTrue);
+    expect(values.$4, 4.0);
+    expect(values.$5, const [5]);
+    expect(values.$6, const {'six'});
+    expect(values.$7, const Duration(seconds: 7));
+
+    final fourteen = await (
+      Future<int>.value(1),
+      Future<int>.value(2),
+      Future<int>.value(3),
+      Future<int>.value(4),
+      Future<int>.value(5),
+      Future<int>.value(6),
+      Future<int>.value(7),
+      Future<int>.value(8),
+      Future<int>.value(9),
+      Future<int>.value(10),
+      Future<int>.value(11),
+      Future<int>.value(12),
+      Future<int>.value(13),
+      Future<String>.value('fourteen'),
+    ).waitAll;
+    expect(fourteen.$13, 13);
+    expect(fourteen.$14, 'fourteen');
   });
 
   test('query record leases release every query when one load fails', () async {

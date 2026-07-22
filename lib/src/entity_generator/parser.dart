@@ -117,6 +117,16 @@ Future<EntitySpec?> parseEntityAsset(
       element: classElement,
     );
   }
+  final workflowMembershipTypes = classElement.allSupertypes
+      .where((type) => _isNodusCapability(type, 'WorkflowMembership'))
+      .toList(growable: false);
+  if (workflowMembershipTypes.length > 1) {
+    throw InvalidGenerationSourceError(
+      'An entity may implement WorkflowMembership exactly once.',
+      element: classElement,
+    );
+  }
+  final workflowMembershipType = workflowMembershipTypes.firstOrNull;
   final isComponent = classElement.allSupertypes.any(
     _componentChecker.isExactlyType,
   );
@@ -132,6 +142,7 @@ Future<EntitySpec?> parseEntityAsset(
           isComponent ||
           hasActivatableCapability ||
           collaborativeTypes.isNotEmpty ||
+          workflowMembershipType != null ||
           classElement.allSupertypes.any(
             (type) => _softDeletableChecker.isExactlyType(type),
           ))) {
@@ -274,6 +285,19 @@ Future<EntitySpec?> parseEntityAsset(
         element: classElement,
       );
     }
+  }
+  if (workflowMembershipType case final capability?) {
+    final arguments = capability.typeArguments;
+    if (arguments.length != 3 ||
+        arguments[1].getDisplayString() != ownerType.getDisplayString()) {
+      throw InvalidGenerationSourceError(
+        'WorkflowMembership<Target, Principal, Status> must use the entity '
+        'owner type `${ownerType.getDisplayString()}` as Principal.',
+        element: classElement,
+      );
+    }
+    _collectTypeImports(arguments[0], typeImports);
+    _collectTypeImports(arguments[2], typeImports);
   }
   if (ownership == Ownership.identity &&
       ownerType.getDisplayString() != classElement.name) {
@@ -688,6 +712,14 @@ Future<EntitySpec?> parseEntityAsset(
       ),
     );
   }
+  if (workflowMembershipType case final capability?) {
+    _addWorkflowMembershipFields(
+      classElement,
+      capability,
+      fields: fields,
+      tableName: tableName,
+    );
+  }
   if (hasActivatableCapability) {
     final repeatedField = classElement.fields
         .where((field) => field.name == 'active')
@@ -811,6 +843,9 @@ Future<EntitySpec?> parseEntityAsset(
   }
   if (hasArchivableCapability) {
     actions.addAll(_archivableActions);
+  }
+  if (workflowMembershipType != null) {
+    actions.addAll(_workflowMembershipActions);
   }
   final commands = _parseCommands(classElement, fields);
   final orderScopeFieldNames = _parseOrderScope(
@@ -1384,7 +1419,8 @@ void _validateAndInferWorkflowMembership(
       participants.single.columnName != collaboration.userForeignKey) {
     throw InvalidGenerationSourceError(
       'Workflow membership `$tableName` requires exactly one '
-      '@AccessParticipant field mapped to `${collaboration.userForeignKey}`.',
+      '@AccessParticipant field mapped to `${collaboration.userForeignKey}`. '
+      'Found: ${fields.where((field) => field.isParticipant).map((field) => '${field.name}:${field.columnName}').join(', ')}.',
       element: element,
     );
   }
@@ -3453,7 +3489,11 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
         composedTargets.add(target.className);
       }
       if (reference.aggregateMember) {
-        final inverseCardinality = entity.inverseCardinalityFor(field);
+        final inverseCardinality = _resolveInverseCardinality(
+          entity,
+          field,
+          entitiesByClass,
+        );
         if (inverseCardinality != Cardinality.bounded) {
           throw InvalidGenerationSourceError(
             '`${entity.className}.${field.name}` is an aggregate member but '
@@ -3656,6 +3696,52 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
   }
 }
 
+/// Resolves whether one inverse relationship is safe to materialize as a
+/// complete aggregate collection.
+///
+/// Besides an explicit override or a globally bounded child entity, a unique
+/// `(parent, boundedTarget)` link proves the inverse bounded: every member of
+/// the bounded target set can contribute at most one child to a parent. This
+/// is the same finite-link proof used by generated relationship collections,
+/// applied directly to aggregate members so declarations do not need a manual
+/// cardinality assertion that the graph can derive.
+Cardinality _resolveInverseCardinality(
+  EntitySpec source,
+  FieldSpec parentReference,
+  Map<String, EntitySpec> entitiesByClass,
+) {
+  final declared = parentReference.reference!.inverseCardinality;
+  if (declared != null) return declared;
+  if (source.cardinality == Cardinality.bounded) {
+    return Cardinality.bounded;
+  }
+
+  for (final index in source.compoundIndexes) {
+    if (!index.unique ||
+        index.scope != IndexScope.field ||
+        index.condition != null ||
+        index.fields.length != 2 ||
+        !index.fields.contains(parentReference.name)) {
+      continue;
+    }
+    final otherName = index.fields.singleWhere(
+      (name) => name != parentReference.name,
+    );
+    final otherField = source.fields
+        .where((field) => field.name == otherName)
+        .firstOrNull;
+    final otherTarget = otherField?.reference == null
+        ? null
+        : entitiesByClass[otherField!.reference!.targetClassName];
+    if (otherField != null &&
+        !otherField.nullable &&
+        otherTarget?.cardinality == Cardinality.bounded) {
+      return Cardinality.bounded;
+    }
+  }
+  return Cardinality.unbounded;
+}
+
 void _validateRelationshipAccessGraph(
   List<EntitySpec> entities,
   Element element,
@@ -3849,41 +3935,62 @@ ReferenceSpec _parseReference(
     final candidates = target.fields.where(
       (candidate) => candidate.name == ownershipTargetField,
     );
-    if (candidates.length != 1) {
+    final workflowCapability = target.allSupertypes
+        .where((type) => _isNodusCapability(type, 'WorkflowMembership'))
+        .firstOrNull;
+    final usesGeneratedParticipant =
+        candidates.isEmpty &&
+        ownershipTargetField == 'memberId' &&
+        workflowCapability != null;
+    if (candidates.length != 1 && !usesGeneratedParticipant) {
       throw InvalidGenerationSourceError(
         '@OwnerReference.targetField must name one declared field on '
         '`${target.name}`.',
         element: field,
       );
     }
-    final source = candidates.single;
-    if (source.isStatic ||
-        source.isOriginGetterSetter ||
-        _transientChecker.hasAnnotationOf(source) ||
-        !source.isFinal ||
-        source.type.nullabilitySuffix == NullabilitySuffix.question) {
-      throw InvalidGenerationSourceError(
-        '@OwnerReference.targetField must be an immutable, non-null '
-        'persisted field.',
-        element: field,
-      );
+    if (usesGeneratedParticipant) {
+      ownershipSourceDartType =
+          'LocalId<${workflowCapability.typeArguments[1].getDisplayString()}>';
+      if (ownershipSourceDartType != targetOwnerDartType) {
+        throw InvalidGenerationSourceError(
+          'WorkflowMembership participant ownership must use the referenced '
+          'entity owner type `$targetOwnerDartType`.',
+          element: field,
+        );
+      }
+      ownershipSourceFieldName = ownershipTargetField;
+      ownershipSourceColumnName = 'member_id';
+    } else {
+      final source = candidates.single;
+      if (source.isStatic ||
+          source.isOriginGetterSetter ||
+          _transientChecker.hasAnnotationOf(source) ||
+          !source.isFinal ||
+          source.type.nullabilitySuffix == NullabilitySuffix.question) {
+        throw InvalidGenerationSourceError(
+          '@OwnerReference.targetField must be an immutable, non-null '
+          'persisted field.',
+          element: field,
+        );
+      }
+      ownershipSourceDartType = source.type.getDisplayString();
+      if (ownershipSourceDartType != targetOwnerDartType) {
+        throw InvalidGenerationSourceError(
+          '@OwnerReference.targetField must have the referenced entity owner '
+          'type `$targetOwnerDartType`.',
+          element: field,
+        );
+      }
+      final persistedObject = _persistedChecker.firstAnnotationOf(source);
+      final persisted = persistedObject == null
+          ? null
+          : ConstantReader(persistedObject);
+      ownershipSourceFieldName = ownershipTargetField;
+      ownershipSourceColumnName = persisted?.peek('column')?.isNull ?? true
+          ? snakeCase(ownershipTargetField)
+          : persisted!.read('column').stringValue;
     }
-    ownershipSourceDartType = source.type.getDisplayString();
-    if (ownershipSourceDartType != targetOwnerDartType) {
-      throw InvalidGenerationSourceError(
-        '@OwnerReference.targetField must have the referenced entity owner '
-        'type `$targetOwnerDartType`.',
-        element: field,
-      );
-    }
-    final persistedObject = _persistedChecker.firstAnnotationOf(source);
-    final persisted = persistedObject == null
-        ? null
-        : ConstantReader(persistedObject);
-    ownershipSourceFieldName = ownershipTargetField;
-    ownershipSourceColumnName = persisted?.peek('column')?.isNull ?? true
-        ? snakeCase(ownershipTargetField)
-        : persisted!.read('column').stringValue;
   }
   final onDelete = composition
       ? ReferenceDeleteAction.restrict
@@ -3975,6 +4082,11 @@ ReferenceSpec _parseReference(
 
 bool _hasClientMutationSurface(ClassElement target) {
   if (target.methods.any(_actionChecker.hasAnnotationOf)) return true;
+  if (target.allSupertypes.any(
+    (type) => _isNodusCapability(type, 'WorkflowMembership'),
+  )) {
+    return true;
+  }
   if (target.allSupertypes.any(
     (type) => _isNodusCapability(type, 'ActivityOf'),
   )) {
@@ -5237,6 +5349,115 @@ void _validatePersistedValueClass(
   }
 }
 
+void _addWorkflowMembershipFields(
+  ClassElement element,
+  InterfaceType capability, {
+  required List<FieldSpec> fields,
+  required String tableName,
+}) {
+  final arguments = capability.typeArguments;
+  final targetType = arguments[0];
+  final statusType = arguments[2];
+  final targetElement = targetType.element;
+  final statusElement = statusType.element;
+  if (targetElement is! ClassElement || statusElement is! EnumElement) {
+    throw InvalidGenerationSourceError(
+      'WorkflowMembership requires an entity Target and enum Status type.',
+      element: element,
+    );
+  }
+  const suppliedFields = {'memberId', 'status'};
+  final repeatedField = element.fields
+      .where((field) => suppliedFields.contains(field.name))
+      .firstOrNull;
+  const suppliedActions = {'accept', 'decline', 'revoke', 'reinvite'};
+  final repeatedAction = element.methods
+      .where((method) => suppliedActions.contains(method.name))
+      .firstOrNull;
+  if (repeatedField != null || repeatedAction != null) {
+    throw InvalidGenerationSourceError(
+      'WorkflowMembership supplies `memberId`, `status`, `accept`, `decline`, '
+      '`revoke`, and `reinvite`; remove the repeated declaration.',
+      element: repeatedField ?? repeatedAction ?? element,
+    );
+  }
+
+  final statusValues = statusElement.fields
+      .where((field) => field.isEnumConstant)
+      .map((field) => field.name!)
+      .toList(growable: false);
+  const conventionalStatuses = {'pending', 'accepted', 'declined', 'revoked'};
+  if (statusValues.toSet().length != conventionalStatuses.length ||
+      !statusValues.toSet().containsAll(conventionalStatuses)) {
+    throw InvalidGenerationSourceError(
+      'WorkflowMembership Status must declare exactly pending, accepted, '
+      'declined, and revoked.',
+      element: statusElement,
+    );
+  }
+
+  final targetReferences = fields
+      .where(
+        (field) =>
+            field.reference?.targetClassName == targetElement.name &&
+            (field.reference?.targetCollaboration?.isWorkflow ?? false) &&
+            field.reference!.targetCollaboration!.membershipTable == tableName,
+      )
+      .toList(growable: false);
+  if (targetReferences.length != 1) {
+    throw InvalidGenerationSourceError(
+      'WorkflowMembership must declare exactly one @OwnerReference to its '
+      'workflow-collaboration Target.',
+      element: element,
+    );
+  }
+
+  final memberField = FieldSpec(
+    name: 'memberId',
+    columnName: 'member_id',
+    dartType: 'LocalId<${arguments[1].getDisplayString()}>',
+    sqlType: SqlType.uuid,
+    nullable: false,
+    isFinal: true,
+    defaultValue: null,
+    conflict: ConflictStrategy.serverWins,
+    minLength: null,
+    maxLength: null,
+    indexed: true,
+    unique: false,
+    notEqualTo: EntityConventions.ownerFieldName,
+    isParticipant: true,
+  );
+  final statusField = FieldSpec(
+    name: 'status',
+    columnName: 'status',
+    dartType: statusType.getDisplayString(),
+    sqlType: SqlType.text,
+    nullable: false,
+    isFinal: true,
+    defaultValue: 'pending',
+    conflict: ConflictStrategy.serverWins,
+    minLength: null,
+    maxLength: null,
+    indexed: false,
+    unique: false,
+    enumValues: statusValues,
+    enumTypeImport: statusElement.library.uri.toString(),
+    transitions: _workflowMembershipTransitions,
+  );
+  final memberIndex = fields.indexOf(targetReferences.single) + 1;
+  fields.insert(memberIndex, memberField);
+  final timestampIndex = fields.indexWhere(
+    (field) =>
+        field.name == EntityConventions.createdAtFieldName ||
+        field.name == EntityConventions.updatedAtFieldName,
+  );
+  fields.insert(
+    timestampIndex < 0 ? fields.length : timestampIndex,
+    statusField,
+  );
+}
+
 FieldSpec _infrastructureField({
   required String name,
   required String dartType,
@@ -5450,6 +5671,96 @@ const _archivableActions = [
       ActionAssignmentSpec(
         fieldName: 'archivedAt',
         kind: ActionValueKind.clear,
+      ),
+    ],
+  ),
+];
+
+const _workflowMembershipTransitions = [
+  ValueTransitionSpec(
+    from: 'pending',
+    to: 'accepted',
+    principals: [RlsPrincipal.participant],
+  ),
+  ValueTransitionSpec(
+    from: 'pending',
+    to: 'declined',
+    principals: [RlsPrincipal.participant],
+  ),
+  ValueTransitionSpec(
+    from: 'accepted',
+    to: 'declined',
+    principals: [RlsPrincipal.participant],
+  ),
+  ValueTransitionSpec(
+    from: 'declined',
+    to: 'accepted',
+    principals: [RlsPrincipal.participant],
+  ),
+  ValueTransitionSpec(
+    from: 'pending',
+    to: 'revoked',
+    principals: [RlsPrincipal.owner],
+  ),
+  ValueTransitionSpec(
+    from: 'accepted',
+    to: 'revoked',
+    principals: [RlsPrincipal.owner],
+  ),
+  ValueTransitionSpec(
+    from: 'declined',
+    to: 'pending',
+    principals: [RlsPrincipal.owner],
+  ),
+  ValueTransitionSpec(
+    from: 'revoked',
+    to: 'pending',
+    principals: [RlsPrincipal.owner],
+  ),
+];
+
+const _workflowMembershipActions = [
+  ActionSpec(
+    methodName: 'accept',
+    parameters: [],
+    assignments: [
+      ActionAssignmentSpec(
+        fieldName: 'status',
+        kind: ActionValueKind.literal,
+        literal: 'accepted',
+      ),
+    ],
+  ),
+  ActionSpec(
+    methodName: 'decline',
+    parameters: [],
+    assignments: [
+      ActionAssignmentSpec(
+        fieldName: 'status',
+        kind: ActionValueKind.literal,
+        literal: 'declined',
+      ),
+    ],
+  ),
+  ActionSpec(
+    methodName: 'revoke',
+    parameters: [],
+    assignments: [
+      ActionAssignmentSpec(
+        fieldName: 'status',
+        kind: ActionValueKind.literal,
+        literal: 'revoked',
+      ),
+    ],
+  ),
+  ActionSpec(
+    methodName: 'reinvite',
+    parameters: [],
+    assignments: [
+      ActionAssignmentSpec(
+        fieldName: 'status',
+        kind: ActionValueKind.literal,
+        literal: 'pending',
       ),
     ],
   ),

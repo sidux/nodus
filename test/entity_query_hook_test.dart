@@ -265,6 +265,33 @@ void main() {
     expect(captured!.error, isNull);
   });
 
+  testWidgets('async draft hooks expose readiness and discard on unmount', (
+    tester,
+  ) async {
+    final completer = Completer<_TestDraft>();
+    AsyncSnapshot<_TestDraft>? captured;
+
+    await tester.pumpWidget(
+      HookBuilder(
+        builder: (_) {
+          captured = useAsyncEntityMutationDraft<int, _TestDraft>(
+            () => completer.future,
+          );
+          return const SizedBox();
+        },
+      ),
+    );
+    expect(captured!.connectionState, ConnectionState.waiting);
+
+    final draft = _TestDraft();
+    completer.complete(draft);
+    await tester.pumpAndSettle();
+    expect(captured!.data, same(draft));
+
+    await tester.pumpWidget(const SizedBox());
+    expect(draft.isConsumed, isTrue);
+  });
+
   testWidgets('complete query hooks exhaust every cached page', (tester) async {
     final invalidations =
         StreamController<EntityProjectionChange<int>>.broadcast(sync: true);
@@ -370,4 +397,29 @@ final class _IntList extends EntityList<int> {
 
 final class _IntLookup extends EntityLookup<int> {
   _IntLookup(super.query);
+}
+
+final class _TestDraft implements EntityMutationDraft<int> {
+  var _consumed = false;
+
+  @override
+  int? get entity => null;
+
+  @override
+  LocalId<int> get id => LocalId('00000000-0000-7000-8000-000000000001');
+
+  @override
+  bool get isConsumed => _consumed;
+
+  @override
+  bool get isCreating => true;
+
+  @override
+  void discard() => _consumed = true;
+
+  @override
+  Future<int> save() async {
+    _consumed = true;
+    return 1;
+  }
 }

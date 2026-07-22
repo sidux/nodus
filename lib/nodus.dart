@@ -22,6 +22,145 @@ part 'src/migration.dart';
 
 typedef JsonMap = Map<String, Object?>;
 
+/// Encodes one typed request for an irreducible external capability.
+typedef ExternalCapabilityRequestEncoder<Request> =
+    Object? Function(Request request);
+
+/// Decodes one transport response into the capability's typed result.
+typedef ExternalCapabilityResponseDecoder<Response> =
+    Response Function(Object? response);
+
+/// A transport-neutral request/response contract for an online capability.
+///
+/// The contract is intentionally smaller than a repository or service: it has
+/// no entity lookup, persistence, caching, retry queue, or state ownership.
+/// A transport adapter, such as `SupabaseExternalCapabilityAdapter`, consumes
+/// it so applications declare the endpoint codec once while retaining their
+/// own domain-specific client or gateway.
+final class ExternalCapabilityContract<Request, Response> {
+  const ExternalCapabilityContract({
+    required this.name,
+    required this.encodeRequest,
+    required this.decodeResponse,
+  }) : assert(name != '');
+
+  /// Creates a contract whose transport response must be one JSON object.
+  factory ExternalCapabilityContract.jsonObject({
+    required String name,
+    required ExternalCapabilityRequestEncoder<Request> encodeRequest,
+    required Response Function(JsonMap response) decodeResponse,
+  }) => ExternalCapabilityContract(
+    name: name,
+    encodeRequest: encodeRequest,
+    decodeResponse: (response) => decodeResponse(
+      requireExternalCapabilityJsonObject(response, capability: name),
+    ),
+  );
+
+  /// Creates a contract whose transport response must be a JSON-object list.
+  factory ExternalCapabilityContract.jsonObjectList({
+    required String name,
+    required ExternalCapabilityRequestEncoder<Request> encodeRequest,
+    required Response Function(List<JsonMap> response) decodeResponse,
+  }) => ExternalCapabilityContract(
+    name: name,
+    encodeRequest: encodeRequest,
+    decodeResponse: (response) => decodeResponse(
+      requireExternalCapabilityJsonObjectList(response, capability: name),
+    ),
+  );
+
+  /// Creates a fire-and-confirm contract that intentionally ignores the
+  /// transport response body.
+  static ExternalCapabilityContract<Request, void> voidResponse<Request>({
+    required String name,
+    required ExternalCapabilityRequestEncoder<Request> encodeRequest,
+  }) => ExternalCapabilityContract(
+    name: name,
+    encodeRequest: encodeRequest,
+    decodeResponse: (_) {},
+  );
+
+  /// Stable transport endpoint or operation name.
+  final String name;
+
+  final ExternalCapabilityRequestEncoder<Request> encodeRequest;
+  final ExternalCapabilityResponseDecoder<Response> decodeResponse;
+}
+
+JsonMap requireExternalCapabilityJsonObject(
+  Object? value, {
+  required String capability,
+}) {
+  if (value case final Map<Object?, Object?> source) {
+    final result = <String, Object?>{};
+    for (final entry in source.entries) {
+      final key = entry.key;
+      if (key is! String) {
+        throw FormatException(
+          '$capability returned a JSON object with a non-string key.',
+          value,
+        );
+      }
+      result[key] = entry.value;
+    }
+    return result;
+  }
+  throw FormatException('$capability must return a JSON object.', value);
+}
+
+List<JsonMap> requireExternalCapabilityJsonObjectList(
+  Object? value, {
+  required String capability,
+}) {
+  if (value is! List<Object?>) {
+    throw FormatException('$capability must return a JSON-object list.', value);
+  }
+  return List<JsonMap>.unmodifiable([
+    for (var index = 0; index < value.length; index++)
+      requireExternalCapabilityJsonObject(
+        value[index],
+        capability: '$capability[$index]',
+      ),
+  ]);
+}
+
+/// Stable failure categories shared by external transport adapters.
+enum ExternalCapabilityFailureKind {
+  authentication,
+  authorization,
+  rejected,
+  unavailable,
+  invalidRequest,
+  invalidResponse,
+}
+
+/// A transport-normalized failure from an [ExternalCapabilityContract].
+final class ExternalCapabilityException implements Exception {
+  const ExternalCapabilityException({
+    required this.capability,
+    required this.kind,
+    required this.code,
+    required this.message,
+    this.statusCode,
+    this.details,
+    this.cause,
+  });
+
+  final String capability;
+  final ExternalCapabilityFailureKind kind;
+  final String code;
+  final String message;
+  final int? statusCode;
+  final Object? details;
+  final Object? cause;
+
+  @override
+  String toString() =>
+      'ExternalCapabilityException($capability, ${kind.name}, $code): '
+      '$message';
+}
+
 String normalizeTrimmedString(String value) => value.trim();
 
 String? normalizeTrimmedStringToNull(String? value) {
@@ -124,6 +263,30 @@ abstract interface class Collaborative<Principal> {
     LocalId<Principal> collaboratorId, {
     required bool active,
   });
+}
+
+/// Adds the conventional invite/accept/decline/revoke lifecycle to a
+/// workflow-collaboration membership entity.
+///
+/// The entity declares only its typed reference to [Target] plus genuinely
+/// product-specific payload. Generation supplies `memberId`, the [Status]
+/// field, the standard participant/owner transitions, self-membership
+/// validation, and the four lifecycle actions. [Status] is a domain enum with
+/// exactly `pending`, `accepted`, `declined`, and `revoked` values, allowing an
+/// application to keep domain-specific labels without repeating persistence
+/// infrastructure.
+abstract interface class WorkflowMembership<Target, Principal, Status> {
+  LocalId<Principal> get memberId;
+
+  Status get status;
+
+  Future<void> accept();
+
+  Future<void> decline();
+
+  Future<void> revoke();
+
+  Future<void> reinvite();
 }
 
 /// One stable semantic operation recorded in a generated activity trail.
@@ -246,6 +409,12 @@ enum TombstoneVisibility { exclude, include, only }
 /// Ordinary lists use [exclude]. Archive views opt into [only], while exact
 /// identity and administrative flows may use [include].
 enum ArchiveVisibility { exclude, include, only }
+
+/// Controls whether generated selections expose inactive relationships.
+///
+/// Ordinary relationship reads use [exclude]. Administration and identity
+/// reuse opt into [include], while inactive-only recovery uses [only].
+enum InactiveVisibility { exclude, include, only }
 
 /// A MobX-observable collection boundary without mutation capabilities.
 ///
@@ -1928,7 +2097,13 @@ typedef EntityQueryPageLoader<E> =
       required int limit,
     });
 
-final class LocalEntityQuery<E> {
+abstract interface class ExhaustiveEntityRead<E> {
+  Future<List<E>> loadAll();
+
+  void dispose();
+}
+
+final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
   factory LocalEntityQuery({
     required ReadOnlyObservableList<E> source,
     EntityPredicate<E>? where,
@@ -1997,6 +2172,7 @@ final class LocalEntityQuery<E> {
   /// Database-backed queries wait for their active refresh and load every
   /// remaining page. A failed page is surfaced to the caller rather than
   /// returning a partial result. The query lease remains owned by the caller.
+  @override
   Future<List<E>> loadAll() async {
     if (_released.value) {
       throw StateError('Cannot load a disposed entity query.');
@@ -2271,6 +2447,7 @@ final class LocalEntityQuery<E> {
     return controller.stream;
   }
 
+  @override
   void dispose() {
     if (_released.value) return;
     runInAction(() => _released.value = true);
@@ -2396,7 +2573,7 @@ class EntityFirst<E> {
 /// constructors inferred from ownership and typed references. The wrapper
 /// keeps selection intent in the domain vocabulary while delegating loading,
 /// paging, observation, and identity retention to [LocalEntityQuery].
-class EntityList<E> {
+class EntityList<E> implements ExhaustiveEntityRead<E> {
   EntityList(this.query);
 
   final LocalEntityQuery<E> query;
@@ -2409,6 +2586,7 @@ class EntityList<E> {
   Future<void> loadNextPage() => query.loadNextPage();
   Future<void> refresh() => query.refresh();
   Future<List<E>> loadFirstPage() => query.loadFirstPage();
+  @override
   Future<List<E>> loadAll() => query.loadAll();
 
   Future<R> useFirstPage<R>(FutureOr<R> Function(List<E> items) action) =>
@@ -2443,6 +2621,7 @@ class EntityList<E> {
     Iterable<PersistedEntityFieldReference<E>> observeFields = const [],
   }) => query.watchCompleteStates(observeFields: observeFields);
 
+  @override
   void dispose() => query.dispose();
 }
 
@@ -2467,8 +2646,8 @@ final class _EntityQueryObservation<E> {
 
 /// Runs two independent exhaustive queries in parallel and releases both
 /// leases after [action] completes or any load/action fails.
-extension LocalEntityQueryPairLease<A, B>
-    on (LocalEntityQuery<A>, LocalEntityQuery<B>) {
+extension EntityReadPairLease<A, B>
+    on (ExhaustiveEntityRead<A>, ExhaustiveEntityRead<B>) {
   Future<R> useAll<R>(
     FutureOr<R> Function(List<A> first, List<B> second) action,
   ) async {
@@ -2485,8 +2664,13 @@ extension LocalEntityQueryPairLease<A, B>
 }
 
 /// Runs three independent exhaustive queries in parallel under one lease.
-extension LocalEntityQueryTripleLease<A, B, C>
-    on (LocalEntityQuery<A>, LocalEntityQuery<B>, LocalEntityQuery<C>) {
+extension EntityReadTripleLease<A, B, C>
+    on
+        (
+          ExhaustiveEntityRead<A>,
+          ExhaustiveEntityRead<B>,
+          ExhaustiveEntityRead<C>,
+        ) {
   Future<R> useAll<R>(
     FutureOr<R> Function(List<A> first, List<B> second, List<C> third) action,
   ) async {
@@ -2505,13 +2689,13 @@ extension LocalEntityQueryTripleLease<A, B, C>
 }
 
 /// Runs four independent exhaustive queries in parallel under one lease.
-extension LocalEntityQueryQuadrupleLease<A, B, C, D>
+extension EntityReadQuadrupleLease<A, B, C, D>
     on
         (
-          LocalEntityQuery<A>,
-          LocalEntityQuery<B>,
-          LocalEntityQuery<C>,
-          LocalEntityQuery<D>,
+          ExhaustiveEntityRead<A>,
+          ExhaustiveEntityRead<B>,
+          ExhaustiveEntityRead<C>,
+          ExhaustiveEntityRead<D>,
         ) {
   Future<R> useAll<R>(
     FutureOr<R> Function(
@@ -2538,16 +2722,60 @@ extension LocalEntityQueryQuadrupleLease<A, B, C, D>
   }
 }
 
-/// Runs six independent exhaustive queries in parallel under one lease.
-extension LocalEntityQuerySextupleLease<A, B, C, D, E, F>
+/// Runs five independent exhaustive reads in parallel under one lease.
+extension EntityReadQuintupleLease<A, B, C, D, E>
     on
         (
-          LocalEntityQuery<A>,
-          LocalEntityQuery<B>,
-          LocalEntityQuery<C>,
-          LocalEntityQuery<D>,
-          LocalEntityQuery<E>,
-          LocalEntityQuery<F>,
+          ExhaustiveEntityRead<A>,
+          ExhaustiveEntityRead<B>,
+          ExhaustiveEntityRead<C>,
+          ExhaustiveEntityRead<D>,
+          ExhaustiveEntityRead<E>,
+        ) {
+  Future<R> useAll<R>(
+    FutureOr<R> Function(
+      List<A> first,
+      List<B> second,
+      List<C> third,
+      List<D> fourth,
+      List<E> fifth,
+    )
+    action,
+  ) async {
+    try {
+      final first = $1.loadAll();
+      final second = $2.loadAll();
+      final third = $3.loadAll();
+      final fourth = $4.loadAll();
+      final fifth = $5.loadAll();
+      await _waitForQueryLoads([first, second, third, fourth, fifth]);
+      return await action(
+        await first,
+        await second,
+        await third,
+        await fourth,
+        await fifth,
+      );
+    } finally {
+      $1.dispose();
+      $2.dispose();
+      $3.dispose();
+      $4.dispose();
+      $5.dispose();
+    }
+  }
+}
+
+/// Runs six independent exhaustive queries in parallel under one lease.
+extension EntityReadSextupleLease<A, B, C, D, E, F>
+    on
+        (
+          ExhaustiveEntityRead<A>,
+          ExhaustiveEntityRead<B>,
+          ExhaustiveEntityRead<C>,
+          ExhaustiveEntityRead<D>,
+          ExhaustiveEntityRead<E>,
+          ExhaustiveEntityRead<F>,
         ) {
   Future<R> useAll<R>(
     FutureOr<R> Function(
@@ -2589,6 +2817,318 @@ extension LocalEntityQuerySextupleLease<A, B, C, D, E, F>
 
 Future<void> _waitForQueryLoads(Iterable<Future<Object?>> loads) =>
     Future.wait<void>(loads.map((load) => load.then<void>((_) {})));
+
+/// Awaits heterogeneous futures without erasing their static result types.
+///
+/// Record futures are started by their callers before this getter runs, so the
+/// recursive composition below preserves `Future.wait` concurrency while
+/// returning a typed record instead of `List<Object?>` plus casts.
+extension TypedFuturePair<A, B> on (Future<A>, Future<B>) {
+  Future<(A, B)> get waitAll async {
+    await Future.wait<void>([$1.then<void>((_) {}), $2.then<void>((_) {})]);
+    return (await $1, await $2);
+  }
+}
+
+extension TypedFutureTriple<A, B, C> on (Future<A>, Future<B>, Future<C>) {
+  Future<(A, B, C)> get waitAll async {
+    final (first, tail) = await ($1, ($2, $3).waitAll).waitAll;
+    return (first, tail.$1, tail.$2);
+  }
+}
+
+extension TypedFutureQuadruple<A, B, C, D>
+    on (Future<A>, Future<B>, Future<C>, Future<D>) {
+  Future<(A, B, C, D)> get waitAll async {
+    final (first, tail) = await ($1, ($2, $3, $4).waitAll).waitAll;
+    return (first, tail.$1, tail.$2, tail.$3);
+  }
+}
+
+extension TypedFutureQuintuple<A, B, C, D, E>
+    on (Future<A>, Future<B>, Future<C>, Future<D>, Future<E>) {
+  Future<(A, B, C, D, E)> get waitAll async {
+    final (first, tail) = await ($1, ($2, $3, $4, $5).waitAll).waitAll;
+    return (first, tail.$1, tail.$2, tail.$3, tail.$4);
+  }
+}
+
+extension TypedFutureSextuple<A, B, C, D, E, F>
+    on (Future<A>, Future<B>, Future<C>, Future<D>, Future<E>, Future<F>) {
+  Future<(A, B, C, D, E, F)> get waitAll async {
+    final (first, tail) = await ($1, ($2, $3, $4, $5, $6).waitAll).waitAll;
+    return (first, tail.$1, tail.$2, tail.$3, tail.$4, tail.$5);
+  }
+}
+
+extension TypedFutureSeptuple<A, B, C, D, E, F, G>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+        ) {
+  Future<(A, B, C, D, E, F, G)> get waitAll async {
+    final (first, tail) = await ($1, ($2, $3, $4, $5, $6, $7).waitAll).waitAll;
+    return (first, tail.$1, tail.$2, tail.$3, tail.$4, tail.$5, tail.$6);
+  }
+}
+
+extension TypedFutureOctuple<A, B, C, D, E, F, G, H>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+          Future<H>,
+        ) {
+  Future<(A, B, C, D, E, F, G, H)> get waitAll async {
+    final (first, tail) = await (
+      $1,
+      ($2, $3, $4, $5, $6, $7, $8).waitAll,
+    ).waitAll;
+    return (
+      first,
+      tail.$1,
+      tail.$2,
+      tail.$3,
+      tail.$4,
+      tail.$5,
+      tail.$6,
+      tail.$7,
+    );
+  }
+}
+
+extension TypedFutureNonuple<A, B, C, D, E, F, G, H, I>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+          Future<H>,
+          Future<I>,
+        ) {
+  Future<(A, B, C, D, E, F, G, H, I)> get waitAll async {
+    final (first, tail) = await (
+      $1,
+      ($2, $3, $4, $5, $6, $7, $8, $9).waitAll,
+    ).waitAll;
+    return (
+      first,
+      tail.$1,
+      tail.$2,
+      tail.$3,
+      tail.$4,
+      tail.$5,
+      tail.$6,
+      tail.$7,
+      tail.$8,
+    );
+  }
+}
+
+extension TypedFutureDecuple<A, B, C, D, E, F, G, H, I, J>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+          Future<H>,
+          Future<I>,
+          Future<J>,
+        ) {
+  Future<(A, B, C, D, E, F, G, H, I, J)> get waitAll async {
+    final (first, tail) = await (
+      $1,
+      ($2, $3, $4, $5, $6, $7, $8, $9, $10).waitAll,
+    ).waitAll;
+    return (
+      first,
+      tail.$1,
+      tail.$2,
+      tail.$3,
+      tail.$4,
+      tail.$5,
+      tail.$6,
+      tail.$7,
+      tail.$8,
+      tail.$9,
+    );
+  }
+}
+
+extension TypedFutureUndecuple<A, B, C, D, E, F, G, H, I, J, K>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+          Future<H>,
+          Future<I>,
+          Future<J>,
+          Future<K>,
+        ) {
+  Future<(A, B, C, D, E, F, G, H, I, J, K)> get waitAll async {
+    final (first, tail) = await (
+      $1,
+      ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11).waitAll,
+    ).waitAll;
+    return (
+      first,
+      tail.$1,
+      tail.$2,
+      tail.$3,
+      tail.$4,
+      tail.$5,
+      tail.$6,
+      tail.$7,
+      tail.$8,
+      tail.$9,
+      tail.$10,
+    );
+  }
+}
+
+extension TypedFutureDuodecuple<A, B, C, D, E, F, G, H, I, J, K, L>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+          Future<H>,
+          Future<I>,
+          Future<J>,
+          Future<K>,
+          Future<L>,
+        ) {
+  Future<(A, B, C, D, E, F, G, H, I, J, K, L)> get waitAll async {
+    final (first, tail) = await (
+      $1,
+      ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12).waitAll,
+    ).waitAll;
+    return (
+      first,
+      tail.$1,
+      tail.$2,
+      tail.$3,
+      tail.$4,
+      tail.$5,
+      tail.$6,
+      tail.$7,
+      tail.$8,
+      tail.$9,
+      tail.$10,
+      tail.$11,
+    );
+  }
+}
+
+extension TypedFutureTredecuple<A, B, C, D, E, F, G, H, I, J, K, L, M>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+          Future<H>,
+          Future<I>,
+          Future<J>,
+          Future<K>,
+          Future<L>,
+          Future<M>,
+        ) {
+  Future<(A, B, C, D, E, F, G, H, I, J, K, L, M)> get waitAll async {
+    final (first, tail) = await (
+      $1,
+      ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13).waitAll,
+    ).waitAll;
+    return (
+      first,
+      tail.$1,
+      tail.$2,
+      tail.$3,
+      tail.$4,
+      tail.$5,
+      tail.$6,
+      tail.$7,
+      tail.$8,
+      tail.$9,
+      tail.$10,
+      tail.$11,
+      tail.$12,
+    );
+  }
+}
+
+extension TypedFutureQuattuordecuple<A, B, C, D, E, F, G, H, I, J, K, L, M, N>
+    on
+        (
+          Future<A>,
+          Future<B>,
+          Future<C>,
+          Future<D>,
+          Future<E>,
+          Future<F>,
+          Future<G>,
+          Future<H>,
+          Future<I>,
+          Future<J>,
+          Future<K>,
+          Future<L>,
+          Future<M>,
+          Future<N>,
+        ) {
+  Future<(A, B, C, D, E, F, G, H, I, J, K, L, M, N)> get waitAll async {
+    final (first, tail) = await (
+      $1,
+      ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14).waitAll,
+    ).waitAll;
+    return (
+      first,
+      tail.$1,
+      tail.$2,
+      tail.$3,
+      tail.$4,
+      tail.$5,
+      tail.$6,
+      tail.$7,
+      tail.$8,
+      tail.$9,
+      tail.$10,
+      tail.$11,
+      tail.$12,
+      tail.$13,
+    );
+  }
+}
 
 /// Shares query work by value while each consumer owns an independent lease.
 final class LocalEntityQueryCache<E> {

@@ -939,7 +939,7 @@ final class NodusGenerator {
       )) {
         final source = file.readAsStringSync();
         final tableClasses = RegExp(
-          r'class \w+ extends Table\s+with TableInfo<[\s\S]*?(?=\nclass \w+Data extends DataClass)',
+          r'class \w+ extends Table\s+with TableInfo(?:<[^>]+>)?\s*\{[\s\S]*?(?=\nclass \w+|(?![\s\S]))',
           multiLine: true,
         );
         final normalized = source.replaceAllMapped(tableClasses, (match) {
@@ -1030,13 +1030,19 @@ final class NodusGenerator {
       final changed = oldColumns.keys
           .toSet()
           .intersection(newColumns.keys.toSet())
-          .where(
-            (name) => !_jsonEquivalent(oldColumns[name], newColumns[name]),
-          );
-      if (removed.isNotEmpty ||
-          changed.isNotEmpty ||
-          !_jsonEquivalent(previous['constraints'], data['constraints'])) {
+          .where((name) => !_jsonEquivalent(oldColumns[name], newColumns[name]))
+          .toSet();
+      final constraintsChanged = !_jsonEquivalent(
+        previous['constraints'],
+        data['constraints'],
+      );
+      if (removed.isNotEmpty || changed.isNotEmpty || constraintsChanged) {
         requiresManualChanges = true;
+      }
+      if (removed.isEmpty && changed.isEmpty && constraintsChanged) {
+        statements.add(
+          'await migrator.alterTable(TableMigration(schema.${_camelCase(key.name)}));',
+        );
       }
       for (final name in newColumns.keys.toSet().difference(
         oldColumns.keys.toSet(),

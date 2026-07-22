@@ -48,6 +48,12 @@ final openTasks = TaskList.all(
 );
 ```
 
+Ordinary lists automatically hide tombstones, archives, and inactive
+relationships. Recovery code opts into the corresponding visibility enum;
+feature predicates describe only product selection. Generated relationship
+mutations still see inactive identities internally, so relinking reactivates
+the canonical row without exposing inactive links to product reads.
+
 That code is simultaneously the reactive UI boundary, the local-durability
 boundary, and the entry point to retryable synchronization. There is no feature
 repository, DTO copy, command bus, or state mirror behind it.
@@ -182,6 +188,12 @@ the configured remote target; it does not block on the network.
 The reference app shows the complete
 [Supabase authentication and graph bootstrap](https://github.com/sidux/nodus/blob/main/example/tasks/lib/app_bootstrap.dart).
 
+For irreducible immediate online calls, `ExternalCapabilityContract` keeps the
+request and response typed while `SupabaseExternalCapabilityAdapter` owns the
+shared RPC or Edge Function transport and failure mapping. Domain-specific
+clients and gateways retain fallback and product policy; the adapter never
+becomes entity persistence, a cache, a retry queue, or a workflow registry.
+
 ## What Nodus generates
 
 | Boundary | Generated result |
@@ -192,6 +204,7 @@ The reference app shows the complete
 | Synchronization | Typed codecs, target routing, retry, idempotency, cursors, conflict rebase, and recovery |
 | Supabase | PostgreSQL schema, native columns, checks, indexes, grants, RLS, push functions, and pull history |
 | Queries | Typed fields, predicates, ordering, lookups, inverse relationships, and bounded or keyset-paged lists |
+| Workflow membership | Conventional invite, reuse, accept, decline, revoke, participant access, and self-membership validation from one capability |
 | Navigation (optional) | Typed GoRouter locations generated from route definition files |
 | Testing | An in-memory graph harness backed by the production descriptors and runtime |
 
@@ -250,6 +263,10 @@ application must reconcile:
   conflict detection.
 - Generated relationships, unique lookups, collaboration, activity history,
   archiving, soft deletion, and scoped ordering.
+- Present-entity loaders, typed heterogeneous future records, multi-query
+  lease composition, and async generated-draft lifecycle hooks.
+- Aggregate-boundary inference from unique bounded links and exact child-set
+  replacement without handwritten reconciliation loops.
 - Bounded in-memory collections and unbounded keyset-paged Drift queries behind
   typed list APIs.
 - Durable account-scoped synchronization with retry, idempotency, cursors,

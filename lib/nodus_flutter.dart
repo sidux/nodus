@@ -534,6 +534,39 @@ D useEntityMutationDraft<E, D extends EntityMutationDraft<E>>(
   return draft;
 }
 
+/// Owns an asynchronously loaded generated draft for the widget lifetime.
+///
+/// Aggregate edit drafts load their bounded child collections before they can
+/// be exposed. This hook keeps that asynchronous acquisition and disposal as
+/// generic Nodus lifecycle instead of forcing every form to repeat mounted
+/// checks, stale-draft handling, and unconsumed-tree cleanup.
+AsyncSnapshot<D>
+useAsyncEntityMutationDraft<E, D extends EntityMutationDraft<E>>(
+  Future<D> Function() create, {
+  List<Object?> keys = const [],
+  bool preserveState = false,
+}) {
+  final future = useMemoized(create, keys);
+  final snapshot = useFuture(future, preserveState: preserveState);
+  useEffect(() {
+    var active = true;
+    D? owned;
+    future.then<void>((draft) {
+      if (active) {
+        owned = draft;
+      } else if (!draft.isConsumed) {
+        draft.discard();
+      }
+    }, onError: (_) {});
+    return () {
+      active = false;
+      final draft = owned;
+      if (draft != null && !draft.isConsumed) draft.discard();
+    };
+  }, [future]);
+  return snapshot;
+}
+
 /// A text controller that writes directly into one generated draft field.
 TextEditingController useEntityDraftTextField(
   EntityDraftField<String> field, {

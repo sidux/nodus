@@ -871,6 +871,17 @@ final class TaskProjectSet {
   TaskProject? byId(LocalId<TaskProject> id) => _engine.byRawId(id.value);
   TaskProject require(LocalId<TaskProject> id) =>
       _engine.requireRawId(id.value);
+  TaskProject? byPresentId(LocalId<TaskProject> id) {
+    final entity = byId(id);
+    return entity == null || entity.deletedAt != null ? null : entity;
+  }
+
+  TaskProject requirePresent(LocalId<TaskProject> id) =>
+      byPresentId(id) ??
+      (throw EntityNotFoundException(
+        entityType: 'TaskProject',
+        entityId: id.value,
+      ));
   EntityExistence<TaskProject> exists({
     required EntityPredicate<TaskProject> where,
     TombstoneVisibility tombstones = TombstoneVisibility.exclude,

@@ -2904,11 +2904,37 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         '_engine.loadRawId(id.value, refresh: refresh);',
       )
       ..writeln(
+        '  Future<EntityLookupLease<${spec.className}>?> loadPresentById('
+        'LocalId<${spec.className}> id, {bool refresh = false}) async {',
+      )
+      ..writeln('    final lease = await loadById(id, refresh: refresh);')
+      ..writeln(
+        '    if (lease != null && '
+        'lease.value.${spec.deletedAtField!.name} != null) {',
+      )
+      ..writeln('      lease.release();')
+      ..writeln('      return null;')
+      ..writeln('    }')
+      ..writeln('    return lease;')
+      ..writeln('  }')
+      ..writeln(
         '  Future<R> useById<R>(LocalId<${spec.className}> id, '
         'LeaseAction<${spec.className}, R> action, '
         '{bool refresh = false}) =>',
       )
       ..writeln('      loadById(id, refresh: refresh).use(')
+      ..writeln('        action,')
+      ..writeln('        ifAbsent: () => throw EntityNotFoundException(')
+      ..writeln("          entityType: '${spec.className}',")
+      ..writeln('          entityId: id.value,')
+      ..writeln('        ),')
+      ..writeln('      );')
+      ..writeln(
+        '  Future<R> usePresentById<R>(LocalId<${spec.className}> id, '
+        'LeaseAction<${spec.className}, R> action, '
+        '{bool refresh = false}) =>',
+      )
+      ..writeln('      loadPresentById(id, refresh: refresh).use(')
       ..writeln('        action,')
       ..writeln('        ifAbsent: () => throw EntityNotFoundException(')
       ..writeln("          entityType: '${spec.className}',")
@@ -3009,7 +3035,24 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln(
         '  ${spec.className} require(LocalId<${spec.className}> id) => '
         '_engine.requireRawId(id.value);',
-      );
+      )
+      ..writeln(
+        '  ${spec.className}? byPresentId(LocalId<${spec.className}> id) {',
+      )
+      ..writeln('    final entity = byId(id);')
+      ..writeln(
+        '    return entity == null || entity.${spec.deletedAtField!.name} != null '
+        '? null : entity;',
+      )
+      ..writeln('  }')
+      ..writeln(
+        '  ${spec.className} requirePresent(LocalId<${spec.className}> id) =>',
+      )
+      ..writeln('      byPresentId(id) ??')
+      ..writeln('      (throw EntityNotFoundException(')
+      ..writeln("        entityType: '${spec.className}',")
+      ..writeln('        entityId: id.value,')
+      ..writeln('      ));');
     _emitUniqueLookups(buffer, spec);
   } else {
     buffer.writeln(
@@ -3024,11 +3067,17 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         '    ArchiveVisibility archives = ArchiveVisibility.include,',
       );
     }
+    if (spec.activeField != null) {
+      buffer.writeln(
+        '    InactiveVisibility inactive = InactiveVisibility.include,',
+      );
+    }
     buffer
       ..writeln('  }) => EntityLookup(query(')
       ..writeln('    where: ${spec.className}Fields.id.equals(id),')
       ..writeln('    tombstones: tombstones,')
       ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+      ..write(spec.activeField != null ? '    inactive: inactive,\n' : '')
       ..writeln('    pageSize: 1,')
       ..writeln('  ));');
   }
@@ -3043,11 +3092,17 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
     );
   }
+  if (spec.activeField != null) {
+    buffer.writeln(
+      '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+    );
+  }
   buffer
     ..writeln('  }) => EntityExistence(query(')
     ..writeln('    where: where,')
     ..writeln('    tombstones: tombstones,')
     ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+    ..write(spec.activeField != null ? '    inactive: inactive,\n' : '')
     ..writeln('    pageSize: 1,')
     ..writeln('  ));')
     ..writeln('  EntityFirst<${spec.className}> first({')
@@ -3061,12 +3116,18 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
     );
   }
+  if (spec.activeField != null) {
+    buffer.writeln(
+      '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+    );
+  }
   buffer
     ..writeln('  }) => EntityFirst(query(')
     ..writeln('    where: where,')
     ..writeln('    orderBy: orderBy,')
     ..writeln('    tombstones: tombstones,')
     ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+    ..write(spec.activeField != null ? '    inactive: inactive,\n' : '')
     ..writeln('    pageSize: 1,')
     ..writeln('  ));');
   if (cachesAuthenticatedOwner) {
@@ -3081,6 +3142,11 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
       );
     }
+    if (spec.activeField != null) {
+      buffer.writeln(
+        '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+      );
+    }
     buffer
       ..writeln('  }) => exists(')
       ..writeln(
@@ -3088,6 +3154,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       )
       ..writeln('    tombstones: tombstones,')
       ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+      ..write(spec.activeField != null ? '    inactive: inactive,\n' : '')
       ..writeln('  );')
       ..writeln('  EntityFirst<${spec.className}> firstOwned({')
       ..writeln('    EntityPredicate<${spec.className}>? where,')
@@ -3100,6 +3167,11 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
       );
     }
+    if (spec.activeField != null) {
+      buffer.writeln(
+        '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+      );
+    }
     buffer
       ..writeln('  }) => first(')
       ..writeln(
@@ -3108,6 +3180,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln('    orderBy: orderBy,')
       ..writeln('    tombstones: tombstones,')
       ..write(spec.hasArchivableCapability ? '    archives: archives,\n' : '')
+      ..write(spec.activeField != null ? '    inactive: inactive,\n' : '')
       ..writeln('  );');
   }
   buffer
@@ -3122,12 +3195,20 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
     );
   }
+  if (spec.activeField != null) {
+    buffer.writeln(
+      '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+    );
+  }
   buffer
     ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
     ..writeln('  }) => _queries.acquire(EntityQuerySpec(')
     ..writeln('    where: _tombstonePredicate(tombstones) &');
   if (spec.hasArchivableCapability) {
     buffer.writeln('        _archivePredicate(archives) &');
+  }
+  if (spec.activeField != null) {
+    buffer.writeln('        _inactivePredicate(inactive) &');
   }
   buffer
     ..writeln('        (where ?? EntityPredicate<${spec.className}>.all()),')
@@ -3158,6 +3239,11 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
     );
   }
+  if (spec.activeField != null) {
+    buffer.writeln(
+      '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+    );
+  }
   buffer
     ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
     ..writeln(
@@ -3169,6 +3255,9 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
     ..writeln('      where: _tombstonePredicate(tombstones) &');
   if (spec.hasArchivableCapability) {
     buffer.writeln('          _archivePredicate(archives) &');
+  }
+  if (spec.activeField != null) {
+    buffer.writeln('          _inactivePredicate(inactive) &');
   }
   buffer
     ..writeln('          (where ?? EntityPredicate<${spec.className}>.all()),')
@@ -3191,6 +3280,11 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
     );
   }
+  if (spec.activeField != null) {
+    buffer.writeln(
+      '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+    );
+  }
   buffer
     ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
     ..writeln(
@@ -3202,6 +3296,9 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
     ..writeln('      where: _tombstonePredicate(tombstones) &');
   if (spec.hasArchivableCapability) {
     buffer.writeln('          _archivePredicate(archives) &');
+  }
+  if (spec.activeField != null) {
+    buffer.writeln('          _inactivePredicate(inactive) &');
   }
   buffer
     ..writeln('          (where ?? EntityPredicate<${spec.className}>.all()),')
@@ -3391,6 +3488,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       spec,
       cachesAuthenticatedOwner: cachesAuthenticatedOwner,
     );
+    _emitWorkflowMembershipMethods(buffer, spec);
   }
   buffer
     ..writeln(
@@ -3432,6 +3530,27 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       )
       ..writeln('  };');
   }
+  if (spec.activeField != null) {
+    buffer
+      ..writeln(
+        '  static EntityPredicate<${spec.className}> _inactivePredicate(',
+      )
+      ..writeln('    InactiveVisibility visibility,')
+      ..writeln('  ) => switch (visibility) {')
+      ..writeln(
+        '    InactiveVisibility.exclude => '
+        '${_fieldReference(spec, spec.activeField!)}.equals(true),',
+      )
+      ..writeln(
+        '    InactiveVisibility.include => '
+        'EntityPredicate<${spec.className}>.all(),',
+      )
+      ..writeln(
+        '    InactiveVisibility.only => '
+        '${_fieldReference(spec, spec.activeField!)}.equals(false),',
+      )
+      ..writeln('  };');
+  }
   buffer.writeln('  void dispose() => _queries.dispose();');
   buffer
     ..writeln('}')
@@ -3439,6 +3558,75 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   if (spec.canCollaborate) {
     _emitCollaborationApi(buffer, spec);
   }
+}
+
+void _emitWorkflowMembershipMethods(StringBuffer buffer, EntitySpec spec) {
+  final workflow = spec.workflowMembership;
+  if (workflow == null || !spec.canBeginMutationDraftEdit) return;
+  final target = workflow.targetReference;
+  final participant = workflow.participant;
+  final lookupSuffix = [
+    target,
+    participant,
+  ].map((field) => _upperCamelIdentifier(field.name)).join('And');
+  final extraCreateFields = spec.createParameters
+      .where(
+        (field) =>
+            field != target &&
+            field != participant &&
+            field.name != EntityConventions.deletedAtFieldName,
+      )
+      .toList(growable: false);
+  final editableExtras = extraCreateFields
+      .where(spec.isDraftEditable)
+      .toList(growable: false);
+
+  buffer
+    ..writeln()
+    ..writeln('  Future<${spec.className}> inviteOrReuse({')
+    ..writeln('    LocalId<${spec.className}>? id,')
+    ..writeln('    required ${target.dartType} ${target.name},')
+    ..writeln('    required ${participant.dartType} ${participant.name},');
+  _emitCreateParameters(buffer, extraCreateFields);
+  buffer
+    ..writeln('  }) async {')
+    ..writeln('    final existing = by$lookupSuffix(')
+    ..writeln('      ${target.name}: ${target.name},')
+    ..writeln('      ${participant.name}: ${participant.name},')
+    ..writeln('    );')
+    ..writeln('    if (existing == null) {')
+    ..writeln('      return create(')
+    ..writeln('        id: id,')
+    ..writeln('        ${target.name}: ${target.name},')
+    ..writeln('        ${participant.name}: ${participant.name},');
+  for (final field in extraCreateFields) {
+    buffer.writeln('        ${field.name}: ${field.name},');
+  }
+  buffer
+    ..writeln('      );')
+    ..writeln('    }')
+    ..writeln(
+      '    final shouldReinvite = '
+      'existing.${workflow.status.name} == ${workflow.status.dartType}.declined ||',
+    )
+    ..writeln(
+      '        existing.${workflow.status.name} == '
+      '${workflow.status.dartType}.revoked;',
+    )
+    ..writeln('    if (!shouldReinvite) return existing;');
+  if (editableExtras.isNotEmpty) {
+    buffer.writeln('    final draft = existing.beginEdit();');
+    for (final field in editableExtras) {
+      buffer.writeln('    draft.${field.name} = ${field.name};');
+    }
+    buffer.writeln('    final updated = await draft.save();');
+  } else {
+    buffer.writeln('    final updated = existing;');
+  }
+  buffer
+    ..writeln('    await updated.reinvite();')
+    ..writeln('    return updated;')
+    ..writeln('  }');
 }
 
 void _emitCreateOrGetMethods(
@@ -3511,6 +3699,65 @@ void _emitCreateOrGetMethods(
     }
     buffer
       ..writeln('    );')
+      ..writeln('  }');
+
+    if (!spec.canBeginMutationDraftEdit ||
+        lookupFields.any(
+          (name) =>
+              spec.fields
+                  .singleWhere((field) => field.name == name)
+                  .persistedVariantName !=
+              null,
+        )) {
+      continue;
+    }
+    final draftMethodName =
+        'beginUpsertBy$suffix${index.ownerScoped ? 'ForOwner' : ''}';
+    buffer
+      ..writeln()
+      ..writeln('  Future<${spec.className}MutationDraft> $draftMethodName({')
+      ..writeln('    LocalId<${spec.className}>? id,');
+    for (final fieldName in lookupFields) {
+      final field = spec.fields.singleWhere(
+        (candidate) => candidate.name == fieldName,
+      );
+      buffer.writeln('    required ${field.dartType} $fieldName,');
+    }
+    buffer
+      ..writeln('  }) async {')
+      ..writeln('    final existing = $lookupMethod(');
+    if (index.ownerScoped) {
+      buffer.writeln('      ${spec.ownerField.name}: _ownerId,');
+    }
+    for (final fieldName in lookupFields) {
+      buffer.writeln('      $fieldName: $fieldName,');
+    }
+    buffer
+      ..writeln('    );')
+      ..writeln('    if (existing != null) {')
+      ..writeln('      if (existing.${spec.deletedAtField!.name} != null) {');
+    if (spec.hasSoftDeletableCapability) {
+      buffer.writeln('        await existing.restore();');
+    } else {
+      buffer
+        ..writeln('        throw const EntityValidationException(')
+        ..writeln("          entityType: '${spec.className}',")
+        ..writeln("          field: '${EntityConventions.deletedAtFieldName}',")
+        ..writeln(
+          "          message: 'A remotely deleted entity cannot be upserted.',",
+        )
+        ..writeln('        );');
+    }
+    buffer
+      ..writeln('      }')
+      ..writeln('      return existing.beginEdit();')
+      ..writeln('    }')
+      ..writeln('    final draft = beginCreate(id: id);');
+    for (final fieldName in lookupFields) {
+      buffer.writeln('    draft.$fieldName = $fieldName;');
+    }
+    buffer
+      ..writeln('    return draft;')
       ..writeln('  }');
   }
 }

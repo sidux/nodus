@@ -28,3 +28,21 @@
 - Allows same-coordinator nested transactions to join safely while rejecting
   unrelated asynchronous work, and generates executable Drift migration tests
   wired to the reviewed migration strategy.
+- Adds transport-neutral typed external capability contracts and a shared
+  Supabase RPC/Edge Function adapter with normalized failure categories and a
+  transport-free testing seam.
+- Preserves collision-free Dart getters from Drift schema snapshots in both
+  migration steps and generated verification schemas, including current
+  schema emitters that do not generate a companion `DataClass`.
+- Adds `WorkflowMembership` generation for conventional participant/status
+  fields, transitions, self-membership constraints, and invite-or-reuse APIs.
+- Infers bounded aggregate inverses from unique links and generates typed
+  `beginUpsertBy...` drafts for live unique identities.
+- Adds present-only bounded and unbounded identity APIs, lifecycle-default
+  inactive relationship queries with identity-preserving relationship
+  reactivation, mixed exhaustive-read record leases, and typed heterogeneous
+  record futures through arity fourteen.
+- Adds asynchronous generated-draft Flutter lifecycle ownership and JSON
+  object/list/void external-capability contract factories.
+- Generates Drift table rebuilds for constraint-only changes and adds an
+  explicit `NodusMigrationPlan.acknowledgeGenerated()` review decision.

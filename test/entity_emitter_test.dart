@@ -332,6 +332,8 @@ void main() {
       contains('_ownerId = engine.authenticatedOwnerId<Account>(),'),
     );
     expect(first, contains('final LocalId<Account> _ownerId;'));
+    expect(first, contains('WorkItem? byPresentId(LocalId<WorkItem> id)'));
+    expect(first, contains('WorkItem requirePresent(LocalId<WorkItem> id)'));
     expect(
       first,
       isNot(
@@ -414,6 +416,16 @@ void main() {
     expect(
       first,
       contains(
+        'Future<WorkItemMutationDraft> '
+        'beginUpsertByStatementForOwner({',
+      ),
+    );
+    expect(first, contains('final draft = beginCreate(id: id);'));
+    expect(first, contains('draft.statement = statement;'));
+    expect(first, contains('return existing.beginEdit();'));
+    expect(
+      first,
+      contains(
         'Future<WorkItem> createOrGetBySortOrderAndStatement({\n'
         '    LocalId<WorkItem>? id,',
       ),
@@ -484,7 +496,14 @@ void main() {
     expect(output, contains('required EntityOrder<WorkItem> orderBy'));
     expect(output, contains('WorkItemFields.id.equals(id)'));
     expect(output, contains('Future<EntityLookupLease<WorkItem>?> loadById('));
+    expect(
+      output,
+      contains('Future<EntityLookupLease<WorkItem>?> loadPresentById('),
+    );
     expect(output, contains('Future<R> useById<R>('));
+    expect(output, contains('Future<R> usePresentById<R>('));
+    expect(output, contains('lease.value.deletedAt != null'));
+    expect(output, contains('lease.release();'));
     expect(output, contains('LeaseAction<WorkItem, R> action'));
     expect(output, contains("entityType: 'WorkItem'"));
     expect(output, contains('entityId: id.value'));

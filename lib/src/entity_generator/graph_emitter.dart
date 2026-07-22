@@ -544,6 +544,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
         '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
       );
     _emitArchiveParameter(buffer, entity);
+    _emitInactiveParameter(buffer, entity);
     buffer
       ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
       ..writeln(
@@ -554,6 +555,7 @@ void _emitGraphLists(StringBuffer buffer, EntityGraphSpec graph) {
       ..writeln('         orderBy: ${_graphListOrderBy(entity)},')
       ..writeln('         tombstones: tombstones,')
       ..write(_archiveArgument(entity))
+      ..write(_inactiveArgument(entity))
       ..writeln('         pageSize: pageSize,')
       ..writeln('       ));');
 
@@ -679,7 +681,9 @@ void _emitGraphArchiveConstructor(
     ..writeln('    EntityOrder<${entity.className}>? orderBy,')
     ..writeln(
       '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
-    )
+    );
+  _emitInactiveParameter(buffer, entity);
+  buffer
     ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
     ..writeln(
       '  }) :${retainEntityGraph ? ' _entityGraph = entityGraph,' : ''}',
@@ -689,6 +693,7 @@ void _emitGraphArchiveConstructor(
     ..writeln('         orderBy: ${_graphListOrderBy(entity)},')
     ..writeln('         tombstones: tombstones,')
     ..writeln('         archives: ArchiveVisibility.$visibility,')
+    ..write(_inactiveArgument(entity))
     ..writeln('         pageSize: pageSize,')
     ..writeln('       ));');
 }
@@ -801,7 +806,9 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
           '${entity.className}Fields.${condition.field}.isIn({${condition.values.map((value) => _graphIndexConditionLiteral(entity.fields.singleWhere((field) => field.name == condition.field), value)).join(', ')}})',
       ];
       final hasOptionalParameters =
-          !index.activeOnly || entity.hasArchivableCapability;
+          !index.activeOnly ||
+          entity.hasArchivableCapability ||
+          entity.activeField != null;
       buffer
         ..writeln('  $lookupName.$constructorName(')
         ..writeln('    $entityGraphName entityGraph,')
@@ -820,6 +827,7 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
               : '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,\n',
         );
       _emitArchiveParameter(buffer, entity, defaultVisibility: 'include');
+      _emitInactiveParameter(buffer, entity, defaultVisibility: 'include');
       buffer
         ..writeln(
           '  ${hasOptionalParameters ? '}' : ''}) : super(entityGraph.${entity.setAccessor}.query(',
@@ -829,6 +837,7 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
           '         tombstones: ${index.activeOnly ? 'TombstoneVisibility.exclude' : 'tombstones'},',
         )
         ..write(_archiveArgument(entity))
+        ..write(_inactiveArgument(entity))
         ..writeln('         pageSize: 1,')
         ..writeln('       ));');
     }
@@ -863,6 +872,7 @@ void _emitGraphOwnedListConstructor(
       '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
     );
   _emitArchiveParameter(buffer, entity);
+  _emitInactiveParameter(buffer, entity);
   buffer
     ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
     ..writeln(
@@ -879,6 +889,7 @@ void _emitGraphOwnedListConstructor(
     ..writeln('         orderBy: ${_graphListOrderBy(entity)},')
     ..writeln('         tombstones: tombstones,')
     ..write(_archiveArgument(entity))
+    ..write(_inactiveArgument(entity))
     ..writeln('         pageSize: pageSize,')
     ..writeln('       ));');
 }
@@ -904,6 +915,7 @@ void _emitGraphListSelectionConstructor(
       '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
     );
   _emitArchiveParameter(buffer, entity);
+  _emitInactiveParameter(buffer, entity);
   buffer
     ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
     ..writeln(
@@ -917,6 +929,7 @@ void _emitGraphListSelectionConstructor(
     ..writeln('         orderBy: ${_graphListOrderBy(entity)},')
     ..writeln('         tombstones: tombstones,')
     ..write(_archiveArgument(entity))
+    ..write(_inactiveArgument(entity))
     ..writeln('         pageSize: pageSize,')
     ..writeln('       ));');
 }
@@ -935,6 +948,21 @@ void _emitArchiveParameter(
 
 String _archiveArgument(EntitySpec entity, {String indent = '         '}) =>
     entity.hasArchivableCapability ? '${indent}archives: archives,\n' : '';
+
+void _emitInactiveParameter(
+  StringBuffer buffer,
+  EntitySpec entity, {
+  String defaultVisibility = 'exclude',
+}) {
+  if (entity.activeField == null) return;
+  buffer.writeln(
+    '    InactiveVisibility inactive = '
+    'InactiveVisibility.$defaultVisibility,',
+  );
+}
+
+String _inactiveArgument(EntitySpec entity, {String indent = '         '}) =>
+    entity.activeField != null ? '${indent}inactive: inactive,\n' : '';
 
 String _graphListOrderBy(EntitySpec entity) {
   if (entity.hasOrderedCapability) {
@@ -1104,6 +1132,7 @@ void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
         );
       if (!isMutableRelationshipSource) {
         _emitArchiveParameter(buffer, source);
+        _emitInactiveParameter(buffer, source);
       }
       buffer
         ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
@@ -1122,6 +1151,11 @@ void _emitGraphRelationships(StringBuffer buffer, EntityGraphSpec graph) {
           isMutableRelationshipSource
               ? ''
               : _archiveArgument(source, indent: '      '),
+        )
+        ..write(
+          isMutableRelationshipSource
+              ? ''
+              : _inactiveArgument(source, indent: '      '),
         )
         ..writeln('      pageSize: pageSize,')
         ..writeln('    );')
@@ -2068,6 +2102,7 @@ void _emitCreationRelationship(
       '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
     );
   _emitArchiveParameter(buffer, source);
+  _emitInactiveParameter(buffer, source);
   buffer
     ..writeln('    int pageSize = EntityQuerySpec.defaultPageSize,')
     ..writeln('  }) : _entityGraph = entityGraph,')
@@ -2082,6 +2117,7 @@ void _emitCreationRelationship(
     ..writeln('         orderBy: ${_graphListOrderBy(source)},')
     ..writeln('         tombstones: tombstones,')
     ..write(_archiveArgument(source))
+    ..write(_inactiveArgument(source))
     ..writeln('         pageSize: pageSize,')
     ..writeln('       ));')
     ..writeln('  final $entityGraphName _entityGraph;')
@@ -2245,6 +2281,7 @@ void _emitActiveRelationship(
       ..writeln('        .query(')
       ..writeln('          where:')
       ..writeln('              $activePredicate,')
+      ..writeln('          inactive: InactiveVisibility.include,')
       ..writeln('        )')
       ..writeln('        .useAll((existing) async {')
       ..writeln(
@@ -2462,6 +2499,7 @@ void _emitActiveRelationship(
     ..writeln(
       '                ${source.className}Fields.${targetField.name}.equals(targetId),',
     )
+    ..writeln('            inactive: InactiveVisibility.include,')
     ..writeln('            pageSize: 2,')
     ..writeln('          )')
     ..writeln('          .useAll((matches) async {')
