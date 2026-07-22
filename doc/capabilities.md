@@ -185,9 +185,10 @@ final openTasks = TaskList.all(
 );
 ```
 
-Generated field objects provide typed equality, set-membership, range, and
-ordering operations. The same predicate evaluates in memory, forms a stable
-cache key, and compiles to Drift SQL.
+Generated field objects provide typed equality, set-membership, range, text
+containment, and ordering operations. The same predicate evaluates in memory,
+forms a stable cache key, and compiles to Drift SQL. Text search therefore
+filters before paging instead of downloading a collection first.
 
 ### Cardinality and paging
 
@@ -229,9 +230,10 @@ subscriptions release their reaction and lease when cancelled.
 | `watchById` | Observe one stable identity without a provider cache |
 | `watchQuery` | Observe a paged cached query |
 | `watchCompleteQuery` / `watchCompleteStates` | Load and emit only exhaustive snapshots |
-| `useObservedEntityList` | Bind list lease and loading/data/empty/failure rendering to a widget |
+| `useObservedEntityList` | Bind list lease and loading/data/empty/failure rendering to a widget; its `when` fold pages descendant scroll views automatically |
 | `useObservedEntityLookup` | Render typed zero-or-one lookup state |
-| `useEntityQueryScrollController` | Trigger keyset paging from scroll position |
+| `EntityQueryPagingBoundary` / observed `pagingBoundary` | Add the same automatic paging when observed state is rendered manually; groups page through one boundary |
+| `useEntityQueryScrollController` | Low-level controller binding for a custom scroll integration that cannot emit ordinary scroll notifications |
 | `useEntityAction` | Own reusable busy/error feedback for awaited operations |
 
 ## Relationships and authorization

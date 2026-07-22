@@ -109,6 +109,31 @@ void main() {
     expect(normalizeTrimmedStringToNull('  note  '), 'note');
   });
 
+  test('text predicates are canonical, nullable-safe, and case aware', () {
+    final title = ComparableEntityField<_TextItem, String>(
+      name: 'title',
+      read: (item) => item.title,
+      encode: normalizeTrimmedString,
+      normalize: normalizeTrimmedString,
+    );
+    final summary = NullableComparableEntityField<_TextItem, String>(
+      name: 'summary',
+      read: (item) => item.summary,
+      encode: normalizeTrimmedStringToNull,
+      normalize: normalizeTrimmedStringToNull,
+    );
+    const item = _TextItem(title: 'Deep Focus', summary: null);
+
+    expect(title.containsText(' focus ').test(item), isTrue);
+    expect(title.containsText('FOCUS').test(item), isTrue);
+    expect(
+      title.containsText('FOCUS', caseSensitive: true).test(item),
+      isFalse,
+    );
+    expect(summary.containsText('focus').test(item), isFalse);
+    expect(title.containsText('  '), EntityPredicate<_TextItem>.all());
+  });
+
   test(
     'field descriptors normalize before transport constraints and storage',
     () {

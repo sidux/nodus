@@ -383,6 +383,136 @@ void main() {
     await tester.pumpAndSettle();
     expect(loadCount, 4);
   });
+
+  testWidgets(
+    'observed query rendering automatically loads the next visible page',
+    (tester) async {
+      final values = List<int>.generate(40, (index) => index);
+      var loadCount = 0;
+      LocalEntityQuery<int>? captured;
+      final cache = LocalEntityQueryCache<int>.database(
+        invalidations: const Stream.empty(),
+        loader: (spec, {required after, required limit}) async {
+          loadCount++;
+          final offset = (after as _OffsetCursor?)?.offset ?? 0;
+          final items = values.skip(offset).take(limit).toList(growable: false);
+          final nextOffset = offset + items.length;
+          return EntityQueryPage(
+            items: items,
+            hasMore: nextOffset < values.length,
+            nextCursor: _OffsetCursor(nextOffset),
+          );
+        },
+      );
+      addTearDown(cache.dispose);
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            height: 200,
+            child: HookBuilder(
+              builder: (_) {
+                final observed = useObservedEntityQuery(
+                  () => cache.acquire(EntityQuerySpec<int>(pageSize: 4)),
+                );
+                captured = observed.query;
+                return observed.when(
+                  pagingPreloadExtent: 0,
+                  loading: SizedBox.shrink,
+                  empty: SizedBox.shrink,
+                  failure: (error, retry) => Text('$error'),
+                  data:
+                      (
+                        items, {
+                        required hasMore,
+                        required refreshing,
+                        refreshError,
+                      }) => ListView.builder(
+                        itemExtent: 100,
+                        itemCount: items.length,
+                        itemBuilder: (_, index) => Text('${items[index]}'),
+                      ),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The first layout notification may prefetch one page while the scroll
+      // extent is still zero; it must not exhaust an actually scrollable list.
+      expect(loadCount, 2);
+      expect(find.text('3'), findsOneWidget);
+
+      await tester.drag(find.byType(ListView), const Offset(0, -1000));
+      await tester.pumpAndSettle();
+
+      expect(loadCount, greaterThan(2));
+      expect(loadCount, lessThan(10));
+      expect(captured!.items.length, greaterThan(8));
+    },
+  );
+
+  testWidgets(
+    'automatic paging fills a viewport without hot-retrying a failed page',
+    (tester) async {
+      var loadCount = 0;
+      final cache = LocalEntityQueryCache<int>.database(
+        invalidations: const Stream.empty(),
+        loader: (spec, {required after, required limit}) async {
+          loadCount++;
+          if (after == null) {
+            return const EntityQueryPage(
+              items: [1],
+              hasMore: true,
+              nextCursor: _OffsetCursor(1),
+            );
+          }
+          throw StateError('next page failed');
+        },
+      );
+      addTearDown(cache.dispose);
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            height: 300,
+            child: HookBuilder(
+              builder: (_) {
+                final observed = useObservedEntityQuery(
+                  () => cache.acquire(EntityQuerySpec<int>(pageSize: 1)),
+                );
+                return observed.when(
+                  loading: SizedBox.shrink,
+                  empty: SizedBox.shrink,
+                  failure: (error, retry) => Text('$error'),
+                  data:
+                      (
+                        items, {
+                        required hasMore,
+                        required refreshing,
+                        refreshError,
+                      }) => ListView.builder(
+                        itemExtent: 100,
+                        itemCount: items.length,
+                        itemBuilder: (_, index) => Text('${items[index]}'),
+                      ),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(loadCount, 2);
+      await tester.pump(const Duration(seconds: 1));
+      expect(loadCount, 2);
+    },
+  );
 }
 
 final class _OffsetCursor implements EntityQueryCursor {

@@ -245,6 +245,14 @@ version, regenerates the graph, and produces the reviewed Drift and configured
 target migration. This makes forgetting a version bump impossible and keeps
 version changes tied to actual resolved schema changes.
 
+Applications MAY opt into generic source dependency boundaries in
+`nodus.lock`. A boundary names the source-directory segments it governs plus
+forbidden directory segments and package-name prefixes. `nodus check` analyzes
+imports and fails configured violations; it does not assume that every project
+uses `domain`, `application`, or `infrastructure` folder names. The policy
+enforces dependency direction only. It MUST NOT infer business layers, move
+files, or make framework-specific packages mandatory or forbidden by default.
+
 Ordinary applications need no handwritten configuration file. `nodus.yaml` is
 reserved for irreducible exceptions such as multiple targets, a durable graph
 name override, schema composition, supported target-specific overrides, or an
@@ -1771,6 +1779,14 @@ relationships. Equivalent values have structural equality and share cached work.
 Callers MAY add typed `where` and `orderBy` clauses but MUST NOT repeat a
 generated base predicate in a manual query function.
 
+Text fields expose structurally typed containment predicates with explicit
+case sensitivity. Case-insensitive matching uses SQLite-compatible ASCII case
+folding in memory and Drift; applications needing locale-aware search declare
+a dedicated normalized search field or projection. Search filters before
+paging; downloading an unbounded collection and then applying a presentation
+search is forbidden. Empty text normalizes to the all predicate, and nullable
+text never matches a non-empty search while null.
+
 A generated `<Entity>List` is the live acquired result of one query. Named
 constructors such as `<Entity>List.forOwner(entityGraph, ownerId)` combine the
 generated query with acquisition for concise domain use. Every list owns a
@@ -1882,6 +1898,18 @@ with or without retained data, pagination, and disposal. UI code MUST use that
 typed fold instead of repeating state switches or converting it into provider
 state. A bounded synchronous exact lookup uses a narrow MobX observation hook
 over the generated computed index and retains no query lease.
+
+Observed list/query data installs an automatic paging boundary by default.
+Vertical scroll and scroll-metrics notifications load the next page before the
+visible extent is exhausted, including enough initial pages to fill a viewport.
+The query runtime coalesces concurrent page requests and publishes failures;
+the boundary MUST NOT hot-retry a failed page. A multi-query projection uses
+one group boundary, and UI that renders observed state manually wraps its scroll
+subtree with the same generic boundary. Screens MUST NOT own a paging controller
+or call `loadNextPage` merely to implement ordinary infinite scroll. A widget
+MAY disable automatic paging only when it intentionally renders a non-scrolling
+partial result, and complete calculations continue to request exhaustive reads
+explicitly.
 
 When one widget consumes several independent observed queries,
 `ObservedEntityQueryGroup` folds only their shared lifecycle: initial loading,

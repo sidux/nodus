@@ -59,6 +59,30 @@ final class _InventoryFixture {
     : root = Directory.systemTemp.createTempSync('nodus_inventory_') {
     _write('pubspec.yaml', 'name: fixture\n');
     _write(
+      'nodus.lock',
+      jsonEncode({
+        'formatVersion': 1,
+        'packageName': 'fixture',
+        'graphName': 'FixtureEntityGraph',
+        'schemaVersion': 1,
+        'schemaFingerprint': null,
+        'targets': ['supabase'],
+        'defaultTarget': 'supabase',
+        'sourceBoundaries': [
+          {
+            'name': 'domain',
+            'sourceDirectories': ['domain'],
+            'forbiddenDirectories': [
+              'application',
+              'infrastructure',
+              'presentation',
+            ],
+            'forbiddenPackages': ['flutter', 'supabase'],
+          },
+        ],
+      }),
+    );
+    _write(
       'lib/src/generated/nodus.explain.g.json',
       jsonEncode({
         'graph': 'FixtureEntityGraph',
@@ -96,6 +120,8 @@ final class _InventoryFixture {
       }),
     );
     _write('lib/features/tasks/domain/task.dart', r'''
+import 'package:flutter/widgets.dart';
+
 @Entity()
 abstract class Task implements OwnedBy<Task, Account>, Archivable {
   abstract String title;

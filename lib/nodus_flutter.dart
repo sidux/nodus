@@ -261,30 +261,54 @@ final class ObservedEntityQuery<E> {
     required Widget Function(Object error, Future<void> Function() retry)
     failure,
     Widget Function()? disposed,
-  }) => switch (state) {
-    EntityQueryInitialLoading<E>() => loading(),
-    EntityQueryEmpty<E>() => empty(),
-    EntityQueryData<E>(:final items, :final hasMore) => data(
-      items,
-      hasMore: hasMore,
-      refreshing: false,
-    ),
-    EntityQueryStaleData<E>(:final items, :final hasMore) => data(
-      items,
-      hasMore: hasMore,
-      refreshing: true,
-    ),
-    EntityQueryFailure<E>(:final error, :final items, :final hasMore) =>
-      items.isEmpty
-          ? failure(error, query.refresh)
-          : data(
-              items,
-              hasMore: hasMore,
-              refreshing: false,
-              refreshError: error,
-            ),
-    EntityQueryDisposed<E>() => disposed?.call() ?? const SizedBox.shrink(),
-  };
+    bool automaticPaging = true,
+    double pagingPreloadExtent = EntityQueryPagingBoundary.defaultPreloadExtent,
+    Axis pagingAxis = Axis.vertical,
+  }) {
+    final child = switch (state) {
+      EntityQueryInitialLoading<E>() => loading(),
+      EntityQueryEmpty<E>() => empty(),
+      EntityQueryData<E>(:final items, :final hasMore) => data(
+        items,
+        hasMore: hasMore,
+        refreshing: false,
+      ),
+      EntityQueryStaleData<E>(:final items, :final hasMore) => data(
+        items,
+        hasMore: hasMore,
+        refreshing: true,
+      ),
+      EntityQueryFailure<E>(:final error, :final items, :final hasMore) =>
+        items.isEmpty
+            ? failure(error, query.refresh)
+            : data(
+                items,
+                hasMore: hasMore,
+                refreshing: false,
+                refreshError: error,
+              ),
+      EntityQueryDisposed<E>() => disposed?.call() ?? const SizedBox.shrink(),
+    };
+    if (!automaticPaging || state.items.isEmpty) return child;
+    return EntityQueryPagingBoundary(
+      queries: [query],
+      preloadExtent: pagingPreloadExtent,
+      axis: pagingAxis,
+      child: child,
+    );
+  }
+
+  /// Adds automatic paging when this query is rendered without [when].
+  Widget pagingBoundary({
+    required Widget child,
+    double preloadExtent = EntityQueryPagingBoundary.defaultPreloadExtent,
+    Axis axis = Axis.vertical,
+  }) => EntityQueryPagingBoundary(
+    queries: [query],
+    preloadExtent: preloadExtent,
+    axis: axis,
+    child: child,
+  );
 }
 
 /// One lifecycle summary for several independently typed observed queries.
@@ -341,12 +365,132 @@ final class ObservedEntityQueryGroup {
     data,
     required Widget Function(Object error, Future<void> Function() retry)
     failure,
+    bool automaticPaging = true,
+    double pagingPreloadExtent = EntityQueryPagingBoundary.defaultPreloadExtent,
+    Axis pagingAxis = Axis.vertical,
   }) {
     final blockingFailure = this.failure;
     if (blockingFailure != null) return failure(blockingFailure, refresh);
     if (isInitialLoading) return loading();
-    return data(isRefreshing, refreshError, refresh);
+    final child = data(isRefreshing, refreshError, refresh);
+    if (!automaticPaging ||
+        queries.every((query) => query.state.items.isEmpty)) {
+      return child;
+    }
+    return pagingBoundary(
+      child: child,
+      preloadExtent: pagingPreloadExtent,
+      axis: pagingAxis,
+    );
   }
+
+  /// Adds one automatic paging boundary for every query in this projection.
+  Widget pagingBoundary({
+    required Widget child,
+    double preloadExtent = EntityQueryPagingBoundary.defaultPreloadExtent,
+    Axis axis = Axis.vertical,
+  }) => EntityQueryPagingBoundary(
+    queries: [for (final observed in queries) observed.query],
+    preloadExtent: preloadExtent,
+    axis: axis,
+    child: child,
+  );
+}
+
+/// Automatically extends entity queries as a descendant scroll view nears its
+/// end.
+///
+/// [ObservedEntityQuery.when] and [ObservedEntityQueryGroup.when] install this
+/// boundary by default. Use it directly only when a screen reads observed state
+/// manually. Scroll controllers remain presentation-local and Nodus keeps
+/// paging, request coalescing, and query failure state in the query runtime.
+final class EntityQueryPagingBoundary extends StatefulWidget {
+  EntityQueryPagingBoundary({
+    required Iterable<LocalEntityQuery<dynamic>> queries,
+    required this.child,
+    this.preloadExtent = defaultPreloadExtent,
+    this.axis = Axis.vertical,
+    super.key,
+  }) : assert(preloadExtent >= 0),
+       queries = List.unmodifiable(queries);
+
+  static const double defaultPreloadExtent = 320;
+
+  final List<LocalEntityQuery<dynamic>> queries;
+  final Widget child;
+  final double preloadExtent;
+  final Axis axis;
+
+  @override
+  State<EntityQueryPagingBoundary> createState() =>
+      _EntityQueryPagingBoundaryState();
+}
+
+final class _EntityQueryPagingBoundaryState
+    extends State<EntityQueryPagingBoundary> {
+  final Set<LocalEntityQuery<dynamic>> _loading = {};
+  ScrollMetrics? _pendingMetrics;
+  bool _metricsCheckScheduled = false;
+
+  bool _onScroll(ScrollNotification notification) {
+    _scheduleMaybeLoad(notification.metrics, notification.depth);
+    return false;
+  }
+
+  bool _onMetrics(ScrollMetricsNotification notification) {
+    _scheduleMaybeLoad(notification.metrics, notification.depth);
+    return false;
+  }
+
+  void _scheduleMaybeLoad(ScrollMetrics metrics, int depth) {
+    if (depth != 0 || metrics.axis != widget.axis) return;
+    _pendingMetrics = metrics;
+    if (_metricsCheckScheduled) return;
+    _metricsCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _metricsCheckScheduled = false;
+      if (!mounted) return;
+      final latestMetrics = _pendingMetrics;
+      _pendingMetrics = null;
+      if (latestMetrics != null) _maybeLoad(latestMetrics);
+    });
+  }
+
+  void _maybeLoad(ScrollMetrics metrics) {
+    if (!metrics.hasContentDimensions ||
+        metrics.extentAfter > widget.preloadExtent) {
+      return;
+    }
+    for (final query in widget.queries) {
+      final state = query.state.value;
+      if (!state.hasMore ||
+          state is EntityQueryFailure<dynamic> ||
+          !_loading.add(query)) {
+        continue;
+      }
+      unawaited(_loadNextPage(query));
+    }
+  }
+
+  Future<void> _loadNextPage(LocalEntityQuery<dynamic> query) async {
+    try {
+      await query.loadNextPage();
+    } on Object {
+      // The query publishes the failure through its typed observable state.
+    } finally {
+      _loading.remove(query);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      NotificationListener<ScrollMetricsNotification>(
+        onNotification: _onMetrics,
+        child: NotificationListener<ScrollNotification>(
+          onNotification: _onScroll,
+          child: widget.child,
+        ),
+      );
 }
 
 ObservedEntityQuery<E> useObservedEntityQuery<E>(

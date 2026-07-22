@@ -27,6 +27,14 @@ void main() {
           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       targets: ['supabase'],
       defaultTarget: 'supabase',
+      sourceBoundaries: [
+        NodusSourceBoundary(
+          name: 'domain',
+          sourceDirectories: ['domain'],
+          forbiddenDirectories: ['application', 'infrastructure'],
+          forbiddenPackages: ['flutter', 'supabase'],
+        ),
+      ],
     );
 
     final decoded = NodusLock.decode(lock.encode());
@@ -37,6 +45,11 @@ void main() {
     expect(decoded.targets, ['supabase']);
     expect(decoded.defaultTarget, 'supabase');
     expect(decoded.schemaFingerprint, lock.schemaFingerprint);
+    expect(decoded.sourceBoundaries.single.name, 'domain');
+    expect(decoded.sourceBoundaries.single.forbiddenPackages, [
+      'flutter',
+      'supabase',
+    ]);
   });
 
   test('init derives the graph and owns standard Drift setup', () {

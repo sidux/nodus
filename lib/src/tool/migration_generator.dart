@@ -402,6 +402,7 @@ final class NodusGenerator {
               '`dart run nodus inventory --write`.',
             );
           }
+          _checkEnforcedConformance(inventory);
           _report('Nodus semantic conformance inventory is current.');
           return null;
       }
@@ -413,11 +414,25 @@ final class NodusGenerator {
   void _checkConformanceInventoryIfPresent() {
     final output = File(_path(nodusConformanceInventoryPath));
     if (!output.existsSync()) return;
-    final current = NodusConformanceInventory(root: root).scan().toMarkdown();
-    if (output.readAsStringSync() == current) return;
-    throw const NodusToolUsageException(
-      'Nodus semantic conformance inventory is stale; run '
-      '`dart run nodus inventory --write`.',
+    final report = NodusConformanceInventory(root: root).scan();
+    final current = report.toMarkdown();
+    if (output.readAsStringSync() != current) {
+      throw const NodusToolUsageException(
+        'Nodus semantic conformance inventory is stale; run '
+        '`dart run nodus inventory --write`.',
+      );
+    }
+    _checkEnforcedConformance(report);
+  }
+
+  void _checkEnforcedConformance(ConformanceInventoryReport report) {
+    final violations = report.findings
+        .where((finding) => finding.rule == 'source-boundary')
+        .length;
+    if (violations == 0) return;
+    throw NodusToolUsageException(
+      'Configured Nodus source boundaries have $violations violation(s); '
+      'see $nodusConformanceInventoryPath.',
     );
   }
 

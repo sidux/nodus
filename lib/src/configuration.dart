@@ -12,6 +12,7 @@ final class NodusLock {
     required this.targets,
     required this.defaultTarget,
     this.schemaFingerprint,
+    this.sourceBoundaries = const [],
   });
 
   static const formatVersion = 1;
@@ -22,6 +23,7 @@ final class NodusLock {
   final List<String> targets;
   final String? defaultTarget;
   final String? schemaFingerprint;
+  final List<NodusSourceBoundary> sourceBoundaries;
 
   factory NodusLock.decode(String source) {
     final decoded = jsonDecode(source);
@@ -77,6 +79,7 @@ final class NodusLock {
         'nodus.lock schemaFingerprint must be null or one SHA-256 digest.',
       );
     }
+    final sourceBoundaries = _decodeSourceBoundaries(json['sourceBoundaries']);
     return NodusLock(
       packageName: packageName,
       graphName: graphName,
@@ -84,6 +87,7 @@ final class NodusLock {
       targets: List.unmodifiable(targets),
       defaultTarget: defaultTarget,
       schemaFingerprint: schemaFingerprint as String?,
+      sourceBoundaries: sourceBoundaries,
     );
   }
 
@@ -95,6 +99,7 @@ final class NodusLock {
         targets: targets,
         defaultTarget: defaultTarget,
         schemaFingerprint: schemaFingerprint ?? this.schemaFingerprint,
+        sourceBoundaries: sourceBoundaries,
       );
 
   String encode() {
@@ -107,9 +112,94 @@ final class NodusLock {
       'schemaFingerprint': schemaFingerprint,
       'targets': targets,
       'defaultTarget': defaultTarget,
+      if (sourceBoundaries.isNotEmpty)
+        'sourceBoundaries': [
+          for (final boundary in sourceBoundaries) boundary.toJson(),
+        ],
     };
     return '${encoder.convert(json)}\n';
   }
+}
+
+/// One opt-in source dependency boundary enforced by `nodus check`.
+final class NodusSourceBoundary {
+  const NodusSourceBoundary({
+    required this.name,
+    required this.sourceDirectories,
+    required this.forbiddenDirectories,
+    required this.forbiddenPackages,
+  });
+
+  final String name;
+  final List<String> sourceDirectories;
+  final List<String> forbiddenDirectories;
+  final List<String> forbiddenPackages;
+
+  Map<String, Object?> toJson() => {
+    'name': name,
+    'sourceDirectories': sourceDirectories,
+    'forbiddenDirectories': forbiddenDirectories,
+    'forbiddenPackages': forbiddenPackages,
+  };
+}
+
+List<NodusSourceBoundary> _decodeSourceBoundaries(Object? source) {
+  if (source == null) return const [];
+  if (source is! List) {
+    throw const FormatException('nodus.lock sourceBoundaries must be a list.');
+  }
+  final result = <NodusSourceBoundary>[];
+  final names = <String>{};
+  for (final raw in source) {
+    if (raw is! Map) {
+      throw const FormatException(
+        'Each nodus.lock source boundary must be an object.',
+      );
+    }
+    final json = raw.map((key, value) => MapEntry(key.toString(), value));
+    final name = _requiredIdentifier(json, 'name');
+    if (!names.add(name)) {
+      throw FormatException('Duplicate source boundary `$name`.');
+    }
+    result.add(
+      NodusSourceBoundary(
+        name: name,
+        sourceDirectories: _requiredPathSegments(json, 'sourceDirectories'),
+        forbiddenDirectories: _requiredPathSegments(
+          json,
+          'forbiddenDirectories',
+        ),
+        forbiddenPackages: _requiredPackagePrefixes(json, 'forbiddenPackages'),
+      ),
+    );
+  }
+  return List.unmodifiable(result);
+}
+
+List<String> _requiredPathSegments(Map<String, Object?> json, String key) =>
+    _requiredUniqueStrings(json, key, RegExp(r'^[A-Za-z][A-Za-z0-9_]*$'));
+
+List<String> _requiredPackagePrefixes(Map<String, Object?> json, String key) =>
+    _requiredUniqueStrings(json, key, RegExp(r'^[a-z][a-z0-9_]*$'));
+
+List<String> _requiredUniqueStrings(
+  Map<String, Object?> json,
+  String key,
+  RegExp pattern,
+) {
+  final raw = json[key];
+  if (raw is! List || raw.isEmpty) {
+    throw FormatException('nodus.lock source boundary $key must be non-empty.');
+  }
+  final result = <String>[];
+  for (final value in raw) {
+    if (value is! String ||
+        !pattern.hasMatch(value) ||
+        !result.addUnique(value)) {
+      throw FormatException('Invalid or duplicate source boundary $key value.');
+    }
+  }
+  return List.unmodifiable(result);
 }
 
 final _wireName = RegExp(r'^[a-z][a-z0-9_]*$');

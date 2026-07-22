@@ -1304,11 +1304,65 @@ abstract interface class _EntityPredicateVisitor<E, R> {
 
   R visitMembership<V>(EntityField<E, V> field, List<V> expected);
 
+  R visitText<V>(
+    EntityField<E, V> field,
+    String expected, {
+    required bool caseSensitive,
+  });
+
   R visitLogical(
     EntityLogicalOperator operator,
     List<EntityPredicate<E>> operands,
   );
 }
+
+final class _TextEntityPredicate<E, V> extends EntityPredicate<E> {
+  const _TextEntityPredicate(
+    this.field,
+    this.expected, {
+    required this.caseSensitive,
+  });
+
+  final EntityField<E, V> field;
+  final String expected;
+  final bool caseSensitive;
+
+  @override
+  bool test(E entity) {
+    final value = field.read(entity);
+    if (value is! String) return false;
+    if (caseSensitive) return value.contains(expected);
+    return _sqliteCaseFold(value).contains(_sqliteCaseFold(expected));
+  }
+
+  @override
+  String get _stableKey =>
+      '${field.name}:contains:${caseSensitive ? 'case' : 'folded'}:'
+      '${_stableQueryValue(expected)}';
+
+  @override
+  Set<String> get _fieldNames => {field.name};
+
+  @override
+  R _accept<R>(_EntityPredicateVisitor<E, R> visitor) =>
+      visitor.visitText(field, expected, caseSensitive: caseSensitive);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _TextEntityPredicate<E, V> &&
+      field == other.field &&
+      expected == other.expected &&
+      caseSensitive == other.caseSensitive;
+
+  @override
+  int get hashCode => Object.hash(field, expected, caseSensitive);
+}
+
+String _sqliteCaseFold(String value) => String.fromCharCodes(
+  value.codeUnits.map(
+    (codeUnit) => codeUnit >= 65 && codeUnit <= 90 ? codeUnit + 32 : codeUnit,
+  ),
+);
 
 final class _MembershipEntityPredicate<E, V> extends EntityPredicate<E> {
   _MembershipEntityPredicate(this.field, Iterable<V> expected)
@@ -1571,6 +1625,34 @@ sealed class EntityField<E, V> extends EntityFieldReference<E> {
 
   @override
   int get hashCode => Object.hash(E, V, name);
+}
+
+/// Text matching for generated non-null text fields.
+extension TextEntityFieldCapabilities<E> on EntityField<E, String> {
+  /// Matches rows containing [expected]. Empty text matches every row.
+  EntityPredicate<E> containsText(
+    String expected, {
+    bool caseSensitive = false,
+  }) {
+    final canonical = canonicalize(expected);
+    if (canonical.isEmpty) return EntityPredicate<E>.all();
+    return _TextEntityPredicate(this, canonical, caseSensitive: caseSensitive);
+  }
+}
+
+/// Text matching for generated nullable text fields.
+extension NullableTextEntityFieldCapabilities<E> on EntityField<E, String?> {
+  /// Matches non-null rows containing [expected]. Empty text matches every row.
+  EntityPredicate<E> containsText(
+    String expected, {
+    bool caseSensitive = false,
+  }) {
+    final canonical = canonicalize(expected);
+    if (canonical == null || canonical.isEmpty) {
+      return EntityPredicate<E>.all();
+    }
+    return _TextEntityPredicate(this, canonical, caseSensitive: caseSensitive);
+  }
 }
 
 /// A generated persisted field with its storage metadata and one wire codec.

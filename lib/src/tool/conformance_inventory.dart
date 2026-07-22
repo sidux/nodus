@@ -7,6 +7,8 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/source/line_info.dart';
 import 'package:path/path.dart' as path;
 
+import '../configuration.dart';
+
 const nodusConformanceInventoryPath = 'doc/nodus_conformance_inventory.md';
 
 final class ConformanceRule {
@@ -112,6 +114,14 @@ const nodusConformanceRules = <ConformanceRule>[
     replacement:
         'Use entityGraph.nowUtc() at the mutation boundary or require an '
         'explicit time in the pure domain operation.',
+  ),
+  ConformanceRule(
+    id: 'source-boundary',
+    title: 'Forbidden source dependency',
+    replacement:
+        'Move policy inward, invert the dependency behind a domain port, or '
+        'keep framework and adapter imports outside the configured source '
+        'boundary.',
   ),
 ];
 
@@ -243,6 +253,10 @@ final class NodusConformanceInventory {
       ),
     );
     final findings = <ConformanceFinding>[];
+    final lockFile = File(path.join(root.path, 'nodus.lock'));
+    final sourceBoundaries = lockFile.existsSync()
+        ? NodusLock.decode(lockFile.readAsStringSync()).sourceBoundaries
+        : const <NodusSourceBoundary>[];
     final files = _sourceFiles();
     for (final file in files) {
       final source = file.readAsStringSync();
@@ -262,6 +276,7 @@ final class NodusConformanceInventory {
         _ConformanceVisitor(
           metadata: metadata,
           context: context,
+          sourceBoundaries: sourceBoundaries,
           addFinding: findings.add,
         ),
       );
@@ -427,6 +442,7 @@ final class _ConformanceVisitor extends RecursiveAstVisitor<void> {
   _ConformanceVisitor({
     required this.metadata,
     required this.context,
+    required this.sourceBoundaries,
     required void Function(ConformanceFinding finding) addFinding,
   }) : _addFinding = addFinding,
        _entitiesByName = metadata.byName,
@@ -438,6 +454,7 @@ final class _ConformanceVisitor extends RecursiveAstVisitor<void> {
 
   final _GraphMetadata metadata;
   final _SourceContext context;
+  final List<NodusSourceBoundary> sourceBoundaries;
   final void Function(ConformanceFinding finding) _addFinding;
   final Map<String, _EntityMetadata> _entitiesByName;
   final Map<String, _EntityMetadata> _entitiesByListName;
@@ -448,6 +465,43 @@ final class _ConformanceVisitor extends RecursiveAstVisitor<void> {
   String? _currentExtensionType;
   Map<String, Set<_EntityMetadata>> _localBindings = const {};
   Map<String, Set<_EntityMetadata>> _localBoundedBindings = const {};
+
+  @override
+  void visitImportDirective(ImportDirective node) {
+    final imported = node.uri.stringValue;
+    if (imported != null) {
+      final sourceSegments = path.split(context.relativePath).toSet();
+      for (final boundary in sourceBoundaries) {
+        if (!boundary.sourceDirectories.any(sourceSegments.contains) ||
+            !_violatesSourceBoundary(imported, boundary)) {
+          continue;
+        }
+        _finding(
+          'source-boundary',
+          node,
+          replacement:
+              '`${boundary.name}` sources cannot import `$imported`; move '
+              'the dependency outside the boundary or depend on an inward '
+              'port.',
+        );
+      }
+    }
+    super.visitImportDirective(node);
+  }
+
+  bool _violatesSourceBoundary(String imported, NodusSourceBoundary boundary) {
+    final uri = Uri.tryParse(imported);
+    if (uri == null) return false;
+    final importedSegments = uri.pathSegments.toSet();
+    if (boundary.forbiddenDirectories.any(importedSegments.contains)) {
+      return true;
+    }
+    if (uri.scheme != 'package' || uri.pathSegments.isEmpty) return false;
+    final packageName = uri.pathSegments.first;
+    return boundary.forbiddenPackages.any(
+      (prefix) => packageName == prefix || packageName.startsWith(prefix),
+    );
+  }
 
   @override
   void visitClassDeclaration(ClassDeclaration node) {

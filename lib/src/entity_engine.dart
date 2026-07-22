@@ -2301,6 +2301,20 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     return '($membership or ${field.columnName} is null)';
   }
 
+  String _textContainsSql(
+    String fieldName,
+    String expected,
+    List<Variable> variables, {
+    required bool caseSensitive,
+  }) {
+    final field = _field(fieldName);
+    variables.add(Variable.withString(expected));
+    if (caseSensitive) {
+      return 'instr(${field.columnName}, ?) > 0';
+    }
+    return 'instr(lower(${field.columnName}), lower(?)) > 0';
+  }
+
   String _orderSql(EntityOrder<E>? order) {
     if (order == null) return '${EntityConventions.idColumnName} asc';
     final field = _field(order.fieldName);
@@ -5986,6 +6000,18 @@ final class _EntityPredicateSqlWriter<
         expected.map(field.encode).toList(growable: false),
         variables,
       );
+
+  @override
+  String visitText<V>(
+    EntityField<E, V> field,
+    String expected, {
+    required bool caseSensitive,
+  }) => engine._textContainsSql(
+    field.name,
+    expected,
+    variables,
+    caseSensitive: caseSensitive,
+  );
 
   @override
   String visitLogical(
