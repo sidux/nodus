@@ -360,6 +360,9 @@ extension TasksExampleEntityGraphBuildContext on BuildContext {
   AccountEntityGraphSession<TasksExampleEntityGraph, Account>
   get tasksExampleEntityGraphSession =>
       AccountEntityGraphScope.sessionOf<TasksExampleEntityGraph, Account>(this);
+  Future<R> withReadyTasksExampleEntityGraph<R>(
+    FutureOr<R> Function(TasksExampleEntityGraph entityGraph) action,
+  ) => tasksExampleEntityGraphSession.withReadyGraph(action);
 }
 
 final class TaskList extends EntityList<Task> {

@@ -430,19 +430,139 @@ GoRouter createFileRouter({
             redirect: (context, state) =>
                 _resolveFileRouteRedirect(route2.rootRedirect()),
           ),
-          GoRoute(path: '/activity', builder: _buildFileRoute1),
-          GoRoute(path: '/projects', builder: _buildFileRoute2),
-          GoRoute(path: '/sync', builder: _buildFileRoute3),
-          GoRoute(path: '/projects/new', builder: _buildFileRoute5),
-          GoRoute(path: '/projects/:projectId', builder: _buildFileRoute7),
+          GoRoute(
+            path: '/activity',
+            builder: configuration.defaultPageBuilder == null
+                ? _buildFileRoute1
+                : null,
+            pageBuilder: configuration.defaultPageBuilder == null
+                ? null
+                : (context, state) => configuration.defaultPageBuilder!(
+                    context,
+                    state,
+                    _buildFileRoute1(context, state),
+                  ),
+          ),
+          GoRoute(
+            path: '/projects',
+            builder: configuration.defaultPageBuilder == null
+                ? _buildFileRoute2
+                : null,
+            pageBuilder: configuration.defaultPageBuilder == null
+                ? null
+                : (context, state) => configuration.defaultPageBuilder!(
+                    context,
+                    state,
+                    _buildFileRoute2(context, state),
+                  ),
+          ),
+          GoRoute(
+            path: '/sync',
+            builder: configuration.defaultPageBuilder == null
+                ? _buildFileRoute3
+                : null,
+            pageBuilder: configuration.defaultPageBuilder == null
+                ? null
+                : (context, state) => configuration.defaultPageBuilder!(
+                    context,
+                    state,
+                    _buildFileRoute3(context, state),
+                  ),
+          ),
+          GoRoute(
+            path: '/projects/new',
+            builder: configuration.defaultPageBuilder == null
+                ? _buildFileRoute5
+                : null,
+            pageBuilder: configuration.defaultPageBuilder == null
+                ? null
+                : (context, state) => configuration.defaultPageBuilder!(
+                    context,
+                    state,
+                    _buildFileRoute5(context, state),
+                  ),
+          ),
+          GoRoute(
+            path: '/projects/:projectId',
+            builder: configuration.defaultPageBuilder == null
+                ? _buildFileRoute7
+                : null,
+            pageBuilder: configuration.defaultPageBuilder == null
+                ? null
+                : (context, state) => configuration.defaultPageBuilder!(
+                    context,
+                    state,
+                    _buildFileRoute7(context, state),
+                  ),
+          ),
           ShellRoute(
             builder: _buildFileRouteLayout1,
             routes: [
-              GoRoute(path: '/tasks', builder: _buildFileRoute4),
-              GoRoute(path: '/tasks/new', builder: _buildFileRoute6),
-              GoRoute(path: '/tasks/:taskId', builder: _buildFileRoute8),
-              GoRoute(path: '/tasks/:taskId/access', builder: _buildFileRoute9),
-              GoRoute(path: '/tasks/:taskId/edit', builder: _buildFileRoute10),
+              GoRoute(
+                path: '/tasks',
+                builder: configuration.defaultPageBuilder == null
+                    ? _buildFileRoute4
+                    : null,
+                pageBuilder: configuration.defaultPageBuilder == null
+                    ? null
+                    : (context, state) => configuration.defaultPageBuilder!(
+                        context,
+                        state,
+                        _buildFileRoute4(context, state),
+                      ),
+              ),
+              GoRoute(
+                path: '/tasks/new',
+                builder: configuration.defaultPageBuilder == null
+                    ? _buildFileRoute6
+                    : null,
+                pageBuilder: configuration.defaultPageBuilder == null
+                    ? null
+                    : (context, state) => configuration.defaultPageBuilder!(
+                        context,
+                        state,
+                        _buildFileRoute6(context, state),
+                      ),
+              ),
+              GoRoute(
+                path: '/tasks/:taskId',
+                builder: configuration.defaultPageBuilder == null
+                    ? _buildFileRoute8
+                    : null,
+                pageBuilder: configuration.defaultPageBuilder == null
+                    ? null
+                    : (context, state) => configuration.defaultPageBuilder!(
+                        context,
+                        state,
+                        _buildFileRoute8(context, state),
+                      ),
+              ),
+              GoRoute(
+                path: '/tasks/:taskId/access',
+                builder: configuration.defaultPageBuilder == null
+                    ? _buildFileRoute9
+                    : null,
+                pageBuilder: configuration.defaultPageBuilder == null
+                    ? null
+                    : (context, state) => configuration.defaultPageBuilder!(
+                        context,
+                        state,
+                        _buildFileRoute9(context, state),
+                      ),
+              ),
+              GoRoute(
+                path: '/tasks/:taskId/edit',
+                builder: configuration.defaultPageBuilder == null
+                    ? _buildFileRoute10
+                    : null,
+                pageBuilder: configuration.defaultPageBuilder == null
+                    ? null
+                    : (context, state) => configuration.defaultPageBuilder!(
+                        context,
+                        state,
+                        _buildFileRoute10(context, state),
+                      ),
+              ),
             ],
           ),
         ],
