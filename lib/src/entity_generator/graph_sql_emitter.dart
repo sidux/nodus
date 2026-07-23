@@ -330,6 +330,7 @@ String _emitRelationshipAccessSql(EntityGraphSpec graph) {
         operation: operation,
         entityId: 'p_id',
         userExpression: 'auth.uid()',
+        aliasPrefix: 'access',
       );
       sections.add(
         '''-- Relationship-derived ${operation.name} access for ${target.className}.
@@ -811,6 +812,7 @@ String _relationshipAccessByUserExpression(
   required RlsOperation operation,
   required String entityId,
   required String userExpression,
+  required String aliasPrefix,
 }) {
   final paths = <String>[];
   var index = 0;
@@ -821,7 +823,7 @@ String _relationshipAccessByUserExpression(
             !destination.operations.contains(operation)) {
           continue;
         }
-        final alias = 'access_path_${index++}';
+        final alias = _sqlAlias('${aliasPrefix}_path_${index++}');
         final active = _relationshipActivePredicates(
           relationship,
           field,
@@ -1254,6 +1256,9 @@ String _readableByUserExpression(
         operation: RlsOperation.select,
         entityId: '$rowAlias.${entity.idField.columnName}',
         userExpression: userExpression,
+        aliasPrefix: _sqlAlias(
+          '${rowAlias}_${entity.tableName}_relationship_select',
+        ),
       ),
     );
   }
@@ -1291,6 +1296,9 @@ String _principalByUserExpression(
     operation: RlsOperation.select,
     entityId: '$rowAlias.${entity.idField.columnName}',
     userExpression: userExpression,
+    aliasPrefix: _sqlAlias(
+      '${rowAlias}_${entity.tableName}_relationship_select',
+    ),
   ),
   RlsPrincipal.authenticated => '$userExpression is not null',
 };

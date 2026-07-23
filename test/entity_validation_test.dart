@@ -3089,6 +3089,99 @@ abstract class Document implements OwnedBy<Document, Account>, Component {
     },
   );
 
+  test(
+    'composition access keeps nested relationship aliases correlated',
+    () async {
+      final sources =
+          _sources(r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/document.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Habit implements OwnedBy<Habit, Account> {
+  @Composition()
+  abstract final LocalId<Document> documentId;
+}
+''', fileName: 'habit.dart')
+            ..['nodus|lib/account.dart'] = 'final class Account {}'
+            ..['nodus|lib/document.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity()
+abstract class Document implements OwnedBy<Document, Account>, Component {}
+'''
+            ..['nodus|lib/goal.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  collaboration: CollaborationAccess(),
+)
+abstract class Goal implements OwnedBy<Goal, Account> {}
+'''
+            ..['nodus|lib/goal_habit_link.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/goal.dart';
+import 'package:nodus/habit.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class GoalHabitLink implements OwnedBy<GoalHabitLink, Account> {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> goalId;
+
+  @AccessTarget()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Habit> habitId;
+
+  @Persisted(defaultValue: true)
+  abstract final bool active;
+}
+''';
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(
+            allOf([
+              contains(
+                'from public.habits access_path_0 where '
+                'access_path_0.document_id = p_id',
+              ),
+              contains(
+                'from public.goal_habit_links '
+                'access_path_0_habits_relationship_select_path_0 where '
+                'access_path_0_habits_relationship_select_path_0.habit_id = '
+                'access_path_0.id',
+              ),
+              isNot(
+                contains(
+                  'from public.goal_habit_links access_path_0 where '
+                  'access_path_0.habit_id = access_path_0.id',
+                ),
+              ),
+            ]),
+          ),
+        },
+      );
+    },
+  );
+
   test('renames Drift getters that collide with table members', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
