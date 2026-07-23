@@ -2763,14 +2763,24 @@ final class Account {}
   test('infers one package graph from nodus.lock', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account> {}
-
-final class Account {}
 ''';
     final sources = _sources(source, includeGraph: false)
       ..[r'nodus|$package$'] = ''
+      ..['nodus|lib/account.dart'] = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(ownership: Ownership.identity)
+abstract class Account implements OwnedBy<Account, Account> {
+  @Persisted(defaultValue: false)
+  abstract final bool onboardingCompleted;
+  abstract final DateTime createdAt;
+  abstract final DateTime updatedAt;
+}
+'''
       ..['nodus|nodus.lock'] = '''
 {
   "formatVersion": 1,
@@ -2810,7 +2820,12 @@ final class Account {}
           contains('"graph": "Nodus"'),
         ),
         'nodus|test/nodus_test_harness.g.dart': decodedMatches(
-          contains('final class NodusTestHarness'),
+          allOf([
+            contains('final class NodusTestHarness'),
+            contains("entityType: 'Account'"),
+            contains('entityId: resolvedAccountId.value'),
+            contains('await entityGraph.sync();'),
+          ]),
         ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
           contains('create table if not exists public.notes'),

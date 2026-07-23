@@ -46,10 +46,72 @@ final class InMemorySyncBackend
   final Set<String> _revokedIdentities = <String>{};
   final StreamController<void> _remoteChanges = StreamController.broadcast();
   int _sequence = 0;
+  int _seedOperationSequence = 0;
   bool _disposed = false;
 
   @override
   Stream<void> get remoteChangeSignals => _remoteChanges.stream;
+
+  /// Adds one canonical server-owned record for a generated test harness.
+  ///
+  /// The regular push path performs all descriptor decoding, defaulting, and
+  /// constraint validation. Existing records are retained so callers can
+  /// inject a preconfigured backend without the harness overwriting it.
+  Future<void> seedServerRecord({
+    required String entityType,
+    required String entityId,
+    JsonMap fields = const {},
+    DateTime? createdAt,
+  }) async {
+    final descriptor = _descriptorFor(entityType);
+    final records = _recordsFor(entityType);
+    if (records.containsKey(entityId)) return;
+    final binding = definition.syncBindings.singleWhere(
+      (candidate) => candidate.entityType == entityType,
+    );
+    final target =
+        binding.target ??
+        (throw StateError(
+          '$entityType is local-only and cannot be seeded on a server.',
+        ));
+    final operationSuffix = (++_seedOperationSequence).toString().padLeft(
+      12,
+      '0',
+    );
+    final seededAt = (createdAt ?? DateTime.utc(2000)).toUtc();
+    final actionInitialValues = switch (descriptor) {
+      ActionPolicyProvider(:final actionPolicy) =>
+        actionPolicy.fixedInitialValues,
+      _ => const <String, Object?>{},
+    };
+    await push(
+      PushSyncWorkItem(
+        target: target,
+        id: _seedOperationSequence,
+        operation: CreatePushOperation(
+          operationId: parseSyncOperationId(
+            '00000000-0000-7000-8000-$operationSuffix',
+          ),
+          identity: descriptor.parseIdentity(entityId),
+          baseServerVersion: ServerVersion.zero,
+          localRevision: 1,
+          protocolVersion: descriptor.protocolVersion,
+          patch: EntityPatch.fromWire({
+            for (final field in descriptor.fields)
+              if (field.hasProtocolDefault) field.name: field.protocolDefault,
+            ...actionInitialValues,
+            ...fields,
+            EntityConventions.idFieldName: entityId,
+          }),
+        ),
+        pushKind: PushSyncWorkKind.statePatch,
+        status: SyncWorkStatus.pending,
+        attemptCount: 0,
+        createdAt: seededAt,
+        nextAttemptAt: null,
+      ),
+    );
+  }
 
   @override
   Future<PushResult> push(PushSyncWorkItem item) async {

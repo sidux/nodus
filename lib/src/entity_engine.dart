@@ -3972,7 +3972,10 @@ final class LocalEntityGraphCoordinator
 
   SyncQueue get syncQueue => SyncQueue(this);
 
-  Future<void> sync() => _performSync();
+  Future<void> sync() async {
+    await schedulePull();
+    await _performSync();
+  }
 
   Future<LocalMutationCommitResult> _recordMutation(
     LocalEntityMutation mutation, {

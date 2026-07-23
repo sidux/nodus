@@ -365,7 +365,7 @@ void main() {
       );
       await source.close();
 
-      final replica = await openGraph(backend: backend, autoSync: true);
+      final replica = await openGraph(backend: backend);
       addTearDown(replica.close);
       await replica.sync();
 

@@ -929,6 +929,38 @@ void main() {
     },
   );
 
+  test('in-memory server seeding applies descriptor defaults once', () async {
+    const entityId = 'a0000000-0000-7000-8000-000000000019';
+    final descriptor = TestDescriptor<_Item>(
+      actionPolicy: const ActionPolicy(
+        actions: [],
+        fixedInitialValues: {'isActive': true},
+      ),
+    );
+    final backend = InMemorySyncBackend(descriptor: descriptor);
+    addTearDown(backend.disposeRemoteChangeSignals);
+
+    await backend.seedServerRecord(
+      entityType: descriptor.entityType,
+      entityId: entityId,
+      createdAt: DateTime.utc(2026, 7, 23),
+    );
+    await backend.seedServerRecord(
+      entityType: descriptor.entityType,
+      entityId: entityId,
+      fields: const {'isActive': false},
+    );
+
+    expect(backend.record(entityId), {
+      'id': entityId,
+      'isActive': true,
+      'serverVersion': 1,
+    });
+    final pull = await backend.pull(afterSequence: ServerSequence.zero);
+    expect(pull.changes, hasLength(1));
+    expect(pull.changes.single.identity.rawId, entityId);
+  });
+
   test(
     'ordered creates resolve stale first and last intent on the server',
     () async {

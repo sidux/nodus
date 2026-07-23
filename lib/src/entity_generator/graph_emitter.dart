@@ -438,6 +438,25 @@ String emitEntityGraphTestHarness(EntityGraphSpec graph) {
       )
       ..writeln('        );');
   }
+  final identityBindings = graph.syncBindings
+      .where(
+        (binding) =>
+            binding.entity.ownership == Ownership.identity &&
+            (binding.mode == SyncMode.replicated ||
+                binding.mode == SyncMode.imported),
+      )
+      .toList(growable: false);
+  for (final binding in identityBindings) {
+    final targetName = lowerCamelCase(binding.target!.wireName);
+    buffer
+      ..writeln(
+        '    await resolved${_upperCamel(targetName)}.seedServerRecord(',
+      )
+      ..writeln("      entityType: '${binding.entity.className}',")
+      ..writeln('      entityId: resolvedAccountId.value,')
+      ..writeln('      createdAt: resolvedClock.nowUtc(),')
+      ..writeln('    );');
+  }
   buffer
     ..writeln('    final entityGraph = await $graphName.openInMemory(')
     ..writeln('      accountId: resolvedAccountId,')
@@ -451,6 +470,7 @@ String emitEntityGraphTestHarness(EntityGraphSpec graph) {
   }
   buffer
     ..writeln('    );')
+    ..writeln('    await entityGraph.sync();')
     ..writeln('    return $harnessName._(')
     ..writeln('      entityGraph: entityGraph,')
     ..writeln('      clock: resolvedClock,');
