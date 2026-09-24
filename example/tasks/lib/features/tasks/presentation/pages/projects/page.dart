@@ -12,7 +12,6 @@ final class TaskProjectsPage extends HookWidget {
   Widget build(BuildContext context) {
     final projects = useObservedEntityList(
       () => TaskProjectList.all(entityGraph),
-      keys: [entityGraph],
       loadAllPages: true,
     );
     return Scaffold(

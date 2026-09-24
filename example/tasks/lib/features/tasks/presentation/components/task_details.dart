@@ -49,11 +49,9 @@ final class TaskDetailsPane extends HookWidget {
   Widget build(BuildContext context) {
     final lookup = useObservedEntityLookup(
       () => entityGraph.tasks.lookup(taskId),
-      keys: [entityGraph, taskId],
     );
     final activity = useObservedEntityList(
       () => TaskActivityList.forTask(entityGraph, taskId, pageSize: 5),
-      keys: [entityGraph, taskId],
     );
 
     return lookup.when(

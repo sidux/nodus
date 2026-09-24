@@ -730,7 +730,9 @@ void _emitGraphBulkActions(
 }) {
   void emit(String methodName, String invocation) {
     buffer
-      ..writeln('  Future<EntityBulkMutationResult> $methodName() =>')
+      ..writeln(
+        '  Future<EntityBulkMutationResult<${entity.className}>> $methodName() =>',
+      )
       ..writeln('      runGeneratedBulkAction(')
       ..writeln('        (entity) async {')
       ..writeln(
@@ -741,6 +743,7 @@ void _emitGraphBulkActions(
         '          return entity.generatedAccess.generatedLocalRevision != before;',
       )
       ..writeln('        },')
+      ..writeln('        idOf: (entity) => entity.id,')
       ..writeln('        runTransaction: _entityGraph.transaction,')
       ..writeln('      );')
       ..writeln();
@@ -768,17 +771,19 @@ void _emitGraphBulkActions(
       if (named.isNotEmpty)
         '{${named.map((parameter) => 'required ${parameter.dartType} ${parameter.name}').join(', ')}}',
     ];
-    final arguments = <String>[
-      ...positional.map((parameter) => parameter.name),
-      ...named.map((parameter) => '${parameter.name}: ${parameter.name}'),
-    ].join(', ');
+    final arguments = action.forwardedArguments;
     buffer
       ..writeln(
-        '  Future<EntityBulkMutationResult> ${action.methodName}All('
+        '  Future<EntityBulkMutationResult<${entity.className}>> '
+        '${action.methodName}All('
         '${parameterParts.join(', ')}) =>',
       )
       ..writeln('      runGeneratedBulkAction(')
       ..writeln('        (entity) async {')
+      ..write(switch (action.guardCall('entity.')) {
+        final guard? => '          if (!$guard) return false;\n',
+        null => '',
+      })
       ..writeln(
         '          final before = entity.generatedAccess.generatedLocalRevision;',
       )
@@ -787,6 +792,7 @@ void _emitGraphBulkActions(
         '          return entity.generatedAccess.generatedLocalRevision != before;',
       )
       ..writeln('        },')
+      ..writeln('        idOf: (entity) => entity.id,')
       ..writeln('        runTransaction: _entityGraph.transaction,')
       ..writeln('      );')
       ..writeln();
@@ -2619,12 +2625,14 @@ void _emitEntityGraphRuntime(
     ..writeln('      diagnostics: diagnostics,')
     ..writeln('    );')
     ..writeln('    try {');
+  // Engines initialize concurrently so their reads pipeline through one
+  // database connection instead of waiting on each other.
   for (final entity in graph.entities) {
     final lower = _lowerCamel(entity.className);
     buffer
       ..writeln(
-        '      final ${lower}Engine = '
-        'await LocalEntityEngine.openInGraph(',
+        '      final ${lower}EngineOpening = '
+        'LocalEntityEngine.openInGraph(',
       )
       ..writeln(
         '        descriptor: '
@@ -2639,6 +2647,15 @@ void _emitEntityGraphRuntime(
       ..writeln('        graphCoordinator: coordinator,')
       ..writeln('      );');
   }
+  buffer.writeln('      await Future.wait<Object>([');
+  for (final entity in graph.entities) {
+    buffer.writeln('        ${_lowerCamel(entity.className)}EngineOpening,');
+  }
+  buffer.writeln('      ]);');
+  for (final entity in graph.entities) {
+    final lower = _lowerCamel(entity.className);
+    buffer.writeln('      final ${lower}Engine = await ${lower}EngineOpening;');
+  }
   buffer
     ..writeln('      await coordinator.start();')
     ..write('      return $entityGraphName._(accountId, coordinator');
@@ -2648,7 +2665,8 @@ void _emitEntityGraphRuntime(
   buffer
     ..writeln(');')
     ..writeln('    } catch (_) {')
-    ..writeln('      await coordinator.close();')
+    ..writeln('      // Cleanup is best effort; the open failure is the error.')
+    ..writeln('      await coordinator.close().catchError((_) {});')
     ..writeln('      rethrow;')
     ..writeln('    }')
     ..writeln('  }')
@@ -2772,13 +2790,39 @@ void _emitEntityGraphRuntime(
       }
       buffer.writeln('.map<Object?>((change) => change),');
     }
+    buffer.writeln('      ],');
+    if (binding.kind == DurableWorkBindingKind.process) {
+      final sourceName = binding.sources.single.entityClassName;
+      final source = graph.entities.singleWhere(
+        (entity) => entity.className == sourceName,
+      );
+      buffer
+        ..writeln('      run: (context) => switch (context.entityIds) {')
+        ..writeln('        null => ${sourceName}List.all(this),')
+        ..writeln('        final ids => ${sourceName}List.all(')
+        ..writeln('          this,')
+        ..writeln(
+          '          where: ${sourceName}Fields.id.isIn(ids.map(LocalId.new)),',
+        )
+        ..writeln('          tombstones: TombstoneVisibility.include,')
+        ..write(
+          source.hasArchivableCapability
+              ? '          archives: ArchiveVisibility.include,\n'
+              : '',
+        )
+        ..write(
+          source.activeField != null
+              ? '          inactive: InactiveVisibility.include,\n'
+              : '',
+        )
+        ..writeln('        ),')
+        ..writeln(
+          '      }.runGeneratedProcess((source) => run(source, context)),',
+        );
+    } else {
+      buffer.writeln('      run: run,');
+    }
     buffer
-      ..writeln('      ],')
-      ..writeln(
-        binding.kind == DurableWorkBindingKind.process
-            ? '      run: (context) => ${binding.sources.single.entityClassName}List.all(this).runGeneratedProcess((source) => run(source, context)),'
-            : '      run: run,',
-      )
       ..writeln('    ));')
       ..writeln('  }');
     if (binding.kind == DurableWorkBindingKind.projection) {

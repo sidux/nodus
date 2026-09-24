@@ -75,6 +75,42 @@ void main() {
   );
 
   testWidgets(
+    'Given a keyless list hook, When the selection changes, Then only then it re-acquires',
+    (tester) async {
+      final source = ObservableList<int>.of([1, 2, 3]);
+      final cache = LocalEntityQueryCache<int>(
+        source: ReadOnlyObservableList(source),
+      );
+      addTearDown(cache.dispose);
+      var pageSize = 2;
+      _IntList? captured;
+      Widget build() => HookBuilder(
+        builder: (_) {
+          captured = useEntityList(
+            () => _IntList(cache.acquire(EntityQuerySpec(pageSize: pageSize))),
+          );
+          return const SizedBox();
+        },
+      );
+
+      await tester.pumpWidget(build());
+      final first = captured!;
+      await tester.pumpWidget(build());
+      expect(captured, same(first));
+      expect(first.state.value, isNot(isA<EntityQueryDisposed<int>>()));
+
+      pageSize = 3;
+      await tester.pumpWidget(build());
+      expect(captured, isNot(same(first)));
+      expect(captured!.spec.pageSize, 3);
+      expect(first.state.value, isA<EntityQueryDisposed<int>>());
+
+      await tester.pumpWidget(const SizedBox());
+      expect(captured!.state.value, isA<EntityQueryDisposed<int>>());
+    },
+  );
+
+  testWidgets(
     'Given a query hook, When its widget unmounts, Then its lease is disposed',
     (tester) async {
       final source = ObservableList<int>.of([1]);
@@ -206,6 +242,34 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Given a value hook without keys, When its closure selects another source, Then it follows the new source',
+    (tester) async {
+      final first = Observable<int?>(1);
+      final second = Observable<int?>(10);
+
+      Widget build(Observable<int?> source) => Directionality(
+        textDirection: TextDirection.ltr,
+        child: HookBuilder(
+          builder: (_) {
+            final value = useObservedEntityValue<int>(() => source.value);
+            return Text('value: $value');
+          },
+        ),
+      );
+
+      await tester.pumpWidget(build(first));
+      expect(find.text('value: 1'), findsOneWidget);
+
+      await tester.pumpWidget(build(second));
+      expect(find.text('value: 10'), findsOneWidget);
+
+      runInAction(() => second.value = 11);
+      await tester.pump();
+      expect(find.text('value: 11'), findsOneWidget);
+    },
+  );
+
   testWidgets('observed existence exposes a boolean without list mechanics', (
     tester,
   ) async {
@@ -263,6 +327,82 @@ void main() {
     await tester.pump();
 
     expect(captured!.error, isNull);
+  });
+
+  testWidgets('entity action tolerates a widget unmounted by its action', (
+    tester,
+  ) async {
+    EntityActionBinding? captured;
+    Object? reported;
+
+    await tester.pumpWidget(
+      HookBuilder(
+        builder: (_) {
+          captured = useEntityAction(onError: (error) => reported = error);
+          return const SizedBox();
+        },
+      ),
+    );
+
+    await captured!.run(() async {
+      await tester.pumpWidget(const SizedBox());
+      throw StateError('failed after navigation');
+    });
+
+    expect(reported, isA<StateError>());
+  });
+
+  testWidgets('draft text fields follow their draft and write only edits', (
+    tester,
+  ) async {
+    TextEditingController? controller;
+    var field = EntityDraftField<String>.unset();
+
+    Widget build() => Directionality(
+      textDirection: TextDirection.ltr,
+      child: HookBuilder(
+        builder: (_) {
+          controller = useEntityDraftTextField(
+            field,
+            normalize: (v) => v.trim(),
+          );
+          return const SizedBox();
+        },
+      ),
+    );
+
+    await tester.pumpWidget(build());
+    expect(field.isSet, isFalse);
+
+    controller!.text = ' Ship ';
+    expect(field.value, 'Ship');
+
+    field = EntityDraftField<String>.value('Next draft');
+    await tester.pumpWidget(build());
+    expect(controller!.text, 'Next draft');
+    expect(field.value, 'Next draft');
+  });
+
+  testWidgets('draft value bindings expose an unset field as null', (
+    tester,
+  ) async {
+    final field = EntityDraftField<int>.unset();
+    EntityDraftValueBinding<int>? captured;
+
+    await tester.pumpWidget(
+      HookBuilder(
+        builder: (_) {
+          captured = useEntityDraftValue(field);
+          return const SizedBox();
+        },
+      ),
+    );
+    expect(captured!.value, isNull);
+
+    captured!.set(3);
+    await tester.pump();
+    expect(captured!.value, 3);
+    expect(field.value, 3);
   });
 
   testWidgets('async draft hooks expose readiness and discard on unmount', (

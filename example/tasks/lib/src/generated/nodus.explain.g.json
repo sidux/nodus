@@ -286,6 +286,7 @@
         {
           "name": "reopen",
           "bulk": false,
+          "guard": "isCompleted",
           "parameters": [],
           "fields": [
             "status",

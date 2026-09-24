@@ -69,7 +69,7 @@ const _defaultTestFields = [
     kind: EntityFieldKind.uuid,
     nullable: false,
     mutable: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
   ),
   EntityFieldDescriptor(
     name: 'isActive',
@@ -77,7 +77,7 @@ const _defaultTestFields = [
     kind: EntityFieldKind.boolean,
     nullable: false,
     mutable: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
   ),
   EntityFieldDescriptor(
     name: 'serverVersion',
@@ -85,6 +85,6 @@ const _defaultTestFields = [
     kind: EntityFieldKind.integer,
     nullable: false,
     mutable: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
   ),
 ];

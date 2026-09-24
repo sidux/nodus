@@ -35,7 +35,6 @@ final class TaskListPane extends HookWidget {
     final tasks = useObservedEntityList(
       () =>
           TaskList.all(entityGraph, where: filterPredicate, archives: archives),
-      keys: [entityGraph, filter],
     );
     final scrollController = useEntityQueryScrollController(tasks.query);
 

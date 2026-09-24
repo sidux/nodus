@@ -191,6 +191,10 @@ Future<EntitySpec?> parseEntityAsset(
     annotation.read('authenticatedReadSync'),
     AuthenticatedReadSync.values,
   );
+  final entityConflict = _readEnum(
+    annotation.read('conflict'),
+    ConflictStrategy.values,
+  );
   final syncReader = annotation.peek('sync');
   final syncMode = syncReader == null || syncReader.isNull
       ? null
@@ -341,7 +345,9 @@ Future<EntitySpec?> parseEntityAsset(
 
   if (hasArchivableCapability) {
     final repeatedField = classElement.fields
-        .where((field) => field.name == 'archivedAt')
+        .where(
+          (field) => field.name == 'archivedAt' || field.name == 'isArchived',
+        )
         .firstOrNull;
     final repeatedAction = classElement.methods
         .where(
@@ -350,7 +356,8 @@ Future<EntitySpec?> parseEntityAsset(
         .firstOrNull;
     if (repeatedField != null || repeatedAction != null) {
       throw InvalidGenerationSourceError(
-        'Archivable supplies `archivedAt`, `archive`, and `unarchive`; '
+        'Archivable supplies `archivedAt`, `isArchived`, `archive`, and '
+        '`unarchive`; '
         'remove the repeated lifecycle declaration.',
         element: repeatedField ?? repeatedAction ?? classElement,
       );
@@ -424,6 +431,7 @@ Future<EntitySpec?> parseEntityAsset(
       final variant = _parsePersistedVariant(
         field,
         classElement,
+        entityConflict: entityConflict,
         ownerType: ownerType,
         ownership: ownership,
         ownerSetAccessor: setAccessor ?? lowerCamelCase(tableName),
@@ -570,7 +578,7 @@ Future<EntitySpec?> parseEntityAsset(
       );
     }
     final sqlType = enumElement == null
-        ? scalarValue?.sqlType ?? _inferSqlType(dartType)
+        ? scalarValue?.sqlType ?? _inferSqlType(dartType, field)
         : SqlType.text;
 
     final columnName = persisted?.peek('column')?.isNull ?? true
@@ -623,9 +631,7 @@ Future<EntitySpec?> parseEntityAsset(
         nullable: nullable,
         isFinal: field.isFinal,
         defaultValue: defaultValue,
-        conflict: persisted == null
-            ? ConflictStrategy.serverWins
-            : _readEnum(persisted.read('conflict'), ConflictStrategy.values),
+        conflict: _fieldConflict(field, persisted, entityConflict),
         authority: persisted == null
             ? FieldAuthority.client
             : _readEnum(persisted.read('authority'), FieldAuthority.values),
@@ -1219,6 +1225,7 @@ Future<EntitySpec?> parseEntityAsset(
     hasOrderedCapability: hasOrderedCapability,
     hasSoftDeletableCapability: isDeletable,
     hasArchivableCapability: hasArchivableCapability,
+    hasWorkflowMembershipCapability: workflowMembershipType != null,
     hasActivityTrackedCapability: hasActivityTrackedCapability,
     activitySubjectClassName: activitySubjectClassName,
     activityActorClassName: activityActorClassName,
@@ -1253,6 +1260,28 @@ Future<EntitySpec?> parseEntityAsset(
       'action.',
       element: classElement,
     );
+  }
+  final indexNames = <String>{};
+  for (final index in spec.indexes) {
+    final name = spec.indexName(index);
+    if (!indexNames.add(name)) {
+      throw InvalidGenerationSourceError(
+        'Two indexes on `${spec.tableName}` resolve to the storage name '
+        '`$name`. Reorder or rename the indexed fields so each index is '
+        'distinct.',
+        element: classElement,
+      );
+    }
+  }
+  for (final field in fields.where((field) => field.isEnum)) {
+    final wireValues = field.enumWireValues;
+    if (wireValues.toSet().length != wireValues.length) {
+      throw InvalidGenerationSourceError(
+        '`${field.name}` has enum values that share one stored value: '
+        '${field.enumValues.join(', ')} map to ${wireValues.join(', ')}.',
+        element: classElement.getField(field.name) ?? classElement,
+      );
+    }
   }
   return spec;
 }
@@ -2405,6 +2434,7 @@ Object _indexConditionValue(
 PersistedVariantSpec _parsePersistedVariant(
   FieldElement field,
   ClassElement entityElement, {
+  required ConflictStrategy entityConflict,
   required DartType ownerType,
   required Ownership ownership,
   required String ownerSetAccessor,
@@ -2564,6 +2594,7 @@ PersistedVariantSpec _parsePersistedVariant(
           component,
           entityElement,
           variantName: field.name!,
+          entityConflict: entityConflict,
           variantNullable:
               declaredType.nullabilitySuffix == NullabilitySuffix.question,
           ownerType: ownerType,
@@ -2617,6 +2648,7 @@ FieldSpec _parsePersistedVariantComponent(
   FieldElement field,
   ClassElement entityElement, {
   required String variantName,
+  required ConflictStrategy entityConflict,
   required bool variantNullable,
   required DartType ownerType,
   required Ownership ownership,
@@ -2733,7 +2765,7 @@ FieldSpec _parsePersistedVariantComponent(
       ? componentDartType
       : '$componentDartType?';
   final sqlType = enumElement == null
-      ? scalarValue?.sqlType ?? _inferSqlType(componentDartType)
+      ? scalarValue?.sqlType ?? _inferSqlType(componentDartType, field)
       : SqlType.text;
   final columnName = persisted?.peek('column')?.isNull ?? true
       ? snakeCase(field.name!)
@@ -2761,9 +2793,7 @@ FieldSpec _parsePersistedVariantComponent(
     nullable: true,
     isFinal: true,
     defaultValue: null,
-    conflict: persisted == null
-        ? ConflictStrategy.serverWins
-        : _readEnum(persisted.read('conflict'), ConflictStrategy.values),
+    conflict: _fieldConflict(field, persisted, entityConflict),
     authority: persisted == null
         ? FieldAuthority.client
         : _readEnum(persisted.read('authority'), FieldAuthority.values),
@@ -3106,7 +3136,15 @@ Future<List<EntitySpec>> _discoverGraphEntities(BuildStep buildStep) async {
       continue;
     }
     final entity = await parseEntityAsset(buildStep, asset);
-    if (entity != null) entities.add(entity);
+    if (entity == null) continue;
+    if (!asset.pathSegments.contains('domain')) {
+      log.warning(
+        '@Entity `${entity.className}` in `${asset.path}` is outside a '
+        '`domain/` directory, where its entity library is not generated. '
+        'Move it under `lib/**/domain/`.',
+      );
+    }
+    entities.add(entity);
   }
   entities.sort((left, right) => left.inputImport.compareTo(right.inputImport));
   return List.unmodifiable(entities);
@@ -3320,17 +3358,6 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
     }
   }
   for (final entity in entities) {
-    final listName = '${entity.className}List';
-    if (classNames.contains(listName)) {
-      throw InvalidGenerationSourceError(
-        'Generated collection type `$listName` conflicts with an entity class '
-        'in the graph. Rename the conflicting entity so every inferred '
-        'collection has an unambiguous Dart type.',
-        element: element,
-      );
-    }
-  }
-  for (final entity in entities) {
     final collaboration = entity.security.collaboration;
     if (collaboration?.isDirect == true &&
         !tableNames.add(collaboration!.membershipTable)) {
@@ -3403,20 +3430,38 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
     }
   }
   final inverseNamesByTarget = <String, Set<String>>{};
+  List<String> generatedTypeNames(EntitySpec entity) => [
+    for (final suffix in const [
+      'Rows',
+      'Descriptor',
+      'Record',
+      'Fields',
+      'Set',
+      'List',
+      'Lookup',
+      'EditDraft',
+      'MutationDraft',
+      'AggregateDraft',
+      'Relationship',
+      'Collaborators',
+    ])
+      '${entity.className}$suffix',
+  ];
+  final entityClassNames = {for (final entity in entities) entity.className};
+  for (final entity in entities) {
+    for (final typeName in generatedTypeNames(entity)) {
+      if (entityClassNames.contains(typeName)) {
+        throw InvalidGenerationSourceError(
+          'Entity `$typeName` collides with the type generated for '
+          '`${entity.className}`. Rename one of the two entities.',
+          element: element,
+        );
+      }
+    }
+  }
   final reservedGeneratedTypeNames = <String>{
-    for (final entity in entities) ...[
-      entity.className,
-      '${entity.className}Rows',
-      '${entity.className}Descriptor',
-      '${entity.className}Record',
-      '${entity.className}Fields',
-      '${entity.className}Set',
-      '${entity.className}List',
-      '${entity.className}Lookup',
-      '${entity.className}EditDraft',
-      '${entity.className}Relationship',
-      '${entity.className}Collaborators',
-    ],
+    ...entityClassNames,
+    for (final entity in entities) ...generatedTypeNames(entity),
   };
   final inverseCreationTypes = <String, String>{};
   final composedTargets = <String>{};
@@ -4274,10 +4319,63 @@ List<ActionSpec> _parseActions(
         parameters: List.unmodifiable(parameters),
         assignments: List.unmodifiable(assignments),
         bulk: annotation.read('bulk').boolValue,
+        guard: _parseActionGuard(annotation, classElement, method),
       ),
     );
   }
   return List.unmodifiable(actions);
+}
+
+ActionGuardSpec? _parseActionGuard(
+  ConstantReader annotation,
+  ClassElement classElement,
+  MethodElement action,
+) {
+  final reader = annotation.peek('guard');
+  if (reader == null || reader.isNull) return null;
+  final name = reader.objectValue.toSymbolValue()!;
+  Never reject(String problem) => throw InvalidGenerationSourceError(
+    'Action `${action.name}` guard `$name` $problem',
+    element: action,
+  );
+  final getter = classElement.getGetter(name);
+  if (getter != null) {
+    if (getter.isStatic || getter.isAbstract) {
+      reject('must be a concrete instance getter or method.');
+    }
+    if (!getter.returnType.isDartCoreBool) reject('must return bool.');
+    return ActionGuardSpec(
+      name: name,
+      isGetter: true,
+      forwardsParameters: false,
+    );
+  }
+  final method = classElement.methods
+      .where((candidate) => candidate.name == name)
+      .firstOrNull;
+  if (method == null) reject('is not declared on `${classElement.name}`.');
+  if (method.isStatic || method.isAbstract) {
+    reject('must be a concrete instance getter or method.');
+  }
+  if (!method.returnType.isDartCoreBool) reject('must return bool.');
+  final guardParameters = method.formalParameters;
+  if (guardParameters.isEmpty) {
+    return ActionGuardSpec(
+      name: name,
+      isGetter: false,
+      forwardsParameters: false,
+    );
+  }
+  String signature(FormalParameterElement parameter) =>
+      '${parameter.isNamed ? 'named' : 'positional'} '
+      '${parameter.type.getDisplayString()} ${parameter.name}';
+  final expected = action.formalParameters.map(signature).toList();
+  final actual = guardParameters.map(signature).toList();
+  if (expected.length != actual.length ||
+      Iterable.generate(expected.length).any((i) => expected[i] != actual[i])) {
+    reject('must take no parameters or exactly the action parameters.');
+  }
+  return ActionGuardSpec(name: name, isGetter: false, forwardsParameters: true);
 }
 
 void _validateActionTarget(
@@ -4683,12 +4781,18 @@ void _validateEntity(
       element: element,
     );
   }
-  final columnNames = fields.map((field) => field.columnName).toList();
-  if (columnNames.toSet().length != columnNames.length) {
-    throw InvalidGenerationSourceError(
-      'Persisted SQL column names must be unique within an entity.',
-      element: element,
-    );
+  final fieldsByColumn = <String, String>{};
+  for (final field in fields) {
+    final previous = fieldsByColumn[field.columnName];
+    if (previous != null) {
+      throw InvalidGenerationSourceError(
+        '`$previous` and `${field.name}` both persist to column '
+        '`${field.columnName}`. Rename one field or set '
+        '`@Persisted(column: ...)`.',
+        element: element.getField(field.name) ?? element,
+      );
+    }
+    fieldsByColumn[field.columnName] = field.name;
   }
   for (final field in fields) {
     if (field.isServerManaged) {
@@ -5240,6 +5344,120 @@ void _validateSqlIdentifier(
       element: element,
     );
   }
+  if (_reservedSqlWords.contains(value)) {
+    throw InvalidGenerationSourceError(
+      'The $label identifier `$value` is a reserved SQL word. Rename it, or '
+      'keep the Dart name and set `@Persisted(column: ...)` or '
+      '`@Entity(table: ...)`.',
+      element: element,
+    );
+  }
+}
+
+/// Words PostgreSQL reserves in every position; generated SQL and Drift
+/// constraints use identifiers unquoted.
+const _reservedSqlWords = {
+  'all',
+  'analyse',
+  'analyze',
+  'and',
+  'any',
+  'array',
+  'as',
+  'asc',
+  'asymmetric',
+  'both',
+  'case',
+  'cast',
+  'check',
+  'collate',
+  'column',
+  'constraint',
+  'create',
+  'current_catalog',
+  'current_date',
+  'current_role',
+  'current_time',
+  'current_timestamp',
+  'current_user',
+  'default',
+  'deferrable',
+  'desc',
+  'distinct',
+  'do',
+  'else',
+  'end',
+  'except',
+  'false',
+  'fetch',
+  'for',
+  'foreign',
+  'from',
+  'grant',
+  'group',
+  'having',
+  'in',
+  'initially',
+  'intersect',
+  'into',
+  'lateral',
+  'leading',
+  'limit',
+  'localtime',
+  'localtimestamp',
+  'not',
+  'null',
+  'offset',
+  'on',
+  'only',
+  'or',
+  'order',
+  'placing',
+  'primary',
+  'references',
+  'returning',
+  'select',
+  'session_user',
+  'some',
+  'symmetric',
+  'system_user',
+  'table',
+  'then',
+  'to',
+  'trailing',
+  'true',
+  'union',
+  'unique',
+  'user',
+  'using',
+  'variadic',
+  'when',
+  'where',
+  'window',
+  'with',
+};
+
+/// Resolves a field's merge policy: an explicit override, otherwise the entity
+/// default for client-authored fields. Server-authoritative fields and the
+/// conventional timestamps always keep [ConflictStrategy.serverWins].
+ConflictStrategy _fieldConflict(
+  FieldElement field,
+  ConstantReader? persisted,
+  ConflictStrategy entityConflict,
+) {
+  final configured = persisted?.peek('conflict');
+  if (configured != null && !configured.isNull) {
+    return _readEnum(configured, ConflictStrategy.values);
+  }
+  final authority = persisted == null
+      ? FieldAuthority.client
+      : _readEnum(persisted.read('authority'), FieldAuthority.values);
+  final conventionalTimestamp =
+      field.name == EntityConventions.createdAtFieldName ||
+      field.name == EntityConventions.updatedAtFieldName;
+  return authority == FieldAuthority.server || conventionalTimestamp
+      ? ConflictStrategy.serverWins
+      : entityConflict;
 }
 
 T _readEnum<T extends Enum>(ConstantReader reader, List<T> values) {
@@ -5250,7 +5468,7 @@ T _readEnum<T extends Enum>(ConstantReader reader, List<T> values) {
   );
 }
 
-SqlType _inferSqlType(String dartType) {
+SqlType _inferSqlType(String dartType, FieldElement field) {
   final nonNullable = dartType.replaceAll('?', '');
   if (nonNullable.startsWith('LocalId<')) return SqlType.uuid;
   return switch (nonNullable) {
@@ -5261,9 +5479,10 @@ SqlType _inferSqlType(String dartType) {
     'LocalDate' => SqlType.date,
     'DateTime' => SqlType.timestampWithTimeZone,
     _ => throw InvalidGenerationSourceError(
-      'Unsupported persisted type `$dartType`. Implement '
+      '`${field.name}` has unsupported persisted type `$dartType`. Implement '
       'PersistedScalarValue<String|bool|int|double> for an immutable atomic '
       'domain value, or model structure as native fields and relationships.',
+      element: field,
     ),
   };
 }
@@ -5766,98 +5985,65 @@ const _workflowMembershipActions = [
   ),
 ];
 
+/// Reads a create default from a field initializer.
+///
+/// Only literal forms are accepted so the generated default is exactly what
+/// the declaration shows; anything else must use `@Persisted(defaultValue:)`
+/// rather than silently becoming a required field.
 Object? _inferDefaultValue(FieldElement field, Expression? initializer) {
-  if (_isDartCoreList(field.type)) {
-    final elementType = (field.type as InterfaceType).typeArguments.single;
-    if (initializer is ListLiteral) {
-      if (initializer.constKeyword == null) {
-        throw InvalidGenerationSourceError(
-          '`${field.name}` collection defaults must be const list literals.',
-          element: field,
-        );
-      }
-      return List<Object?>.unmodifiable(
-        initializer.elements.map(
-          (element) => _collectionInitializerValue(element, elementType, field),
-        ),
-      );
-    }
-    final values = field.computeConstantValue()?.toListValue();
-    if (values == null) return null;
-    return List<Object?>.unmodifiable(
-      values.map(
-        (value) => _collectionConstantValue(value, elementType, field),
-      ),
+  if (initializer == null || initializer is NullLiteral) return null;
+  final enumElement = field.type.element;
+  final value = enumElement is EnumElement
+      ? _enumInitializerValue(initializer, enumElement)
+      : _literalInitializerValue(initializer);
+  if (value == null) {
+    throw InvalidGenerationSourceError(
+      '`${field.name}` initializer is not a literal default. Use a literal '
+      'value or declare `@Persisted(defaultValue: ...)`.',
+      element: field,
     );
   }
-  if (field.type.element is EnumElement) {
-    return switch (initializer) {
-      PrefixedIdentifier(:final prefix, :final identifier)
-          when prefix.name == field.type.element?.name =>
-        identifier.name,
-      _ => field.computeConstantValue()?.variable?.name,
-    };
-  }
-  final value = switch (initializer) {
-    BooleanLiteral(:final value) => value,
-    IntegerLiteral(:final value) => value,
-    DoubleLiteral(:final value) => value,
-    SimpleStringLiteral(:final value) => value,
-    _ => null,
-  };
-  if (value != null) return value;
-  if (field.name == EntityConventions.serverVersionFieldName &&
-      field.isFinal &&
-      field.type.getDisplayString() == 'ServerVersion') {
-    return 0;
-  }
-  return null;
+  final isDouble =
+      field.type.getDisplayString().replaceAll('?', '') == 'double';
+  return isDouble && value is int ? value.toDouble() : value;
 }
 
-Object _collectionInitializerValue(
-  CollectionElement element,
-  DartType elementType,
-  FieldElement field,
-) {
-  final enumElement = elementType.element;
-  if (enumElement is EnumElement && element is PrefixedIdentifier) {
-    final value = element.identifier.name;
-    if (element.prefix.name == enumElement.name &&
-        enumElement.fields.any(
-          (candidate) => candidate.isEnumConstant && candidate.name == value,
-        )) {
-      return value;
-    }
-  }
+Object? _literalInitializerValue(Expression initializer) =>
+    switch (initializer) {
+      BooleanLiteral(:final value) => value,
+      IntegerLiteral(:final value) => value,
+      DoubleLiteral(:final value) => value,
+      SimpleStringLiteral(:final value) => value,
+      AdjacentStrings(:final strings)
+          when strings.every((part) => part is SimpleStringLiteral) =>
+        strings.map((part) => (part as SimpleStringLiteral).value).join(),
+      PrefixExpression(:final operator, :final operand)
+          when operator.lexeme == '-' =>
+        switch (_literalInitializerValue(operand)) {
+          final num value => -value,
+          _ => null,
+        },
+      ParenthesizedExpression(:final expression) => _literalInitializerValue(
+        expression,
+      ),
+      _ => null,
+    };
 
-  final Object? value;
-  if (element is SimpleStringLiteral) {
-    value = element.value;
-  } else if (element is BooleanLiteral) {
-    value = element.value;
-  } else if (element is IntegerLiteral) {
-    value = element.value;
-  } else if (element is PrefixExpression &&
-      element.operator.lexeme == '-' &&
-      element.operand is IntegerLiteral) {
-    final integer = (element.operand as IntegerLiteral).value;
-    value = integer == null ? null : -integer;
-  } else {
-    value = null;
-  }
-  final valid = switch (elementType.getDisplayString()) {
-    'String' => value is String,
-    'bool' => value is bool,
-    'int' => value is int,
-    _ => false,
+String? _enumInitializerValue(Expression initializer, EnumElement enumElement) {
+  final name = switch (initializer) {
+    PrefixedIdentifier(:final prefix, :final identifier)
+        when prefix.name == enumElement.name =>
+      identifier.name,
+    PropertyAccess(:final target?, :final propertyName)
+        when target.toSource().split('.').last == enumElement.name =>
+      propertyName.name,
+    _ => null,
   };
-  if (valid) return value!;
-
-  throw InvalidGenerationSourceError(
-    '`${field.name}` has an unsupported const collection default element for '
-    '`${elementType.getDisplayString()}`.',
-    element: field,
-  );
+  return enumElement.fields.any(
+        (candidate) => candidate.isEnumConstant && candidate.name == name,
+      )
+      ? name
+      : null;
 }
 
 Object? _configuredDefaultValue(
@@ -5868,21 +6054,6 @@ Object? _configuredDefaultValue(
 }) {
   final reader = persisted?.peek('defaultValue');
   if (reader == null || reader.isNull) return null;
-  if (_isDartCoreList(field.type)) {
-    final elementType = (field.type as InterfaceType).typeArguments.single;
-    final values = reader.objectValue.toListValue();
-    if (values == null) {
-      throw InvalidGenerationSourceError(
-        'A collection default must be a const List value.',
-        element: field,
-      );
-    }
-    return List<Object?>.unmodifiable(
-      values.map(
-        (value) => _collectionConstantValue(value, elementType, field),
-      ),
-    );
-  }
   if (enumElement == null) {
     final expectedType =
         scalarValue?.wireDartType ??
@@ -5910,32 +6081,6 @@ bool _isDartCoreList(DartType type) =>
     type.element.name == 'List' &&
     type.element.library.uri.toString() == 'dart:core';
 
-Object? _collectionConstantValue(
-  DartObject value,
-  DartType elementType,
-  FieldElement field,
-) {
-  final enumElement = elementType.element;
-  if (enumElement is EnumElement) {
-    final variable = value.variable;
-    if (variable?.enclosingElement == enumElement) return variable!.name;
-  } else {
-    final type = elementType.getDisplayString();
-    final decoded = switch (type) {
-      'String' => value.toStringValue(),
-      'bool' => value.toBoolValue(),
-      'int' => value.toIntValue(),
-      _ => null,
-    };
-    if (decoded != null) return decoded;
-  }
-  throw InvalidGenerationSourceError(
-    '`${field.name}` has an unsupported collection default element for '
-    '`${elementType.getDisplayString()}`.',
-    element: field,
-  );
-}
-
 void _validateConfiguredDefault(
   FieldElement field,
   Object value, {
@@ -5951,6 +6096,12 @@ void _validateConfiguredDefault(
     'double' => value is double,
     _ => false,
   };
+  if (value is double && !value.isFinite) {
+    throw InvalidGenerationSourceError(
+      '`${field.name}` defaultValue must be finite.',
+      element: field,
+    );
+  }
   if (!matches) {
     throw InvalidGenerationSourceError(
       '`${field.name}` defaultValue must be a `$expectedType` constant. '

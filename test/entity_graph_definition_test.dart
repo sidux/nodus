@@ -167,7 +167,7 @@ void main() {
             kind: EntityFieldKind.uuid,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
           ),
           EntityFieldDescriptor(
             name: 'sourceId',
@@ -175,7 +175,7 @@ void main() {
             kind: EntityFieldKind.uuid,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
             reference: EntityReferenceDescriptor(
               targetEntityType: 'Source',
               onDelete: ReferenceDeleteAction.cascade,
@@ -187,7 +187,7 @@ void main() {
             kind: EntityFieldKind.uuid,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
             reference: EntityReferenceDescriptor(
               targetEntityType: 'Target',
               onDelete: ReferenceDeleteAction.cascade,
@@ -199,7 +199,7 @@ void main() {
             kind: EntityFieldKind.boolean,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.localWins,
+            conflictPolicy: ConflictStrategy.localWins,
           ),
           EntityFieldDescriptor(
             name: 'serverVersion',
@@ -207,7 +207,7 @@ void main() {
             kind: EntityFieldKind.integer,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
           ),
         ],
       ),
@@ -295,7 +295,7 @@ void main() {
             kind: EntityFieldKind.uuid,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
             reference: EntityReferenceDescriptor(
               targetEntityType: 'Document',
               onDelete: ReferenceDeleteAction.cascade,
@@ -354,7 +354,7 @@ void main() {
                 kind: EntityFieldKind.uuid,
                 nullable: false,
                 mutable: false,
-                conflictPolicy: FieldConflictPolicy.serverWins,
+                conflictPolicy: ConflictStrategy.serverWins,
                 reference: EntityReferenceDescriptor(
                   targetEntityType: 'MissingDocument',
                   onDelete: ReferenceDeleteAction.cascade,

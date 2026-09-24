@@ -44,6 +44,7 @@ String emitEntityGraphExplanation(EntityGraphSpec graph) {
             for (final action in entity.actions) {
                 'name': action.methodName,
                 'bulk': action.bulk,
+                if (action.guard case final guard?) 'guard': guard.name,
                 'parameters': [
                   for (final parameter in action.parameters) {'name': parameter.name, 'type': parameter.dartType, 'named': parameter.named},
                 ],

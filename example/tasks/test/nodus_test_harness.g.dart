@@ -40,6 +40,7 @@ final class TasksExampleTestHarness {
       autoSync: autoSync,
       supabaseBackend: resolvedSupabase,
     );
+    await entityGraph.sync();
     return TasksExampleTestHarness._(
       entityGraph: entityGraph,
       clock: resolvedClock,

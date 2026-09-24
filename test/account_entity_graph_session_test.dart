@@ -90,6 +90,50 @@ void main() {
     );
   });
 
+  test('a repeated request for the opening account joins that open', () async {
+    final open = Completer<_TestEntityGraph>();
+    final opened = <String>[];
+    final closed = <String>[];
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (accountId) {
+        opened.add(accountId.value);
+        return open.future;
+      },
+      close: (entityGraph) async => closed.add(entityGraph.accountId.value),
+    );
+    addTearDown(session.dispose);
+
+    final first = session.switchAccount(_accountId);
+    await Future<void>.delayed(Duration.zero);
+    final repeated = session.switchAccount(_accountId);
+    open.complete(_TestEntityGraph(_accountId));
+    await Future.wait([first, repeated]);
+
+    expect(opened, [_accountId.value]);
+    expect(closed, isEmpty);
+    expect(
+      session.state,
+      isA<AccountEntityGraphReady<_TestEntityGraph, _TestAccount>>(),
+    );
+  });
+
+  test('dispose completes even when closing the graph fails', () async {
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (accountId) async => _TestEntityGraph(accountId),
+      close: (_) async => throw StateError('close failed'),
+    );
+    await session.switchAccount(_accountId);
+
+    await expectLater(session.dispose(), throwsStateError);
+    await session.dispose();
+
+    expect(() => session.switchAccount(_accountId), throwsStateError);
+    expect(
+      session.state,
+      isA<AccountEntityGraphSignedOut<_TestEntityGraph, _TestAccount>>(),
+    );
+  });
+
   test('sign out closes the current entity graph exactly once', () async {
     final closed = <String>[];
     final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
@@ -181,6 +225,23 @@ void main() {
       'used:${_firstId.value}',
       'close:${_firstId.value}',
     ]);
+  });
+
+  test('ready work does not queue behind slower ready work', () async {
+    final slow = Completer<void>();
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (accountId) async => _TestEntityGraph(accountId),
+      close: (_) async {},
+    );
+    addTearDown(session.dispose);
+    await session.switchAccount(_firstId);
+
+    final slowWork = session.withReadyGraph((_) => slow.future);
+    final fastWork = session.withReadyGraph((graph) => graph.accountId);
+
+    expect(await fastWork, _firstId);
+    slow.complete();
+    await slowWork;
   });
 
   test('ready work can reenter the same session without deadlocking', () async {

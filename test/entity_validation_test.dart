@@ -448,9 +448,15 @@ final class Account {}
           'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('final TestGraphEntityGraph _entityGraph;'),
-              contains('Future<EntityBulkMutationResult> removeAll()'),
-              contains('Future<EntityBulkMutationResult> restoreAll()'),
-              contains('Future<EntityBulkMutationResult> markReadAll()'),
+              contains(
+                'Future<EntityBulkMutationResult<Notification>> removeAll()',
+              ),
+              contains(
+                'Future<EntityBulkMutationResult<Notification>> restoreAll()',
+              ),
+              contains(
+                'Future<EntityBulkMutationResult<Notification>> markReadAll()',
+              ),
               contains('runTransaction: _entityGraph.transaction'),
             ]),
           ),
@@ -494,11 +500,15 @@ final class Account {}
         outputs: {
           'nodus|lib/task.entity.g.dart': decodedMatches(
             allOf([
-              contains('Future<EntityBulkMutationResult> removeHierarchy('),
-              contains('if (entity.ownerId != _ownerId) return false;'),
-              contains('Future<EntityBulkMutationResult> restoreHierarchy('),
               contains(
-                'Future<EntityBulkMutationResult> setHierarchyArchived(',
+                'Future<EntityBulkMutationResult<Task>> removeHierarchy(',
+              ),
+              contains('if (entity.ownerId != _ownerId) return false;'),
+              contains(
+                'Future<EntityBulkMutationResult<Task>> restoreHierarchy(',
+              ),
+              contains(
+                'Future<EntityBulkMutationResult<Task>> setHierarchyArchived(',
               ),
               contains("parentFieldName: 'parentTaskId'"),
               contains('requireActiveExternalParent: true'),
@@ -553,8 +563,16 @@ final class Account {}
           'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('final class SelectionList'),
-              isNot(contains('Future<EntityBulkMutationResult> removeAll()')),
-              isNot(contains('Future<EntityBulkMutationResult> restoreAll()')),
+              isNot(
+                contains(
+                  'Future<EntityBulkMutationResult<Notification>> removeAll()',
+                ),
+              ),
+              isNot(
+                contains(
+                  'Future<EntityBulkMutationResult<Notification>> restoreAll()',
+                ),
+              ),
             ]),
           ),
         },
@@ -608,6 +626,8 @@ final class Account {}
           'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('void installApplyOutcomesProcess({'),
+              contains('run: (context) => switch (context.entityIds) {'),
+              contains('tombstones: TombstoneVisibility.include,'),
               contains('void installHomeWidgetsProjection({'),
               contains('Future<void> runHomeWidgetsProjectionNow()'),
               contains("import 'package:flutter/widgets.dart' hide Table;"),
@@ -1476,6 +1496,327 @@ final class Account {}
             contains('idea'),
             contains('final_decision'),
             contains('PersistedEqualityEntityField<Note, NoteKind>'),
+          ]),
+        ),
+      },
+    );
+  });
+
+  test('infers literal initializer defaults and rejects opaque ones', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Setting implements OwnedBy<Setting, Account> {
+  final int shift = -1;
+  final double ratio = 2;
+  final String label = 'a' 'b';
+  $opaque
+}
+
+final class Account {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source.replaceFirst(r'$opaque', ''), fileName: 'setting.dart'),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/setting.entity.g.dart': decodedMatches(
+          allOf([
+            contains('int shift = -1'),
+            contains('double ratio = 2.0'),
+            contains("String label = 'ab'"),
+          ]),
+        ),
+      },
+    );
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(
+        source.replaceFirst(r'$opaque', 'final int total = 1 + 1;'),
+        fileName: 'setting.dart',
+      ),
+      rootPackage: 'nodus',
+    );
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains('`total` initializer is not a literal default'),
+    );
+  });
+
+  test('escapes generated Dart string literals', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Price implements OwnedBy<Price, Account> {
+  @Persisted(allowedValues: [r'$', r'C:\x', "it's"])
+  abstract final String symbol;
+}
+
+final class Account {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source, fileName: 'price.dart'),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/price.entity.g.dart': decodedMatches(
+          contains(r"'\$', 'C:\\x', 'it\'s'"),
+        ),
+      },
+    );
+  });
+
+  test('rejects indexes that resolve to one storage name', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(
+  indexes: [
+    CompoundIndex([#a, #bC]),
+    CompoundIndex([#aB, #c]),
+  ],
+)
+abstract class Item implements OwnedBy<Item, Account> {
+  abstract final int a;
+  abstract final int bC;
+  abstract final int aB;
+  abstract final int c;
+}
+
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source, fileName: 'item.dart'),
+      rootPackage: 'nodus',
+    );
+    expect(result.succeeded, isFalse);
+    expect(result.errors.join('\n'), contains('resolve to the storage name'));
+  });
+
+  test('rejects enum values that share one stored value', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+enum Mode { fooBar, foo_bar }
+
+@Entity()
+abstract class Item implements OwnedBy<Item, Account> {
+  @Persisted(defaultValue: Mode.fooBar)
+  abstract final Mode mode;
+}
+
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source, fileName: 'item.dart'),
+      rootPackage: 'nodus',
+    );
+    expect(result.succeeded, isFalse);
+    expect(result.errors.join('\n'), contains('share one stored value'));
+  });
+
+  test('guards actions with pure entity decisions', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+enum ReviewStatus { open, approved }
+
+@Entity()
+abstract class Review implements OwnedBy<Review, Account> {
+  @Persisted(defaultValue: ReviewStatus.open)
+  abstract final ReviewStatus status;
+
+  @Persisted(defaultValue: 0)
+  abstract final int score;
+
+  bool get isOpen => status == ReviewStatus.open;
+
+  bool acceptsScore({required int score}) => score >= 0 && score <= 10;
+
+  @Action(
+    values: [ActionValue(#status, ReviewStatus.approved)],
+    guard: #isOpen,
+    bulk: true,
+  )
+  Future<void> approve();
+
+  @Action(guard: #acceptsScore)
+  Future<void> rate({required int score});
+}
+
+final class Account {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source, fileName: 'review.dart'),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/review.entity.g.dart': decodedMatches(
+          allOf([
+            contains('if (!isOpen) {'),
+            contains('if (!acceptsScore(score: score)) {'),
+            contains("action: 'approve',"),
+            contains("guard: 'acceptsScore',"),
+          ]),
+        ),
+      },
+    );
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources(source, fileName: 'review.dart'),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          contains('"guard": "isOpen"'),
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          contains('if (!entity.isOpen) return false;'),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(anything),
+      },
+    );
+  });
+
+  test('rejects guards that are not pure entity decisions', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Review implements OwnedBy<Review, Account> {
+  @Persisted(defaultValue: 0)
+  abstract final int score;
+
+  $guard
+
+  @Action(guard: #allowed)
+  Future<void> rate({required int score});
+}
+
+final class Account {}
+''';
+
+    for (final (guard, problem) in [
+      ('int get allowed => 1;', 'must return bool'),
+      ('bool get allowed;', 'must be a concrete instance getter or method'),
+      (
+        'bool allowed(int score) => true;',
+        'must take no parameters or exactly the action parameters',
+      ),
+      ('', 'is not declared on `Review`'),
+    ]) {
+      final result = await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(
+          source.replaceFirst(r'$guard', guard),
+          fileName: 'review.dart',
+        ),
+        rootPackage: 'nodus',
+      );
+      expect(result.succeeded, isFalse, reason: guard);
+      expect(result.errors.join('\n'), contains(problem), reason: guard);
+    }
+  });
+
+  test('rejects reserved SQL words unless a column is named', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Slot implements OwnedBy<Slot, Account> {
+  $annotation
+  abstract final int end;
+}
+
+final class Account {}
+''';
+
+    final rejected = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source.replaceFirst(r'$annotation', ''), fileName: 'slot.dart'),
+      rootPackage: 'nodus',
+    );
+    expect(rejected.succeeded, isFalse);
+    expect(
+      rejected.errors.join('\n'),
+      contains('The column identifier `end` is a reserved SQL word'),
+    );
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(
+        source.replaceFirst(
+          r'$annotation',
+          "@Persisted(column: 'ends_at_minute')",
+        ),
+        fileName: 'slot.dart',
+      ),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/slot.entity.g.dart': decodedMatches(
+          contains("columnName: 'ends_at_minute'"),
+        ),
+      },
+    );
+  });
+
+  test('Entity.conflict sets the default field merge policy', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+enum ReviewStatus { open, resolved }
+
+@Entity(conflict: ConflictStrategy.localWins)
+abstract class Review implements OwnedBy<Review, Account> {
+  abstract final String message;
+
+  @Persisted(maxLength: 80)
+  abstract final String? summary;
+
+  @Persisted(conflict: ConflictStrategy.serverWins)
+  abstract final int score;
+
+  @Persisted(authority: FieldAuthority.server)
+  final ReviewStatus status = ReviewStatus.open;
+
+  abstract final DateTime updatedAt;
+}
+
+final class Account {}
+''';
+
+    Matcher policy(String field, String conflict) => matches(
+      RegExp(
+        '_${field}Persistence = EntityFieldDescriptor\\([^;]*'
+        'conflictPolicy: ConflictStrategy\\.$conflict,',
+      ),
+    );
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source, fileName: 'review.dart'),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/review.entity.g.dart': decodedMatches(
+          allOf([
+            policy('message', 'localWins'),
+            policy('summary', 'localWins'),
+            policy('score', 'serverWins'),
+            policy('status', 'serverWins'),
+            policy('updatedAt', 'serverWins'),
           ]),
         ),
       },
@@ -2442,7 +2783,7 @@ abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   abstract final int? start;
 
   @Persisted(requires: #missing)
-  abstract final int? end;
+  abstract final int? finish;
 }
 
 final class Account {}
@@ -2463,7 +2804,7 @@ abstract class Note implements OwnedBy<Note, Account>, SoftDeletable {
   abstract final int? start;
 
   @Persisted(requires: #start)
-  abstract final int end;
+  abstract final int finish;
 }
 
 final class Account {}
@@ -2523,7 +2864,7 @@ final class Account {}
     expect(result.succeeded, isFalse);
     expect(
       result.errors.join('\n'),
-      contains('Unsupported persisted type `Money`'),
+      contains('`budget` has unsupported persisted type `Money`'),
     );
   });
 
@@ -2708,7 +3049,7 @@ final class Account {}
       expect(result.succeeded, isFalse);
       expect(
         result.errors.join('\n'),
-        contains('Unsupported persisted type `$diagnosticType`'),
+        contains('`metadata` has unsupported persisted type `$diagnosticType`'),
       );
     }
   });
@@ -5941,7 +6282,7 @@ final class Account {}
     },
   );
 
-  test('rejects entity names that collide with generated list types', () async {
+  test('rejects entity names that collide with generated types', () async {
     const taskSource = r'''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
@@ -5949,28 +6290,34 @@ import 'package:nodus/account.dart';
 @Entity(cardinality: Cardinality.bounded)
 abstract class Task implements OwnedBy<Task, Account> {}
 ''';
-    const taskListSource = r'''
+    for (final collision in ['TaskList', 'TaskSet', 'TaskRecord']) {
+      final collisionSource =
+          '''
 import 'package:nodus/nodus.dart';
 import 'package:nodus/account.dart';
 
 @Entity(cardinality: Cardinality.bounded)
-abstract class TaskList implements OwnedBy<TaskList, Account> {}
+abstract class $collision implements OwnedBy<$collision, Account> {}
 ''';
-    final sources = _sources(taskSource, fileName: 'task.dart')
-      ..['nodus|lib/task_list.dart'] = taskListSource
-      ..['nodus|lib/account.dart'] = 'final class Account {}';
+      final sources = _sources(taskSource, fileName: 'task.dart')
+        ..['nodus|lib/collision.dart'] = collisionSource
+        ..['nodus|lib/account.dart'] = 'final class Account {}';
 
-    final result = await testBuilder(
-      inferredEntityGraphBuilder(BuilderOptions.empty),
-      sources,
-      rootPackage: 'nodus',
-    );
+      final result = await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+      );
 
-    expect(result.succeeded, isFalse);
-    expect(
-      result.errors.join('\n'),
-      contains('Generated collection type `TaskList` conflicts'),
-    );
+      expect(result.succeeded, isFalse, reason: collision);
+      expect(
+        result.errors.join('\n'),
+        contains(
+          'Entity `$collision` collides with the type generated for `Task`',
+        ),
+        reason: collision,
+      );
+    }
   });
 
   test(
@@ -6752,6 +7099,8 @@ final class Account {}
         'nodus|lib/note.entity.g.dart': decodedMatches(
           allOf([
             contains('DateTime? get archivedAt => _archivedAtStore.value;'),
+            contains('bool get isArchived => archivedAt != null;'),
+            contains('bool get isRemoved => deletedAt != null;'),
             contains('Future<void> archive()'),
             contains('Future<void> unarchive()'),
             contains('ArchiveVisibility archives = ArchiveVisibility.exclude'),
@@ -6793,22 +7142,27 @@ import 'package:nodus/nodus.dart';
 
 @Entity(cardinality: Cardinality.bounded)
 abstract class Note implements OwnedBy<Note, Account>, Archivable {
-  abstract final DateTime? archivedAt;
+  $member
 }
 
 final class Account {}
 ''';
 
-    final result = await testBuilder(
-      localEntityBuilder(BuilderOptions.empty),
-      _sources(source),
-      rootPackage: 'nodus',
-    );
-    expect(result.succeeded, isFalse);
-    expect(
-      result.errors.join('\n'),
-      contains('Archivable supplies `archivedAt`, `archive`, and `unarchive`'),
-    );
+    for (final member in [
+      'abstract final DateTime? archivedAt;',
+      '@override\n  bool get isArchived => archivedAt != null;',
+    ]) {
+      final result = await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(source.replaceFirst(r'$member', member)),
+        rootPackage: 'nodus',
+      );
+      expect(result.succeeded, isFalse, reason: member);
+      expect(
+        result.errors.join('\n'),
+        contains('Archivable supplies `archivedAt`, `isArchived`, `archive`'),
+      );
+    }
   });
 
   test('generates ActivityTracked source and immutable ActivityOf entry', () async {
@@ -7802,6 +8156,36 @@ abstract class GoalRequirement
           ),
         },
       );
+
+      await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/goal.entity.g.dart': decodedMatches(anything),
+          'nodus|lib/goal_requirement.entity.g.dart': decodedMatches(anything),
+          'nodus|lib/goal_member.entity.g.dart': decodedMatches(
+            allOf([
+              contains('LocalId<Goal> get targetId => goalId;'),
+              contains(
+                'bool get isPending => status == MembershipStatus.pending;',
+              ),
+              contains(
+                'final class GoalMemberSet\n'
+                '    implements WorkflowMembershipSet<GoalMember, Goal, Account>',
+              ),
+              contains('Future<GoalMember> invite('),
+              matches(
+                RegExp(
+                  r'Future<void> end\(\) =>\s+ownerId\.value == '
+                  r'_mutationSink\.authenticatedPrincipalId\s+\? revoke\(\)'
+                  r'\s+: decline\(\);',
+                ),
+              ),
+            ]),
+          ),
+        },
+      );
     },
   );
 
@@ -8194,12 +8578,17 @@ abstract interface class Collaborative<Principal> {
 }
 
 abstract interface class WorkflowMembership<Target, Principal, Status> {
+  LocalId<Target> get targetId;
+  LocalId<Principal> get ownerId;
   LocalId<Principal> get memberId;
   Status get status;
+  bool get isPending;
+  bool get isAccepted;
   Future<void> accept();
   Future<void> decline();
   Future<void> revoke();
   Future<void> reinvite();
+  Future<void> end();
 }
 
 abstract interface class ActivityTracked {

@@ -44,50 +44,6 @@ final class NodusMigrationContext<D extends GeneratedDatabase> {
   final NodusSchemaTransition transition;
 }
 
-/// Rebuilds the generated durable queue and cursor when a graph moves from a
-/// single implicit transport to explicit per-target routing.
-///
-/// The application supplies only the one fact that generation cannot recover:
-/// which target owned rows written by the previous schema. Drift derives the
-/// complete destination table shapes, constraints, and indexes from the new
-/// generated database.
-Future<void> migrateImplicitSyncTarget({
-  required Migrator migrator,
-  required TableInfo<Table, Object?> workTable,
-  required GeneratedColumn<String> workTargetColumn,
-  required TableInfo<Table, Object?> cursorTable,
-  required GeneratedColumn<String> cursorTargetColumn,
-  required SyncTargetId legacyTarget,
-}) async {
-  final legacyTargetExpression = Constant<String>(legacyTarget.wireName);
-  await migrator.alterTable(
-    TableMigration(
-      workTable,
-      newColumns: [workTargetColumn],
-      columnTransformer: {workTargetColumn: legacyTargetExpression},
-    ),
-  );
-  await migrator.alterTable(
-    TableMigration(
-      cursorTable,
-      newColumns: [cursorTargetColumn],
-      columnTransformer: {cursorTargetColumn: legacyTargetExpression},
-    ),
-  );
-  await migrator.database.customStatement(
-    'drop index if exists local_entity_push_patch_idx',
-  );
-  await migrator.database.customStatement(
-    'create index local_entity_push_patch_idx on local_entity_sync_work '
-    "(sync_target, entity_type, entity_id, id) where direction = 'push' "
-    "and kind = 'statePatch' and status = 'pending'",
-  );
-  await migrator.database.customStatement(
-    'create index local_entity_sync_ready_idx on local_entity_sync_work '
-    '(sync_target, status, next_attempt_at, direction, id)',
-  );
-}
-
 typedef NodusManualMigration<D extends GeneratedDatabase> =
     Future<void> Function(NodusMigrationContext<D> context);
 

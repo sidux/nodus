@@ -62,14 +62,37 @@ final class LocalDate implements Comparable<LocalDate> {
     }
   }
 
-  factory LocalDate.fromDateTime(DateTime value) =>
-      LocalDate(value.year, value.month, value.day);
+  /// The calendar date of [value] in the device's local time zone.
+  ///
+  /// A UTC instant such as `clock.nowUtc()` becomes the user's local date,
+  /// matching [toDateTime], which returns local midnight.
+  factory LocalDate.fromDateTime(DateTime value) {
+    final local = value.toLocal();
+    return LocalDate(local.year, local.month, local.day);
+  }
 
   int get year => int.parse(value.substring(0, 4));
   int get month => int.parse(value.substring(5, 7));
   int get day => int.parse(value.substring(8, 10));
 
   DateTime toDateTime() => DateTime(year, month, day);
+
+  /// The date [days] calendar days later, or earlier when negative.
+  ///
+  /// Calendar arithmetic is independent of daylight-saving transitions, unlike
+  /// adding a `Duration` to a local midnight.
+  LocalDate addDays(int days) {
+    final shifted = DateTime.utc(year, month, day + days);
+    return LocalDate(shifted.year, shifted.month, shifted.day);
+  }
+
+  /// Whole calendar days from this date to [other]; negative when [other] is
+  /// earlier.
+  int daysUntil(LocalDate other) => DateTime.utc(
+    other.year,
+    other.month,
+    other.day,
+  ).difference(DateTime.utc(year, month, day)).inDays;
 
   @override
   int compareTo(LocalDate other) => value.compareTo(other.value);
@@ -327,9 +350,16 @@ final class Entity {
     this.sync,
     this.syncTarget,
     this.coIdentityWith = const [],
+    this.conflict = ConflictStrategy.serverWins,
   });
 
   final String? table;
+
+  /// Default merge policy for this entity's client-authored fields.
+  ///
+  /// A field's own `@Persisted(conflict: ...)` still overrides it, and
+  /// server-authoritative fields always keep [ConflictStrategy.serverWins].
+  final ConflictStrategy conflict;
 
   /// Overrides the inferred lower-camel table vocabulary on the entity graph.
   ///
@@ -504,7 +534,7 @@ final class Persisted {
   const Persisted({
     this.column,
     this.defaultValue,
-    this.conflict = ConflictStrategy.serverWins,
+    this.conflict,
     this.authority = FieldAuthority.client,
     this.minLength,
     this.maxLength,
@@ -526,7 +556,9 @@ final class Persisted {
 
   final String? column;
   final Object? defaultValue;
-  final ConflictStrategy conflict;
+
+  /// Overrides the entity's [Entity.conflict] default for this field.
+  final ConflictStrategy? conflict;
   final FieldAuthority authority;
   final int? minLength;
   final int? maxLength;
@@ -817,9 +849,17 @@ final class OwnerReference {
 /// Name the action for its domain meaning; the generic name `edit` is reserved
 /// for ordinary generated draft behavior.
 final class Action {
-  const Action({this.values = const [], this.bulk = false});
+  const Action({this.values = const [], this.bulk = false, this.guard});
 
   final List<ActionValue> values;
+
+  /// A concrete, pure `bool` getter or method on the entity that must hold
+  /// for the action to run.
+  ///
+  /// A guard method takes either no parameters or exactly the action's
+  /// parameters. A rejected call throws `ActionGuardException` before any
+  /// optimistic change; a bulk `<action>All` skips rejected entities.
+  final Symbol? guard;
 
   /// Generates the same semantic action on a typed entity selection.
   ///

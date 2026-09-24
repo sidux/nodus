@@ -192,7 +192,7 @@ final class TasksExampleEntityGraph {
       diagnostics: diagnostics,
     );
     try {
-      final taskEngine = await LocalEntityEngine.openInGraph(
+      final taskEngineOpening = LocalEntityEngine.openInGraph(
         descriptor: TasksExampleMetadata.taskDescriptor,
         database: database,
         backend: adapterRegistry.backendForEntity('Task'),
@@ -200,7 +200,7 @@ final class TasksExampleEntityGraph {
         idGenerator: idGenerator,
         graphCoordinator: coordinator,
       );
-      final taskActivityEngine = await LocalEntityEngine.openInGraph(
+      final taskActivityEngineOpening = LocalEntityEngine.openInGraph(
         descriptor: TasksExampleMetadata.taskActivityDescriptor,
         database: database,
         backend: adapterRegistry.backendForEntity('TaskActivity'),
@@ -208,7 +208,7 @@ final class TasksExampleEntityGraph {
         idGenerator: idGenerator,
         graphCoordinator: coordinator,
       );
-      final taskProjectEngine = await LocalEntityEngine.openInGraph(
+      final taskProjectEngineOpening = LocalEntityEngine.openInGraph(
         descriptor: TasksExampleMetadata.taskProjectDescriptor,
         database: database,
         backend: adapterRegistry.backendForEntity('TaskProject'),
@@ -216,6 +216,14 @@ final class TasksExampleEntityGraph {
         idGenerator: idGenerator,
         graphCoordinator: coordinator,
       );
+      await Future.wait<Object>([
+        taskEngineOpening,
+        taskActivityEngineOpening,
+        taskProjectEngineOpening,
+      ]);
+      final taskEngine = await taskEngineOpening;
+      final taskActivityEngine = await taskActivityEngineOpening;
+      final taskProjectEngine = await taskProjectEngineOpening;
       await coordinator.start();
       return TasksExampleEntityGraph._(
         accountId,
@@ -225,7 +233,8 @@ final class TasksExampleEntityGraph {
         taskProjectEngine,
       );
     } catch (_) {
-      await coordinator.close();
+      // Cleanup is best effort; the open failure is the error.
+      await coordinator.close().catchError((_) {});
       rethrow;
     }
   }
@@ -476,33 +485,46 @@ final class TaskList extends EntityList<Task> {
        );
   final TasksExampleEntityGraph _entityGraph;
 
-  Future<EntityBulkMutationResult> removeAll() =>
-      runGeneratedBulkAction((entity) async {
-        final before = entity.generatedAccess.generatedLocalRevision;
-        await entity.remove();
-        return entity.generatedAccess.generatedLocalRevision != before;
-      }, runTransaction: _entityGraph.transaction);
+  Future<EntityBulkMutationResult<Task>> removeAll() => runGeneratedBulkAction(
+    (entity) async {
+      final before = entity.generatedAccess.generatedLocalRevision;
+      await entity.remove();
+      return entity.generatedAccess.generatedLocalRevision != before;
+    },
+    idOf: (entity) => entity.id,
+    runTransaction: _entityGraph.transaction,
+  );
 
-  Future<EntityBulkMutationResult> restoreAll() =>
-      runGeneratedBulkAction((entity) async {
-        final before = entity.generatedAccess.generatedLocalRevision;
-        await entity.restore();
-        return entity.generatedAccess.generatedLocalRevision != before;
-      }, runTransaction: _entityGraph.transaction);
+  Future<EntityBulkMutationResult<Task>> restoreAll() => runGeneratedBulkAction(
+    (entity) async {
+      final before = entity.generatedAccess.generatedLocalRevision;
+      await entity.restore();
+      return entity.generatedAccess.generatedLocalRevision != before;
+    },
+    idOf: (entity) => entity.id,
+    runTransaction: _entityGraph.transaction,
+  );
 
-  Future<EntityBulkMutationResult> archiveAll() =>
-      runGeneratedBulkAction((entity) async {
-        final before = entity.generatedAccess.generatedLocalRevision;
-        await entity.archive();
-        return entity.generatedAccess.generatedLocalRevision != before;
-      }, runTransaction: _entityGraph.transaction);
+  Future<EntityBulkMutationResult<Task>> archiveAll() => runGeneratedBulkAction(
+    (entity) async {
+      final before = entity.generatedAccess.generatedLocalRevision;
+      await entity.archive();
+      return entity.generatedAccess.generatedLocalRevision != before;
+    },
+    idOf: (entity) => entity.id,
+    runTransaction: _entityGraph.transaction,
+  );
 
-  Future<EntityBulkMutationResult> unarchiveAll() =>
-      runGeneratedBulkAction((entity) async {
-        final before = entity.generatedAccess.generatedLocalRevision;
-        await entity.unarchive();
-        return entity.generatedAccess.generatedLocalRevision != before;
-      }, runTransaction: _entityGraph.transaction);
+  Future<EntityBulkMutationResult<Task>> unarchiveAll() =>
+      runGeneratedBulkAction(
+        (entity) async {
+          final before = entity.generatedAccess.generatedLocalRevision;
+          await entity.unarchive();
+          return entity.generatedAccess.generatedLocalRevision != before;
+        },
+        idOf: (entity) => entity.id,
+        runTransaction: _entityGraph.transaction,
+      );
 }
 
 final class TaskActivityList extends EntityList<TaskActivity> {
@@ -625,19 +647,27 @@ final class TaskProjectList extends EntityList<TaskProject> {
        );
   final TasksExampleEntityGraph _entityGraph;
 
-  Future<EntityBulkMutationResult> removeAll() =>
-      runGeneratedBulkAction((entity) async {
-        final before = entity.generatedAccess.generatedLocalRevision;
-        await entity.remove();
-        return entity.generatedAccess.generatedLocalRevision != before;
-      }, runTransaction: _entityGraph.transaction);
+  Future<EntityBulkMutationResult<TaskProject>> removeAll() =>
+      runGeneratedBulkAction(
+        (entity) async {
+          final before = entity.generatedAccess.generatedLocalRevision;
+          await entity.remove();
+          return entity.generatedAccess.generatedLocalRevision != before;
+        },
+        idOf: (entity) => entity.id,
+        runTransaction: _entityGraph.transaction,
+      );
 
-  Future<EntityBulkMutationResult> restoreAll() =>
-      runGeneratedBulkAction((entity) async {
-        final before = entity.generatedAccess.generatedLocalRevision;
-        await entity.restore();
-        return entity.generatedAccess.generatedLocalRevision != before;
-      }, runTransaction: _entityGraph.transaction);
+  Future<EntityBulkMutationResult<TaskProject>> restoreAll() =>
+      runGeneratedBulkAction(
+        (entity) async {
+          final before = entity.generatedAccess.generatedLocalRevision;
+          await entity.restore();
+          return entity.generatedAccess.generatedLocalRevision != before;
+        },
+        idOf: (entity) => entity.id,
+        runTransaction: _entityGraph.transaction,
+      );
 }
 
 final class TaskActivityLookup extends EntityLookup<TaskActivity> {

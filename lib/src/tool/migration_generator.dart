@@ -610,12 +610,22 @@ final class NodusGenerator {
     );
   }
 
-  Future<void> _formatGeneratedDart() {
-    final targets = <String>['lib'];
-    if (Directory(_path('test/features/bdd')).existsSync()) {
-      targets.add('test/features/bdd');
-    }
-    return _run('dart', ['format', ...targets]);
+  /// Formats only tool-written Dart, never handwritten application source.
+  Future<void> _formatGeneratedDart() async {
+    final targets = <String>{
+      for (final path in const ['lib/src/generated', 'test/drift'])
+        if (Directory(_path(path)).existsSync()) path,
+      if (Directory(_path('lib')).existsSync())
+        for (final file
+            in Directory(_path('lib'))
+                .listSync(recursive: true, followLinks: false)
+                .whereType<File>()
+                .where((file) => file.path.endsWith('.g.steps.dart')))
+          if (!file.path.contains('/lib/src/generated/'))
+            _relativePath(file.path),
+    };
+    if (targets.isEmpty) return;
+    await _run('dart', ['format', ...targets]);
   }
 
   /// Materializes the canonical declarative schema from optional ordered base

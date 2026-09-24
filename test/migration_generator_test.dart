@@ -538,6 +538,12 @@ void main() {
     fixture.file('supabase/nodus/schema.sql')
       ..createSync(recursive: true)
       ..writeAsStringSync('create table public.example(id uuid);\n');
+    fixture.file('lib/src/generated/nodus.runtime.g.dart')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('// generated\n');
+    fixture.file('lib/features/notes/domain/note.dart')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('// handwritten\n');
     final commands = <String>[];
     final generator = fixture.generator(
       runCommand: (executable, arguments, {required workingDirectory}) async {
@@ -550,7 +556,7 @@ void main() {
     expect(commands, [
       'dart run build_runner build',
       'dart run drift_dev make-migrations',
-      'dart format lib',
+      'dart format lib/src/generated',
     ]);
   });
 
@@ -581,7 +587,7 @@ void main() {
       'dart run drift_dev make-migrations',
       'dart run drift_dev schema generate '
           'drift_schemas/application test/drift/application/generated',
-      'dart format lib',
+      'dart format lib/src/generated',
     ]);
   });
 

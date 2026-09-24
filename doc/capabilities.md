@@ -64,7 +64,7 @@ identity.
 | Declaration | Meaning |
 | --- | --- |
 | `abstract final T value` | Immutable persisted field; available at creation when caller-supplied |
-| `@Persisted(...)` | Default, bounds, conflict policy, editability, transitions, or authority override |
+| `@Persisted(...)` | Default, bounds, conflict policy override, editability, transitions, or authority override |
 | `@Reference(...) LocalId<T>` | Typed relationship with generated accessors and remote referential behavior |
 | `@Transient()` | Explicitly exclude a real declared field from persistence |
 | `ExclusiveFieldGroup(...)` | Enforce zero-or-one or exactly-one membership across nullable fields |
@@ -153,6 +153,11 @@ clock-derived values.
 an edge to particular principals. Nodus applies the same transition contract in
 the local runtime, deterministic backend, and locked PostgreSQL push function.
 
+`@Action(guard: #isAwaitingReview)` names a `bool` getter, or a method taking
+the action's parameters, that must hold before the action applies anything; a
+rejected call fails with `ActionGuardException`, and generated `<action>All`
+operations skip rejected entities.
+
 Action names describe domain meaning. Generic `edit` actions are rejected
 because ordinary editing belongs to the generated draft.
 
@@ -160,8 +165,8 @@ because ordinary editing belongs to the generated draft.
 
 | Capability | Generated behavior |
 | --- | --- |
-| `SoftDeletable` | Tombstone-backed `remove()` and `restore()` |
-| `Archivable` | `archive()`, `unarchive()`, archive-aware indexes, and list visibility |
+| `SoftDeletable` | Tombstone-backed `remove()` and `restore()`; every entity exposes `isRemoved` |
+| `Archivable` | `archive()`, `unarchive()`, `isArchived`, archive-aware indexes, and list visibility |
 | `Ordered` | Hidden rank storage, scoped indexes, placement-aware creation, and semantic movement |
 | `Collaborative<Principal>` | Durable `setCollaborator(...)`, membership storage, and authorization |
 | `ActivityTracked` + `ActivityOf<Subject, Actor>` | Immutable activity entries appended in the same mutation batch |
@@ -189,6 +194,30 @@ Generated field objects provide typed equality, set-membership, range, text
 containment, and ordering operations. The same predicate evaluates in memory,
 forms a stable cache key, and compiles to Drift SQL. Text search therefore
 filters before paging instead of downloading a collection first.
+
+A relationship filter is one query. `column` selects one field of another
+set's rows, with that set's visibility defaults, and `isInColumn` compiles it
+to a SQL subquery that refreshes when those rows change:
+
+```dart
+final tagged = TaskList.all(
+  entityGraph,
+  where: TaskFields.id.isInColumn(
+    entityGraph.taskTagLinks.column(
+      TaskTagLinkFields.taskId,
+      where: TaskTagLinkFields.taskTagId.equals(tagId),
+    ),
+  ),
+);
+```
+
+A settled query reloads only for changes that can affect it: a changed field it
+reads, on an entity it lists or that now matches. Exact-ID lookups that start
+together share one `id in (...)` read, so rows may look up the one entity they
+render. When a local write resolves, live queries already show it.
+
+`LocalDate` is the calendar-date value type: `addDays` and `daysUntil` count
+calendar days independently of daylight-saving transitions.
 
 ### Cardinality and paging
 
@@ -232,6 +261,7 @@ subscriptions release their reaction and lease when cancelled.
 | `watchCompleteQuery` / `watchCompleteStates` | Load and emit only exhaustive snapshots |
 | `useObservedEntityList` | Bind list lease and loading/data/empty/failure rendering to a widget; its `when` fold pages descendant scroll views automatically |
 | `useObservedEntityLookup` | Render typed zero-or-one lookup state |
+| `useObservedEntityValue` | Observe a synchronous bounded-set read; re-tracks its latest closure each build |
 | `EntityQueryPagingBoundary` / observed `pagingBoundary` | Add the same automatic paging when observed state is rendered manually; groups page through one boundary, including lists nested in cross-axis tab/page views |
 | `useEntityQueryScrollController` | Low-level controller binding for a custom scroll integration that cannot emit ordinary scroll notifications |
 | `useEntityAction` | Own reusable busy/error feedback for awaited operations |

@@ -363,6 +363,10 @@ final class TaskRecord extends Task
       : LocalMutationCompletion(commit);
 
   @override
+  bool get isRemoved => deletedAt != null;
+  @override
+  bool get isArchived => archivedAt != null;
+  @override
   Task get generatedDomain => this;
   @override
   GeneratedEntityAccess<Task> get generatedAccess => this;
@@ -826,6 +830,15 @@ final class TaskRecord extends Task
   @override
   Future<void> reopen() {
     final _generatedActionTime = _clock.nowUtc();
+    if (!isCompleted) {
+      return Future<void>.error(
+        const ActionGuardException(
+          entityType: 'Task',
+          action: 'reopen',
+          guard: 'isCompleted',
+        ),
+      );
+    }
     final oldStatus = _statusStore.value;
     final nextStatus = TaskStatus.todo;
     final statusChanged = oldStatus != nextStatus;
@@ -1616,7 +1629,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1637,7 +1650,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1658,7 +1671,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: EntityReferenceDescriptor(
       targetEntityType: 'TaskProject',
@@ -1684,7 +1697,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.trim,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 160),
@@ -1707,7 +1720,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.trimToNull,
     reference: null,
     constraints: EntityFieldConstraints(maxLength: 1000),
@@ -1731,7 +1744,7 @@ abstract final class TaskFields {
     hasProtocolDefault: true,
     protocolDefault: 'todo',
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
     allowedTransitions: const [
@@ -1768,7 +1781,7 @@ abstract final class TaskFields {
     hasProtocolDefault: true,
     protocolDefault: 'normal',
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1798,7 +1811,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1820,7 +1833,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1843,7 +1856,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1866,7 +1879,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1888,7 +1901,7 @@ abstract final class TaskFields {
     protocolDefault:
         '057896044618658097711785492504343953926634992332820282019728792003956564819967',
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1910,7 +1923,7 @@ abstract final class TaskFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1933,7 +1946,7 @@ abstract final class TaskFields {
     hasProtocolDefault: true,
     protocolDefault: 0,
     inCreatePayload: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -1970,6 +1983,7 @@ final class TaskSet {
         loader: (spec, {required after, required limit}) =>
             engine.loadQueryPage(spec, after: after, limit: limit),
         invalidations: engine.projectionChanges,
+        resolveLoaded: engine.loadedRawId,
       );
   final LocalEntityEngine<Task, TaskRecord> _engine;
   final LocalEntityQueryCache<Task> _queries;
@@ -2092,6 +2106,18 @@ final class TaskSet {
       orderBy: orderBy,
       pageSize: pageSize,
     ),
+  );
+  EntityColumnQuery<Task, V> column<V>(
+    EntityField<Task, V> field, {
+    EntityPredicate<Task>? where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+    ArchiveVisibility archives = ArchiveVisibility.exclude,
+  }) => _engine.column(
+    field,
+    where:
+        _tombstonePredicate(tombstones) &
+        _archivePredicate(archives) &
+        (where ?? EntityPredicate<Task>.all()),
   );
   EntityOrder<Task> get canonicalOrder =>
       TaskFields._orderRank.ascending(tieBreakBy: (entity) => entity.id.value);

@@ -20,7 +20,6 @@ final class TaskAccessPage extends HookWidget {
   Widget build(BuildContext context) {
     final lookup = useObservedEntityLookup(
       () => entityGraph.tasks.lookup(taskId),
-      keys: [entityGraph, taskId],
     );
     final controller = useTextEditingController();
     final grantsAccess = useState(true);

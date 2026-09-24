@@ -43,7 +43,6 @@ final class _LoadedProjectDetails extends HookWidget {
   Widget build(BuildContext context) {
     final tasks = useObservedEntityList(
       () => project.tasks(entityGraph, pageSize: 50),
-      keys: [entityGraph, project.id],
     );
     final scrollController = useEntityQueryScrollController(tasks.query);
     final action = useEntityActionFeedback(

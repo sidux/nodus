@@ -12,7 +12,6 @@ final class TaskActivityPage extends HookWidget {
   Widget build(BuildContext context) {
     final activity = useObservedEntityList(
       () => TaskActivityList.all(entityGraph, pageSize: 30),
-      keys: [entityGraph],
     );
     final scrollController = useEntityQueryScrollController(activity.query);
 

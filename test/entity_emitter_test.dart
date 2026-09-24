@@ -323,10 +323,7 @@ void main() {
       contains('LocalEntityEngine<WorkItem, WorkItemRecord> _engine'),
     );
     expect(first, isNot(contains('loadQueryPage<WorkItem>')));
-    expect(
-      first,
-      contains('LocalEntityQueryCache<WorkItem>(source: engine.all)'),
-    );
+    expect(first, contains('LocalEntityQueryCache.bounded('));
     expect(
       first,
       contains('_ownerId = engine.authenticatedOwnerId<Account>(),'),
@@ -349,7 +346,6 @@ void main() {
       contains("'ownerId': WorkItemFields.ownerId.encode(_ownerId),"),
     );
     expect(first, contains('principals: const [RlsPrincipal.owner],'));
-    expect(first, isNot(contains('required after')));
     expect(first, isNot(contains('required offset')));
     expect(first, isNot(contains('final SyncQueue syncQueue')));
     expect(first, isNot(contains('WorkItemLocalDatabase')));
@@ -728,10 +724,7 @@ void main() {
         '      _engine.watchRawId(id.value);',
       ),
     );
-    expect(
-      dart,
-      contains('LocalEntityQueryCache<Profile>(source: engine.all)'),
-    );
+    expect(dart, contains('LocalEntityQueryCache.bounded('));
     expect(dart, isNot(contains('LocalEntityQueryCache.database')));
     expect(
       dart,

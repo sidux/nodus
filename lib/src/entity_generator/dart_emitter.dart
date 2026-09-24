@@ -121,18 +121,16 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
       ..writeln('    mutable: ${spec.isPatchable(field)},')
       ..writeln('    sinceProtocolVersion: ${field.sinceProtocolVersion},')
       ..writeln(
-        '    renamedFrom: ${field.renamedFrom == null ? 'null' : _dartLiteral(field.renamedFrom)},',
+        '    renamedFrom: ${field.renamedFrom == null ? 'null' : dartLiteral(field.renamedFrom)},',
       )
       ..writeln('    hasProtocolDefault: ${field.defaultValue != null},')
       ..writeln(
-        '    protocolDefault: ${_dartLiteral(field.persistedDefaultValue)},',
+        '    protocolDefault: ${dartLiteral(field.persistedDefaultValue)},',
       )
       ..writeln(
         '    inCreatePayload: ${field.inCreatePayload && !spec.isCommandOnly(field)},',
       )
-      ..writeln(
-        '    conflictPolicy: FieldConflictPolicy.${_conflict(field.conflict)},',
-      )
+      ..writeln('    conflictPolicy: ConflictStrategy.${field.conflict.name},')
       ..writeln(
         '    normalization: FieldNormalization.${field.normalization.name},',
       )
@@ -163,7 +161,7 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
       }
       if (field.allowedValues.isNotEmpty) {
         buffer.writeln(
-          '      allowedValues: ${_dartLiteral(field.allowedValues)},',
+          '      allowedValues: ${dartLiteral(field.allowedValues)},',
         );
       }
       buffer.writeln('    ),');
@@ -206,7 +204,7 @@ bool _hasScalarConstraints(FieldSpec field) =>
 
 String _transitionDescriptorLiteral(FieldSpec field) {
   if (field.transitions.isEmpty) return 'const []';
-  return 'const [${field.transitions.map((transition) => 'EntityValueTransition(${_dartLiteral(transition.fromWire)}, ${_dartLiteral(transition.toWire)})').join(', ')}]';
+  return 'const [${field.transitions.map((transition) => 'EntityValueTransition(${dartLiteral(transition.fromWire)}, ${dartLiteral(transition.toWire)})').join(', ')}]';
 }
 
 void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
@@ -221,7 +219,7 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
     final name = spec.indexName(index);
     final condition = _indexConditionSql(spec, index);
     buffer.writeln(
-      '@TableIndex.sql(${_dartLiteral('CREATE ${unique}INDEX $name '
+      '@TableIndex.sql(${dartLiteral('CREATE ${unique}INDEX $name '
       'ON ${spec.tableName} (${terms.join(', ')})$condition')})',
     );
   }
@@ -281,31 +279,31 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
         "'CHECK (${field.columnName} <= ${field.maxValue})'",
     for (final field in spec.fields)
       if (field.allowedValues.isNotEmpty)
-        _dartLiteral(
+        dartLiteral(
           'CHECK (${field.columnName} IN '
           '(${field.allowedValues.map(_sqlStringLiteral).join(', ')}))',
         ),
     for (final field in spec.fields)
       if (field.greaterThan case final otherName?)
-        _dartLiteral(
+        dartLiteral(
           'CHECK (${field.columnName} > '
           '${spec.fields.singleWhere((candidate) => candidate.name == otherName).columnName})',
         ),
     for (final field in spec.fields)
       if (field.greaterThanOrEqual case final otherName?)
-        _dartLiteral(
+        dartLiteral(
           'CHECK (${field.columnName} >= '
           '${spec.fields.singleWhere((candidate) => candidate.name == otherName).columnName})',
         ),
     for (final field in spec.fields)
       if (field.requires case final otherName?)
-        _dartLiteral(
+        dartLiteral(
           'CHECK (${field.columnName} IS NULL OR '
           '${spec.fields.singleWhere((candidate) => candidate.name == otherName).columnName} IS NOT NULL)',
         ),
     for (final field in spec.fields)
       if (field.notEqualTo case final otherName?)
-        _dartLiteral(
+        dartLiteral(
           'CHECK (${field.columnName} IS NULL OR '
           '${spec.fields.singleWhere((candidate) => candidate.name == otherName).columnName} IS NULL OR '
           '${field.columnName} <> '
@@ -313,12 +311,12 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
         ),
     for (final field in spec.fields)
       if (field.isEnum)
-        _dartLiteral(
+        dartLiteral(
           'CHECK (${field.columnName} IN '
           '(${field.enumWireValues.map(_sqlStringLiteral).join(', ')}))',
         ),
     for (final group in spec.exclusiveFieldGroups)
-      _dartLiteral(
+      dartLiteral(
         'CHECK (${group.fields.map((name) {
           final column = spec.fields.singleWhere((field) => field.name == name).columnName;
           return 'CASE WHEN $column IS NOT NULL THEN 1 ELSE 0 END';
@@ -329,7 +327,7 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
         if (variantCase.presenceField case final presence?)
           for (final parameter in variantCase.constructorParameters)
             if (parameter.fieldName != presence.name)
-              _dartLiteral(
+              dartLiteral(
                 variantCase.fields
                             .singleWhere(
                               (field) => field.name == parameter.fieldName,
@@ -345,7 +343,7 @@ void _emitDriftSchema(StringBuffer buffer, EntitySpec spec) {
     for (final index in spec.compoundIndexes.where(
       (candidate) => candidate.unordered,
     ))
-      _dartLiteral(
+      dartLiteral(
         'CHECK (${spec.ownerField.columnName} <> '
         '${spec.fields.singleWhere((field) => field.name == index.fields.single).columnName})',
       ),
@@ -461,7 +459,7 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
         ..writeln(
           '      field: ${spec.className}Fields._${field.name}Persistence,',
         )
-        ..writeln('      value: ${_dartLiteral(value)},')
+        ..writeln('      value: ${dartLiteral(value)},')
         ..writeln('    ),');
     }
     buffer
@@ -539,7 +537,7 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
         buffer
           ..writeln('      condition: EntityUniqueConstraintCondition(')
           ..writeln("        fieldName: '${condition.field}',")
-          ..writeln('        values: ${_dartLiteral(condition.values)},')
+          ..writeln('        values: ${dartLiteral(condition.values)},')
           ..writeln('      ),');
       }
       buffer.writeln('    ),');
@@ -565,10 +563,10 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
     for (final action in spec.guardedActions) {
       buffer
         ..writeln('      ActionDefinition(')
-        ..writeln('        fieldNames: ${_dartLiteral(action.targetFields)},')
+        ..writeln('        fieldNames: ${dartLiteral(action.targetFields)},')
         ..writeln(
           '        guardedFieldNames: '
-          '${_dartLiteral(spec.guardedActionFields(action))},',
+          '${dartLiteral(spec.guardedActionFields(action))},',
         )
         ..writeln('        assignments: [');
       for (final assignment in action.assignments) {
@@ -578,15 +576,15 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
         final constructor = switch (assignment.kind) {
           ActionValueKind.literal =>
             'ActionAssignment.literal('
-                '${_dartLiteral(field.name)}, '
-                '${_dartLiteral(field.isEnum ? snakeCase(assignment.literal! as String) : assignment.literal)})',
+                '${dartLiteral(field.name)}, '
+                '${dartLiteral(field.isEnum ? snakeCase(assignment.literal! as String) : assignment.literal)})',
           ActionValueKind.clockNow =>
             'ActionAssignment.clockNow('
-                '${_dartLiteral(field.name)}'
+                '${dartLiteral(field.name)}'
                 '${field.nullable ? ', firstWriteOnly: true' : ''})',
           ActionValueKind.clear =>
             'ActionAssignment.clear('
-                '${_dartLiteral(field.name)})',
+                '${dartLiteral(field.name)})',
         };
         buffer.writeln('          $constructor,');
       }
@@ -599,8 +597,8 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
       ..writeln('    fixedInitialValues: {');
     for (final field in initialFields) {
       buffer.writeln(
-        '      ${_dartLiteral(field.name)}: '
-        '${_dartLiteral(field.persistedDefaultValue)},',
+        '      ${dartLiteral(field.name)}: '
+        '${dartLiteral(field.persistedDefaultValue)},',
       );
     }
     buffer
@@ -810,6 +808,15 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
     )
     ..writeln()
     ..writeln('  @override')
+    ..writeln('  bool get isRemoved => ${spec.deletedAtField!.name} != null;')
+    ..write(
+      spec.hasArchivableCapability
+          ? '  @override\n'
+                '  bool get isArchived => '
+                '${spec.archivedAtField!.name} != null;\n'
+          : '',
+    )
+    ..writeln('  @override')
     ..writeln('  ${spec.className} get generatedDomain => this;')
     ..writeln('  @override')
     ..writeln(
@@ -950,6 +957,33 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
   }
   for (final action in spec.actions) {
     _emitAction(buffer, spec, action);
+  }
+  if (spec.workflowMembership case final workflow?) {
+    final status = workflow.status;
+    buffer
+      ..writeln('  @override')
+      ..writeln(
+        '  LocalId<${workflow.targetClassName}> get targetId => '
+        '${workflow.targetReference.name};',
+      )
+      ..writeln('  @override')
+      ..writeln(
+        '  bool get isPending => ${status.name} == ${status.dartType}.pending;',
+      )
+      ..writeln('  @override')
+      ..writeln(
+        '  bool get isAccepted => '
+        '${status.name} == ${status.dartType}.accepted;',
+      );
+  }
+  if (spec.hasWorkflowMembershipCapability) {
+    buffer
+      ..writeln('  @override')
+      ..writeln('  Future<void> end() =>')
+      ..writeln(
+        '      ${spec.ownerField.name}.value == '
+        '_mutationSink.authenticatedPrincipalId ? revoke() : decline();',
+      );
   }
   for (final command in spec.commands) {
     _emitCommand(buffer, spec, command);
@@ -1695,19 +1729,9 @@ void _emitDraftActionInvocation(
   ActionSpec action, {
   required String indent,
 }) {
-  final positional = action.parameters
-      .where((parameter) => !parameter.named)
-      .map((parameter) => parameter.name)
-      .join(', ');
-  final named = action.parameters
-      .where((parameter) => parameter.named)
-      .map((parameter) => '${parameter.name}: ${parameter.name}')
-      .join(', ');
-  final arguments = [
-    if (positional.isNotEmpty) positional,
-    if (named.isNotEmpty) named,
-  ].join(', ');
-  buffer.writeln('$indent await current.${action.methodName}($arguments);');
+  buffer.writeln(
+    '$indent await current.${action.methodName}(${action.forwardedArguments});',
+  );
 }
 
 void _emitDetachedRecordFactory(StringBuffer buffer, EntitySpec spec) {
@@ -1880,8 +1904,7 @@ void _emitFieldValidation(
     );
   }
   if (field.allowedValues.isNotEmpty) {
-    final values =
-        'const {${field.allowedValues.map(_dartLiteral).join(', ')}}';
+    final values = 'const {${field.allowedValues.map(dartLiteral).join(', ')}}';
     final comparison = '!($values).contains($constrainedValue)';
     emitCheck(
       field.nullable ? '$constrainedValue != null && $comparison' : comparison,
@@ -2234,6 +2257,7 @@ void _emitAction(StringBuffer buffer, EntitySpec spec, ActionSpec action) {
     ..writeln('  @override')
     ..writeln('  Future<void> ${action.methodName}($parameters) {')
     ..writeln('    final _generatedActionTime = _clock.nowUtc();');
+  _emitActionGuard(buffer, spec, action);
   for (final field in targetFields) {
     final assignment = assignments[field.name];
     buffer.writeln(
@@ -2398,6 +2422,7 @@ void _emitOrderScopeTransferAction(
     ..writeln('  @override')
     ..writeln('  Future<void> ${action.methodName}($parameters) async {')
     ..writeln('    final _generatedActionTime = _clock.nowUtc();');
+  _emitActionGuard(buffer, spec, action);
   for (final field in targetFields) {
     buffer
       ..writeln(
@@ -2638,7 +2663,7 @@ String _actionAssignmentExpression(
 ) => switch (assignment.kind) {
   ActionValueKind.literal when field.isEnum =>
     '${field.dartType.replaceAll('?', '')}.${assignment.literal}',
-  ActionValueKind.literal => _dartLiteral(assignment.literal),
+  ActionValueKind.literal => dartLiteral(assignment.literal),
   ActionValueKind.clockNow =>
     field.nullable
         ? 'old${field.capitalizedName} ?? _generatedActionTime'
@@ -2803,6 +2828,21 @@ void _emitTransitionValidation(
     ..writeln('    }');
 }
 
+void _emitActionGuard(StringBuffer buffer, EntitySpec spec, ActionSpec action) {
+  final call = action.guardCall('');
+  if (call == null) return;
+  buffer
+    ..writeln('    if (!$call) {')
+    ..writeln('      return Future<void>.error(')
+    ..writeln('        const ActionGuardException(')
+    ..writeln("          entityType: '${spec.className}',")
+    ..writeln("          action: '${action.methodName}',")
+    ..writeln("          guard: '${action.guard!.name}',")
+    ..writeln('        ),')
+    ..writeln('      );')
+    ..writeln('    }');
+}
+
 void _emitDeletedMutationGuard(
   StringBuffer buffer,
   EntitySpec spec, {
@@ -2833,7 +2873,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   final cachesAuthenticatedOwner =
       spec.canCreatePublicly && spec.ownershipReferenceFields.isEmpty;
   buffer
-    ..writeln('final class $setName {')
+    ..writeln('final class $setName${_workflowMembershipSetClause(spec)} {')
     ..writeln('  $setName($engineType engine)')
     ..writeln('      : _engine = engine,');
   if (cachesAuthenticatedOwner) {
@@ -2841,21 +2881,19 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       '        _ownerId = engine.authenticatedOwnerId<${spec.ownerClassName}>(),',
     );
   }
-  if (spec.cardinality == Cardinality.bounded) {
-    buffer.writeln(
-      '        _queries = LocalEntityQueryCache<${spec.className}>('
-      'source: engine.all);',
-    );
-  } else {
-    buffer
-      ..writeln('        _queries = LocalEntityQueryCache.database(')
-      ..writeln('          loader: (spec, {required after, required limit}) =>')
-      ..writeln('              engine.loadQueryPage(')
-      ..writeln('                spec, after: after, limit: limit,')
-      ..writeln('              ),')
-      ..writeln('          invalidations: engine.projectionChanges,')
-      ..writeln('        );');
-  }
+  final bounded = spec.cardinality == Cardinality.bounded;
+  buffer
+    ..writeln(
+      '        _queries = LocalEntityQueryCache.${bounded ? 'bounded' : 'database'}(',
+    )
+    ..write(bounded ? '          source: engine.all,\n' : '')
+    ..writeln('          loader: (spec, {required after, required limit}) =>')
+    ..writeln('              engine.loadQueryPage(')
+    ..writeln('                spec, after: after, limit: limit,')
+    ..writeln('              ),')
+    ..writeln('          invalidations: engine.projectionChanges,')
+    ..writeln('          resolveLoaded: engine.loadedRawId,')
+    ..writeln('        );');
   buffer
     ..writeln('  final $engineType _engine;')
     ..writeln('  final LocalEntityQueryCache<${spec.className}> _queries;');
@@ -2950,11 +2988,15 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   );
   if (spec.hierarchyParentField case final parentField?) {
     buffer
-      ..writeln('  Future<EntityBulkMutationResult> removeHierarchy(')
+      ..writeln(
+        '  Future<EntityBulkMutationResult<${spec.className}>> removeHierarchy(',
+      )
       ..writeln('    LocalId<${spec.className}> rootId, {')
+      ..writeln('    Iterable<LocalId<${spec.className}>>? only,')
       ..writeln('    int pageSize = 100,')
       ..writeln('  }) => _engine.runGeneratedHierarchyAction(')
       ..writeln('    rootId: rootId.value,')
+      ..writeln('    onlyIds: only?.map((id) => id.value),')
       ..writeln("    parentFieldName: '${parentField.name}',")
       ..writeln('    childrenFirst: true,')
       ..writeln('    pageSize: pageSize,')
@@ -2972,11 +3014,15 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln('      return true;')
       ..writeln('    },')
       ..writeln('  );')
-      ..writeln('  Future<EntityBulkMutationResult> restoreHierarchy(')
+      ..writeln(
+        '  Future<EntityBulkMutationResult<${spec.className}>> restoreHierarchy(',
+      )
       ..writeln('    LocalId<${spec.className}> rootId, {')
+      ..writeln('    Iterable<LocalId<${spec.className}>>? only,')
       ..writeln('    int pageSize = 100,')
       ..writeln('  }) => _engine.runGeneratedHierarchyAction(')
       ..writeln('    rootId: rootId.value,')
+      ..writeln('    onlyIds: only?.map((id) => id.value),')
       ..writeln("    parentFieldName: '${parentField.name}',")
       ..writeln('    requireActiveExternalParent: true,')
       ..writeln('    pageSize: pageSize,')
@@ -2996,12 +3042,17 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln('  );');
     if (spec.hasArchivableCapability) {
       buffer
-        ..writeln('  Future<EntityBulkMutationResult> setHierarchyArchived(')
+        ..writeln(
+          '  Future<EntityBulkMutationResult<${spec.className}>> '
+          'setHierarchyArchived(',
+        )
         ..writeln('    LocalId<${spec.className}> rootId, {')
         ..writeln('    required bool archived,')
+        ..writeln('    Iterable<LocalId<${spec.className}>>? only,')
         ..writeln('    int pageSize = 100,')
         ..writeln('  }) => _engine.runGeneratedHierarchyAction(')
         ..writeln('    rootId: rootId.value,')
+        ..writeln('    onlyIds: only?.map((id) => id.value),')
         ..writeln("    parentFieldName: '${parentField.name}',")
         ..writeln('    childrenFirst: archived,')
         ..writeln('    pageSize: pageSize,')
@@ -3214,7 +3265,36 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
     ..writeln('        (where ?? EntityPredicate<${spec.className}>.all()),')
     ..writeln('    orderBy: orderBy,')
     ..writeln('    pageSize: pageSize,')
-    ..writeln('  ));');
+    ..writeln('  ));')
+    ..writeln('  EntityColumnQuery<${spec.className}, V> column<V>(')
+    ..writeln('    EntityField<${spec.className}, V> field, {')
+    ..writeln('    EntityPredicate<${spec.className}>? where,')
+    ..writeln(
+      '    TombstoneVisibility tombstones = TombstoneVisibility.exclude,',
+    );
+  if (spec.hasArchivableCapability) {
+    buffer.writeln(
+      '    ArchiveVisibility archives = ArchiveVisibility.exclude,',
+    );
+  }
+  if (spec.activeField != null) {
+    buffer.writeln(
+      '    InactiveVisibility inactive = InactiveVisibility.exclude,',
+    );
+  }
+  buffer
+    ..writeln('  }) => _engine.column(')
+    ..writeln('    field,')
+    ..writeln('    where: _tombstonePredicate(tombstones) &');
+  if (spec.hasArchivableCapability) {
+    buffer.writeln('        _archivePredicate(archives) &');
+  }
+  if (spec.activeField != null) {
+    buffer.writeln('        _inactivePredicate(inactive) &');
+  }
+  buffer
+    ..writeln('        (where ?? EntityPredicate<${spec.className}>.all()),')
+    ..writeln('  );');
   if (spec.hasOrderedCapability) {
     buffer.writeln(
       '  EntityOrder<${spec.className}> get canonicalOrder => '
@@ -3560,6 +3640,26 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
   }
 }
 
+/// Whether the set can implement `WorkflowMembershipSet`: invitations need
+/// only the target and member.
+bool _implementsWorkflowMembershipSet(EntitySpec spec) {
+  final workflow = spec.workflowMembership;
+  if (workflow == null || !spec.canBeginMutationDraftEdit) return false;
+  return !spec.createParameters.any(
+    (field) =>
+        field != workflow.targetReference &&
+        field != workflow.participant &&
+        field.name != EntityConventions.deletedAtFieldName,
+  );
+}
+
+String _workflowMembershipSetClause(EntitySpec spec) {
+  if (!_implementsWorkflowMembershipSet(spec)) return '';
+  final workflow = spec.workflowMembership!;
+  return ' implements WorkflowMembershipSet<${spec.className}, '
+      '${workflow.targetClassName}, ${spec.ownerClassName}>';
+}
+
 void _emitWorkflowMembershipMethods(StringBuffer buffer, EntitySpec spec) {
   final workflow = spec.workflowMembership;
   if (workflow == null || !spec.canBeginMutationDraftEdit) return;
@@ -3627,6 +3727,43 @@ void _emitWorkflowMembershipMethods(StringBuffer buffer, EntitySpec spec) {
     ..writeln('    await updated.reinvite();')
     ..writeln('    return updated;')
     ..writeln('  }');
+  if (!_implementsWorkflowMembershipSet(spec)) return;
+  final entity = spec.className;
+  final fields = '${entity}Fields';
+  final owner = spec.ownerField;
+  buffer
+    ..writeln('  @override')
+    ..writeln('  EntityList<$entity> forTarget(')
+    ..writeln('    ${target.dartType} targetId, {')
+    ..writeln('    EntityOrder<$entity>? orderBy,')
+    ..writeln('  }) => EntityList(')
+    ..writeln(
+      '    query(where: $fields.${target.name}.equals(targetId), '
+      'orderBy: orderBy),',
+    )
+    ..writeln('  );')
+    ..writeln('  @override')
+    ..writeln('  EntityList<$entity> visibleTo(')
+    ..writeln('    ${owner.dartType} accountId, {')
+    ..writeln('    EntityOrder<$entity>? orderBy,')
+    ..writeln('  }) => EntityList(')
+    ..writeln('    query(')
+    ..writeln(
+      '      where: $fields.${owner.name}.equals(accountId) | '
+      '$fields.${participant.name}.equals(accountId),',
+    )
+    ..writeln('      orderBy: orderBy,')
+    ..writeln('    ),')
+    ..writeln('  );')
+    ..writeln('  @override')
+    ..writeln(
+      '  Future<$entity> invite(${target.dartType} targetId, '
+      '${participant.dartType} memberId) =>',
+    )
+    ..writeln(
+      '      inviteOrReuse(${target.name}: targetId, '
+      '${participant.name}: memberId);',
+    );
 }
 
 void _emitCreateOrGetMethods(
@@ -4295,7 +4432,7 @@ String _upperCamelIdentifier(String value) =>
     '${value[0].toUpperCase()}${value.substring(1)}';
 
 String _domainIndexConditionLiteral(FieldSpec field, Object value) {
-  if (!field.isEnum) return _dartLiteral(value);
+  if (!field.isEnum) return dartLiteral(value);
   final index = field.enumWireValues.indexOf(value as String);
   if (index < 0) {
     throw StateError('Unknown `${field.name}` index-condition value `$value`.');
@@ -4507,24 +4644,10 @@ String _queryFieldClass(FieldSpec field) {
   };
 }
 
-String _conflict(ConflictStrategy conflict) => switch (conflict) {
-  ConflictStrategy.localWins => 'localWins',
-  ConflictStrategy.serverWins => 'serverWins',
-};
-
-String _dartLiteral(Object? value) => switch (value) {
-  null => 'null',
-  final String value => "'${value.replaceAll("'", "\\'")}'",
-  final bool value => value.toString(),
-  final num value => value.toString(),
-  final List<Object?> value => 'const [${value.map(_dartLiteral).join(', ')}]',
-  _ => throw StateError('Unsupported Dart default: $value'),
-};
-
 String _domainDefaultLiteral(FieldSpec field) => domainDefaultLiteral(field);
 
 String _sqliteDefaultLiteral(FieldSpec field) =>
-    _dartLiteral(field.persistedDefaultValue);
+    dartLiteral(field.persistedDefaultValue);
 
 String _sqlStringLiteral(String value) => "'${value.replaceAll("'", "''")}'";
 

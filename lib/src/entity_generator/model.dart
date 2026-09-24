@@ -1,4 +1,5 @@
 import 'package:nodus/nodus.dart';
+import 'package:nodus/src/wire_name.dart';
 
 enum SqlType { text, uuid, boolean, integer, real, date, timestampWithTimeZone }
 
@@ -14,6 +15,7 @@ final class EntitySpec {
     this.hasOrderedCapability = false,
     this.hasSoftDeletableCapability = false,
     this.hasArchivableCapability = false,
+    this.hasWorkflowMembershipCapability = false,
     this.hasActivityTrackedCapability = false,
     this.activitySubjectClassName,
     this.activityActorClassName,
@@ -46,6 +48,7 @@ final class EntitySpec {
   final bool hasOrderedCapability;
   final bool hasSoftDeletableCapability;
   final bool hasArchivableCapability;
+  final bool hasWorkflowMembershipCapability;
   final bool hasActivityTrackedCapability;
   final String? activitySubjectClassName;
   final String? activityActorClassName;
@@ -64,9 +67,6 @@ final class EntitySpec {
   final List<String>? orderScopeFieldNames;
   final SyncMode? syncModeOverride;
   final SyncTargetSpec? syncTargetOverride;
-
-  String get sourceBaseName =>
-      inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
 
   String get setAccessor => setAccessorOverride ?? lowerCamelCase(tableName);
 
@@ -508,6 +508,7 @@ final class EntitySpec {
       hasOrderedCapability: hasOrderedCapability,
       hasSoftDeletableCapability: hasSoftDeletableCapability,
       hasArchivableCapability: hasArchivableCapability,
+      hasWorkflowMembershipCapability: hasWorkflowMembershipCapability,
       hasActivityTrackedCapability: hasActivityTrackedCapability,
       activitySubjectClassName: activitySubjectClassName,
       activityActorClassName: activityActorClassName,
@@ -894,17 +895,28 @@ String domainDefaultLiteral(FieldSpec field) {
 
 String dartLiteral(Object? value) => switch (value) {
   null => 'null',
-  final String value => "'${value.replaceAll("'", "\\'")}'",
+  final String value => "'${_escapeDartString(value)}'",
   final bool value => value.toString(),
+  final double value when !value.isFinite => throw StateError(
+    'Non-finite numbers have no Dart or SQL literal: $value',
+  ),
   final num value => value.toString(),
   final List<Object?> value => 'const [${value.map(dartLiteral).join(', ')}]',
   _ => throw StateError('Unsupported Dart default: $value'),
 };
 
+String _escapeDartString(String value) => value
+    .replaceAll(r'\', r'\\')
+    .replaceAll(r'$', r'\$')
+    .replaceAll("'", r"\'")
+    .replaceAll('\n', r'\n')
+    .replaceAll('\r', r'\r');
+
 /// Concise public type name for a create-capable inverse relationship.
 ///
-/// An inverse such as `goalMembers` on `Goal` becomes `GoalMembers`, while an
-/// unrelated inverse such as `subgoals` remains `GoalSubgoals`.
+/// An inverse such as `projectMembers` on `Project` becomes `ProjectMembers`,
+/// while an unrelated inverse such as `subprojects` remains
+/// `ProjectSubprojects`.
 String generatedInverseCreationTypeName(FieldSpec field) {
   final reference = field.reference!;
   final targetName = reference.targetClassName;
@@ -1065,9 +1077,6 @@ final class EntityGraphSpec {
         ? entities.first.ownerClassName
         : separatelyOwned.first.ownerClassName;
   }
-
-  String get sourceBaseName =>
-      inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
 }
 
 enum DurableWorkBindingKind { process, projection }
@@ -1346,17 +1355,45 @@ final class ActionSpec {
     required this.parameters,
     required this.assignments,
     this.bulk = false,
+    this.guard,
   });
 
   final String methodName;
   final List<ActionParameterSpec> parameters;
   final List<ActionAssignmentSpec> assignments;
   final bool bulk;
+  final ActionGuardSpec? guard;
+
+  /// The call arguments forwarding this action's parameters.
+  String get forwardedArguments => [
+    for (final parameter in parameters)
+      parameter.named ? '${parameter.name}: ${parameter.name}' : parameter.name,
+  ].join(', ');
+
+  /// The guard invocation on [receiver], or null for an unguarded action.
+  String? guardCall(String receiver) => switch (guard) {
+    null => null,
+    ActionGuardSpec(:final name, isGetter: true) => '$receiver$name',
+    ActionGuardSpec(:final name, :final forwardsParameters) =>
+      '$receiver$name(${forwardsParameters ? forwardedArguments : ''})',
+  };
 
   List<String> get targetFields => [
     ...parameters.map((parameter) => parameter.fieldName),
     ...assignments.map((assignment) => assignment.fieldName),
   ];
+}
+
+final class ActionGuardSpec {
+  const ActionGuardSpec({
+    required this.name,
+    required this.isGetter,
+    required this.forwardsParameters,
+  });
+
+  final String name;
+  final bool isGetter;
+  final bool forwardsParameters;
 }
 
 final class ActionParameterSpec {
@@ -1739,18 +1776,7 @@ final class CollaborationSpec {
   }
 }
 
-String snakeCase(String input) {
-  return input
-      .replaceAllMapped(
-        RegExp('([A-Z]+)([A-Z][a-z])'),
-        (match) => '${match.group(1)}_${match.group(2)}',
-      )
-      .replaceAllMapped(
-        RegExp('([a-z0-9])([A-Z])'),
-        (match) => '${match.group(1)}_${match.group(2)}',
-      )
-      .toLowerCase();
-}
+String snakeCase(String input) => wireNameOf(input);
 
 String pluralSnakeCase(String className) => _pluralize(snakeCase(className));
 

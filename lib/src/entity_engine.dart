@@ -153,7 +153,7 @@ final class EntityFieldDescriptor {
   final EntityFieldKind kind;
   final bool nullable;
   final bool mutable;
-  final FieldConflictPolicy conflictPolicy;
+  final ConflictStrategy conflictPolicy;
   final int sinceProtocolVersion;
   final String? renamedFrom;
   final bool hasProtocolDefault;
@@ -1892,6 +1892,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
   final Map<String, int> _identityRetainCounts = <String, int>{};
   final Set<String> _pendingWorkIdentityPins = <String>{};
   final Set<String> _persistedIds = <String>{};
+  final Map<(Zone, EntityPredicate<E>), Map<String, List<Completer<QueryRow?>>>>
+  _pendingIdLoads = {};
+  static const _maxBatchedIds = 500;
   final StreamController<EntityProjectionChange<E>> _projectionChanges =
       StreamController<EntityProjectionChange<E>>.broadcast(sync: true);
   final SyncAdapter? _backend;
@@ -1948,6 +1951,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
   Stream<EntityProjectionChange<E>> get projectionChanges =>
       _projectionChanges.stream;
 
+  /// The loaded identity for [id], without loading or retaining it.
+  E? loadedRawId(String id) => _identityMap[id]?.generatedDomain;
+
   Future<EntityLookupLease<E>?> loadRawId(
     String id, {
     bool refresh = false,
@@ -1993,7 +1999,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
               final removed = _identityMap.remove(id);
               if (removed != null) _all.remove(removed.generatedDomain);
             });
-            _notifyProjectionChanged(EntityProjectionChange<E>.membership());
+            _notifyProjectionChanged(
+              EntityProjectionChange<E>.membership(entityIds: {id}),
+            );
             return null;
           }
         } else {
@@ -2005,12 +2013,18 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
             ),
           );
           row = await _projectionRow(id);
+          // Queries test loaded identities against their predicates, so a
+          // loaded identity must hold the merged state before the change.
+          if (row != null && _identityMap.containsKey(id)) _materializeRow(row);
           if (resolved.inserted) {
-            _notifyProjectionChanged(EntityProjectionChange<E>.membership());
+            _notifyProjectionChanged(
+              EntityProjectionChange<E>.membership(entityIds: {id}),
+            );
           } else if (resolved.changedFieldNames.isNotEmpty) {
             _notifyProjectionChanged(
               EntityProjectionChange<E>._fromFieldNames(
                 resolved.changedFieldNames,
+                entityIds: {id},
               ),
             );
           }
@@ -2058,6 +2072,13 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     return true;
   }
 
+  /// Selects [field] from this entity's rows matching [where] for use in
+  /// [EntityField.isInColumn]. Generated sets add lifecycle visibility.
+  EntityColumnQuery<E, V> column<V>(
+    EntityField<E, V> field, {
+    required EntityPredicate<E> where,
+  }) => EntityColumnQuery._(this, field, where);
+
   Future<EntityQueryPage<E>> loadQueryPage(
     EntityQuerySpec<E> spec, {
     required EntityQueryCursor? after,
@@ -2066,18 +2087,25 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     if (limit <= 0) {
       throw RangeError.value(limit, 'limit', 'Must be greater than zero.');
     }
-    final variables = <Variable>[];
-    final predicate = _predicateSql(spec.where, variables);
-    final continuation = _continuationSql(spec.orderBy, after, variables);
-    final ordering = _orderSql(spec.orderBy);
-    variables.add(Variable.withInt(limit + 1));
-    final rows = await database
-        .customSelect(
-          'select * from ${descriptor.tableName} where ($predicate) '
-          'and ($continuation) order by $ordering limit ?',
-          variables: variables,
-        )
-        .get();
+    final exact = after == null ? _exactIdSelection(spec.where) : null;
+    final List<QueryRow> rows;
+    if (exact != null) {
+      final row = await _loadBatchedById(exact.rest, exact.id);
+      rows = [?row];
+    } else {
+      final variables = <Variable>[];
+      final predicate = _predicateSql(spec.where, variables);
+      final continuation = _continuationSql(spec.orderBy, after, variables);
+      final ordering = _orderSql(spec.orderBy);
+      variables.add(Variable.withInt(limit + 1));
+      rows = await database
+          .customSelect(
+            'select * from ${descriptor.tableName} where ($predicate) '
+            'and ($continuation) order by $ordering limit ?',
+            variables: variables,
+          )
+          .get();
+    }
     if (_closing) {
       return EntityQueryPage<E>(items: const <Never>[], hasMore: false);
     }
@@ -2114,10 +2142,11 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
   /// committed one page at a time, then released before the next page. This
   /// keeps unbounded hierarchies out of application memory while preserving
   /// canonical entity identity and graph transaction semantics.
-  Future<EntityBulkMutationResult> runGeneratedHierarchyAction({
+  Future<EntityBulkMutationResult<E>> runGeneratedHierarchyAction({
     required String rootId,
     required String parentFieldName,
     required Future<bool> Function(E entity) action,
+    Iterable<String>? onlyIds,
     bool childrenFirst = false,
     bool requireActiveExternalParent = false,
     int pageSize = 100,
@@ -2194,8 +2223,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       );
     }
 
+    final only = onlyIds?.toSet();
     var matched = 0;
-    var changed = 0;
+    final changedIds = <LocalId<E>>[];
     var offset = 0;
     while (true) {
       final rows = await database
@@ -2224,11 +2254,14 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           )
           .get();
       if (rows.isEmpty) break;
-      final entities = <E>[];
+      final entities = <(String, E)>[];
       final retainedIds = <String>[];
       for (final row in rows) {
+        if (only != null && !only.contains(row.read<String>(idColumn))) {
+          continue;
+        }
         final entity = _materializeRow(row);
-        entities.add(entity.generatedDomain);
+        entities.add((entity.generatedEntityId, entity.generatedDomain));
         if (descriptor.cardinality == Cardinality.unbounded) {
           _retainIdentity(entity.generatedEntityId);
           retainedIds.add(entity.generatedEntityId);
@@ -2236,9 +2269,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       }
       try {
         await graphCoordinator.transaction(() async {
-          for (final entity in entities) {
+          for (final (id, entity) in entities) {
             matched++;
-            if (await action(entity)) changed++;
+            if (await action(entity)) changedIds.add(LocalId<E>(id));
           }
         });
       } finally {
@@ -2249,13 +2282,89 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       offset += rows.length;
       if (rows.length < pageSize) break;
     }
-    return EntityBulkMutationResult(matched: matched, changed: changed);
+    return EntityBulkMutationResult(matched: matched, changedIds: changedIds);
   }
 
   String _predicateSql(
     EntityPredicate<E> predicate,
     List<Variable> variables,
   ) => predicate._accept(_EntityPredicateSqlWriter(this, variables));
+
+  /// Splits a predicate that pins one entity ID, such as a generated lookup,
+  /// into that ID and the remaining conditions.
+  ({EntityPredicate<E> rest, String id})? _exactIdSelection(
+    EntityPredicate<E> where,
+  ) {
+    final parts =
+        where is _LogicalEntityPredicate<E> &&
+            where.operator == EntityLogicalOperator.and
+        ? where.operands
+        : [where];
+    String? id;
+    var rest = EntityPredicate<E>.all();
+    for (final part in parts) {
+      final pinned = id == null ? part._accept(_ExactIdReader<E>()) : null;
+      if (pinned != null) {
+        id = pinned;
+      } else {
+        rest = rest & part;
+      }
+    }
+    return id == null ? null : (rest: rest, id: id);
+  }
+
+  /// Exact-ID loads requested in the same microtask share one `id in (...)`
+  /// query per remaining predicate, so a list of rows that each look up one
+  /// entity costs one database read. Batches never span zones, so a load
+  /// inside a database transaction still reads inside that transaction.
+  Future<QueryRow?> _loadBatchedById(EntityPredicate<E> rest, String id) {
+    final completer = Completer<QueryRow?>();
+    final key = (Zone.current, rest);
+    final batch = _pendingIdLoads.putIfAbsent(key, () {
+      scheduleMicrotask(() => _flushIdLoads(key));
+      return {};
+    });
+    (batch[id] ??= []).add(completer);
+    return completer.future;
+  }
+
+  Future<void> _flushIdLoads((Zone, EntityPredicate<E>) key) async {
+    final batch = _pendingIdLoads.remove(key)!;
+    final rest = key.$2;
+    try {
+      final rowsById = <String, QueryRow>{};
+      final allIds = batch.keys.toList(growable: false);
+      for (var start = 0; start < allIds.length; start += _maxBatchedIds) {
+        final ids = allIds.sublist(
+          start,
+          math.min(start + _maxBatchedIds, allIds.length),
+        );
+        final variables = <Variable>[];
+        final predicate = _predicateSql(rest, variables);
+        variables.addAll(ids.map(Variable.withString));
+        final rows = await database
+            .customSelect(
+              'select * from ${descriptor.tableName} where ($predicate) '
+              'and ${EntityConventions.idColumnName} in '
+              '(${List.filled(ids.length, '?').join(', ')})',
+              variables: variables,
+            )
+            .get();
+        for (final row in rows) {
+          rowsById[row.read<String>(EntityConventions.idColumnName)] = row;
+        }
+      }
+      for (final MapEntry(key: id, value: waiters) in batch.entries) {
+        for (final waiter in waiters) {
+          waiter.complete(rowsById[id]);
+        }
+      }
+    } catch (error, stackTrace) {
+      for (final waiter in batch.values.expand((waiters) => waiters)) {
+        waiter.completeError(error, stackTrace);
+      }
+    }
+  }
 
   String _comparisonSql(
     String fieldName,
@@ -2776,7 +2885,6 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
   }
 
   Future<void> _initialize() async {
-    await database.customSelect('select 1').get();
     await _refreshPendingIdentityPins();
     if (descriptor.cardinality == Cardinality.bounded) {
       final rows = await database
@@ -3037,13 +3145,22 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
   ) {
     if (mutation.operation == SyncMutationOperation.create ||
         mutation.operation == SyncMutationOperation.delete) {
-      return EntityProjectionChange<E>.membership();
+      return EntityProjectionChange<E>.membership(
+        entityIds: {mutation.entityId},
+      );
     }
     if (mutation.scopeStatePatches.isNotEmpty) {
-      return EntityProjectionChange<E>._fromFieldNames({
-        for (final statePatch in mutation.scopeStatePatches)
-          for (final entry in statePatch.patch.entries) entry.key,
-      });
+      return EntityProjectionChange<E>._fromFieldNames(
+        {
+          for (final statePatch in mutation.scopeStatePatches)
+            for (final entry in statePatch.patch.entries) entry.key,
+        },
+        entityIds: {
+          mutation.entityId,
+          for (final statePatch in mutation.scopeStatePatches)
+            statePatch.identity.rawId,
+        },
+      );
     }
     final persistsEntityState =
         mutation.kind != PushSyncWorkKind.semanticCommand ||
@@ -3052,6 +3169,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     if (mutation.patch.isEmpty) return null;
     return EntityProjectionChange<E>._fromFieldNames(
       mutation.patch.entries.map((entry) => entry.key),
+      entityIds: {mutation.entityId},
     );
   }
 
@@ -3112,19 +3230,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     final existing =
         mutation.kind == PushSyncWorkKind.statePatch &&
             descriptor is! ActivityTrackedEntityDescriptor
-        ? await database
-              .customSelect(
-                "select * from local_entity_sync_work where direction = 'push' "
-                "and sync_target = ? and kind = 'statePatch' "
-                "and entity_type = ? and entity_id = ? "
-                "and status = 'pending' order by id desc limit 1",
-                variables: [
-                  Variable.withString(target.wireName),
-                  Variable.withString(descriptor.entityType),
-                  Variable.withString(mutation.entityId),
-                ],
-              )
-              .getSingleOrNull()
+        ? await _coalescablePushRow(target, mutation)
         : null;
     final currentProtocolVersion = descriptor.protocolVersion;
     final operation = _operationForMutation(
@@ -3173,6 +3279,53 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         existing.read<int>('id'),
       ],
     );
+  }
+
+  /// The newest pending patch for this entity that [mutation] may merge into.
+  ///
+  /// Merging moves the new change back to that row, so it is refused when any
+  /// later queued work touches the same entity or creates an entity the new
+  /// patch references: the change must stay ordered after that work.
+  Future<QueryRow?> _coalescablePushRow(
+    SyncTargetId target,
+    LocalEntityMutation mutation,
+  ) async {
+    final candidate = await database
+        .customSelect(
+          "select * from local_entity_sync_work where direction = 'push' "
+          "and sync_target = ? and kind = 'statePatch' "
+          "and entity_type = ? and entity_id = ? "
+          "and status = 'pending' order by id desc limit 1",
+          variables: [
+            Variable.withString(target.wireName),
+            Variable.withString(descriptor.entityType),
+            Variable.withString(mutation.entityId),
+          ],
+        )
+        .getSingleOrNull();
+    if (candidate == null) return null;
+    final patch = (mutation.syncPatch ?? mutation.patch).toWire();
+    final dependencies = {
+      mutation.entityId,
+      for (final field in descriptor.fields)
+        if (field.reference != null)
+          if (patch[field.name] case final String referencedId) referencedId,
+    }.toList();
+    final laterDependency = await database
+        .customSelect(
+          "select 1 from local_entity_sync_work where direction = 'push' "
+          "and sync_target = ? and id > ? "
+          "and status in ('pending', 'processing', 'retryableFailure') "
+          "and entity_id in (${List.filled(dependencies.length, '?').join(', ')}) "
+          'limit 1',
+          variables: [
+            Variable.withString(target.wireName),
+            Variable.withInt(candidate.read<int>('id')),
+            for (final id in dependencies) Variable.withString(id),
+          ],
+        )
+        .getSingleOrNull();
+    return laterDependency == null ? candidate : null;
   }
 
   bool _mustPreserveCreateBoundary(
@@ -3315,11 +3468,14 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       final change =
           projection.fields == null ||
               !_identityMap.containsKey(projection.entityId)
-          ? EntityProjectionChange<E>.membership()
+          ? EntityProjectionChange<E>.membership(
+              entityIds: {projection.entityId},
+            )
           : projection.changedFieldNames.isEmpty
           ? null
           : EntityProjectionChange<E>._fromFieldNames(
               projection.changedFieldNames,
+              entityIds: {projection.entityId},
             );
       _applyRejectedProjection(projection);
       if (change != null) {
@@ -3774,8 +3930,11 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       change.isUnknown
           ? EntityProjectionChange<E>.unknown()
           : change.affectsMembership
-          ? EntityProjectionChange<E>.membership()
-          : EntityProjectionChange<E>._fromFieldNames(change._fieldNames),
+          ? EntityProjectionChange<E>.membership(entityIds: change.entityIds)
+          : EntityProjectionChange<E>._fromFieldNames(
+              change._fieldNames,
+              entityIds: change.entityIds,
+            ),
     );
   }
 }
@@ -4092,7 +4251,9 @@ final class LocalEntityGraphCoordinator
         'asynchronous flow.',
       );
     }
-    await _mutationCoordinator.flush();
+    // Earlier failures belong to their own callers; this transaction only
+    // waits for their durable order and reports its own batch.
+    await _mutationCoordinator.flush(throwOnError: false);
     if (_transactionBuffer != null) {
       throw StateError(
         'The entity graph acquired another transaction while waiting to '
@@ -4127,7 +4288,7 @@ final class LocalEntityGraphCoordinator
       _transactionOwnerToken = null;
     }
     _mutationCoordinator._scheduleBatch(pending);
-    await _mutationCoordinator.flush();
+    if (pending.isNotEmpty) (await pending.last.committed).throwIfFailed();
     return result;
   }
 
@@ -4324,35 +4485,17 @@ final class LocalEntityGraphCoordinator
   Future<SyncWorkItem?> claimNext(SyncTargetId target) async {
     final item = await database.transaction(() async {
       final now = clock.nowUtc();
-      final row = await database
-          .customSelect(
-            "select * from local_entity_sync_work where "
-            "sync_target = ? and "
-            "((status in ('pending', 'retryableFailure') "
-            "and (next_attempt_at is null or next_attempt_at <= ?)) "
-            "or (status = 'processing' "
-            "and (lease_until is null or lease_until <= ?))) "
-            "order by case when direction = 'pull' then 0 else 1 end, id limit 1",
-            variables: [
-              Variable.withString(target.wireName),
-              Variable.withInt(now.millisecondsSinceEpoch),
-              Variable.withInt(now.millisecondsSinceEpoch),
-            ],
-          )
-          .getSingleOrNull();
-      if (row == null) return null;
-      var item = _syncWorkItemFromRow(
-        row,
-        _descriptorFor,
-        _targetForWire,
-        definition,
-        status: SyncWorkStatus.processing,
-      );
+      QueryRow? row;
+      SyncWorkItem? item;
+      do {
+        row =
+            await _claimablePullRow(target, now) ??
+            await _claimablePushHead(target, now);
+        if (row == null) return null;
+        item = await _decodeClaimOrQuarantine(row);
+      } while (item == null);
+      final claimedId = row.read<int>('id');
       if (item case PushSyncWorkItem pushItem) {
-        pushItem = pushItem.upcast(
-          _engineFor(pushItem.operation.identity.entityType).descriptor,
-        );
-        item = pushItem;
         if (pushItem.operation.protocolVersion !=
             row.read<int>('protocol_version')) {
           await database.customStatement(
@@ -4371,13 +4514,102 @@ final class LocalEntityGraphCoordinator
         "lease_until = ?, next_attempt_at = null where id = ?",
         [
           now.add(const Duration(seconds: 30)).millisecondsSinceEpoch,
-          row.read<int>('id'),
+          claimedId,
         ],
       );
       return item;
     });
     await refreshSyncWork();
     return item;
+  }
+
+  /// Decodes a claimed row, or rejects it with a diagnostic when it can no
+  /// longer be decoded so one corrupt or obsolete row cannot wedge its lane.
+  Future<SyncWorkItem?> _decodeClaimOrQuarantine(QueryRow row) async {
+    try {
+      final item = _syncWorkItemFromRow(
+        row,
+        _descriptorFor,
+        _targetForWire,
+        definition,
+        status: SyncWorkStatus.processing,
+      );
+      if (item case PushSyncWorkItem pushItem) {
+        return pushItem.upcast(
+          _engineFor(pushItem.operation.identity.entityType).descriptor,
+          definition: definition,
+        );
+      }
+      return item;
+    } on Object catch (error, stackTrace) {
+      await database.customStatement(
+        "update local_entity_sync_work set status = 'rejected', "
+        'lease_until = null, next_attempt_at = null, last_error_code = ?, '
+        'last_error_detail = ? where id = ?',
+        ['undecodable_operation', '$error', row.read<int>('id')],
+      );
+      _recordDiagnosticSafely(
+        diagnostics,
+        BackgroundTaskFailureDiagnostic(
+          occurredAt: clock.nowUtc(),
+          task: LocalEntityBackgroundTask.synchronization,
+          target: null,
+          entityType: row.read<String>('entity_type'),
+          error: error,
+          stackTrace: stackTrace,
+        ),
+      );
+      return null;
+    }
+  }
+
+  Future<QueryRow?> _claimablePullRow(SyncTargetId target, DateTime now) =>
+      database
+          .customSelect(
+            "select * from local_entity_sync_work where "
+            "sync_target = ? and direction = 'pull' and "
+            "((status in ('pending', 'retryableFailure') "
+            "and (next_attempt_at is null or next_attempt_at <= ?)) "
+            "or (status = 'processing' "
+            "and (lease_until is null or lease_until <= ?))) "
+            "order by id limit 1",
+            variables: [
+              Variable.withString(target.wireName),
+              Variable.withInt(now.millisecondsSinceEpoch),
+              Variable.withInt(now.millisecondsSinceEpoch),
+            ],
+          )
+          .getSingleOrNull();
+
+  /// Pushes are strictly first-in-first-out per target: a later create,
+  /// patch, or command may depend on an earlier one, so work never overtakes
+  /// a head that is backing off or leased by another isolate. A blocked head
+  /// schedules a wake for the moment it becomes claimable.
+  Future<QueryRow?> _claimablePushHead(
+    SyncTargetId target,
+    DateTime now,
+  ) async {
+    final head = await database
+        .customSelect(
+          "select * from local_entity_sync_work where "
+          "sync_target = ? and direction = 'push' and "
+          "status in ('pending', 'retryableFailure', 'processing') "
+          "order by id limit 1",
+          variables: [Variable.withString(target.wireName)],
+        )
+        .getSingleOrNull();
+    if (head == null) return null;
+    final blockedUntil = head.read<String>('status') == 'processing'
+        ? head.readNullable<int>('lease_until')
+        : head.readNullable<int>('next_attempt_at');
+    if (blockedUntil == null || blockedUntil <= now.millisecondsSinceEpoch) {
+      return head;
+    }
+    _scheduleSyncWake(
+      target,
+      DateTime.fromMillisecondsSinceEpoch(blockedUntil, isUtc: true),
+    );
+    return null;
   }
 
   @override
@@ -4418,7 +4650,13 @@ final class LocalEntityGraphCoordinator
     _durableSubscriptions[binding.name] = [
       for (final trigger in binding.triggers)
         trigger.listen(
-          (_) => _requestDurableEnqueue(binding),
+          (event) => _requestDurableEnqueue(
+            binding,
+            binding.kind == GeneratedDurableWorkKind.process &&
+                    event is EntityProjectionChange
+                ? event.entityIds
+                : null,
+          ),
           onError: (Object error, StackTrace stackTrace) {
             _recordDiagnosticSafely(
               diagnostics,
@@ -4472,14 +4710,25 @@ final class LocalEntityGraphCoordinator
     }
   }
 
-  void _requestDurableEnqueue(GeneratedDurableWorkBinding binding) {
+  void _requestDurableEnqueue(
+    GeneratedDurableWorkBinding binding, [
+    Set<String>? entityIds,
+  ]) {
     _runInBackground(
-      _enqueueDurableWork(binding).then((_) => _requestDurableWork(binding)),
+      _enqueueDurableWork(
+        binding,
+        entityIds,
+      ).then((_) => _requestDurableWork(binding)),
       task: _durableBackgroundTask(binding.kind),
     );
   }
 
-  Future<void> _enqueueDurableWork(GeneratedDurableWorkBinding binding) async {
+  /// Records pending work for [binding], accumulating the changed
+  /// [entityIds]; null means the whole source set.
+  Future<void> _enqueueDurableWork(
+    GeneratedDurableWorkBinding binding, [
+    Set<String>? entityIds,
+  ]) async {
     if (_closed) return;
     final direction = binding.kind.name;
     final target = '$direction:${binding.name}';
@@ -4494,10 +4743,19 @@ final class LocalEntityGraphCoordinator
             ],
           )
           .getSingleOrNull();
-      final generation = existing == null
-          ? 1
-          : _durableGeneration(existing.read<String>('payload')) + 1;
-      final payload = jsonEncode({'generation': generation});
+      final previous = existing == null
+          ? null
+          : _DurableWorkPayload.decode(existing.read<String>('payload'));
+      final previousIds = previous?.entityIds;
+      final pendingIds = previous == null
+          ? entityIds
+          : previousIds == null || entityIds == null
+          ? null
+          : {...previousIds, ...entityIds};
+      final payload = _DurableWorkPayload(
+        generation: (previous?.generation ?? 0) + 1,
+        entityIds: pendingIds,
+      ).encode();
       if (existing == null) {
         final now = clock.nowUtc().millisecondsSinceEpoch;
         await database.customStatement(
@@ -4618,12 +4876,14 @@ final class LocalEntityGraphCoordinator
         row.read<int>('id'),
       ],
     );
+    final payload = _DurableWorkPayload.decode(row.read<String>('payload'));
     return _GeneratedDurableWorkClaim(
       rowId: row.read<int>('id'),
-      generation: _durableGeneration(row.read<String>('payload')),
+      generation: payload.generation,
       context: GeneratedDurableWorkContext(
         operationId: parseSyncOperationId(row.read<String>('operation_id')),
         attempt: row.read<int>('attempt_count') + 1,
+        entityIds: payload.entityIds,
       ),
     );
   });
@@ -4637,7 +4897,9 @@ final class LocalEntityGraphCoordinator
           )
           .getSingleOrNull();
       if (current == null) return;
-      final generation = _durableGeneration(current.read<String>('payload'));
+      final generation = _DurableWorkPayload.decode(
+        current.read<String>('payload'),
+      ).generation;
       if (generation == claim.generation) {
         await database.customStatement(
           'delete from local_entity_sync_work where id = ?',
@@ -4847,16 +5109,16 @@ final class LocalEntityGraphCoordinator
         )
         .get();
     if (request != _syncWorkRefreshRequest || _closed) return;
-    final items = rows
-        .map(
-          (row) => _syncWorkItemFromRow(
-            row,
-            _descriptorFor,
-            _targetForWire,
-            definition,
-          ),
-        )
-        .toList(growable: false);
+    final items = <SyncWorkItem>[];
+    for (final row in rows) {
+      try {
+        items.add(
+          _syncWorkItemFromRow(row, _descriptorFor, _targetForWire, definition),
+        );
+      } on Object {
+        // An undecodable row is quarantined with a diagnostic when claimed.
+      }
+    }
     runInAction(() {
       _syncWork
         ..clear()
@@ -4891,6 +5153,13 @@ final class LocalEntityGraphCoordinator
         )
         .getSingleOrNull();
     if (existing != null) return;
+    // Pulls are cursor-idempotent, so a new pull supersedes a terminal one
+    // instead of accumulating beside it.
+    await database.customStatement(
+      "delete from local_entity_sync_work where direction = 'pull' "
+      "and sync_target = ? and status in ('rejected', 'conflict')",
+      [target.wireName],
+    );
     await database.customStatement(
       'insert into local_entity_sync_work '
       '(sync_target, direction, kind, status, entity_type, entity_id, operation_id, '
@@ -5057,11 +5326,14 @@ final class LocalEntityGraphCoordinator
           final notification = projection.ignored
               ? null
               : projection.inserted
-              ? const EntityProjectionChange<dynamic>.membership()
+              ? EntityProjectionChange<dynamic>.membership(
+                  entityIds: {change.identity.rawId},
+                )
               : projection.changedFieldNames.isEmpty
               ? null
               : EntityProjectionChange<dynamic>._fromFieldNames(
                   projection.changedFieldNames,
+                  entityIds: {change.identity.rawId},
                 );
           if (notification != null) {
             notifications.update(
@@ -5153,11 +5425,14 @@ final class LocalEntityGraphCoordinator
         final projectionChange = entry.$3.ignored
             ? null
             : change.isRevocation || entry.$3.inserted
-            ? const EntityProjectionChange<dynamic>.membership()
+            ? EntityProjectionChange<dynamic>.membership(
+                entityIds: {change.identity.rawId},
+              )
             : entry.$3.changedFieldNames.isEmpty
             ? null
             : EntityProjectionChange<dynamic>._fromFieldNames(
                 entry.$3.changedFieldNames,
+                entityIds: {change.identity.rawId},
               );
         if (projectionChange != null) {
           changes.update(
@@ -5445,7 +5720,7 @@ final class LocalEntityGraphCoordinator
       }
     }
     await release(() async => _queueUpdateSubscription?.cancel());
-    await release(flushLocal);
+    await release(() => _mutationCoordinator.flush(throwOnError: false));
     for (final worker in _workers.values) {
       await release(worker.waitForIdle);
     }
@@ -5522,12 +5797,34 @@ final class _GeneratedDurableWorkClaim {
   final GeneratedDurableWorkContext context;
 }
 
-int _durableGeneration(String payload) {
-  final decoded = jsonDecode(payload);
-  if (decoded case {'generation': final int generation} when generation > 0) {
-    return generation;
+/// Durable-work row payload: a change generation plus the accumulated source
+/// entity IDs, where absent IDs mean the whole source set.
+final class _DurableWorkPayload {
+  const _DurableWorkPayload({required this.generation, this.entityIds});
+
+  factory _DurableWorkPayload.decode(String payload) {
+    final decoded = jsonDecode(payload);
+    if (decoded case {'generation': final int generation} when generation > 0) {
+      final ids = decoded['entityIds'];
+      if (ids == null) return _DurableWorkPayload(generation: generation);
+      if (ids case final List<Object?> list
+          when list.every((id) => id is String)) {
+        return _DurableWorkPayload(
+          generation: generation,
+          entityIds: list.cast<String>().toSet(),
+        );
+      }
+    }
+    throw const FormatException('Invalid generated durable-work payload.');
   }
-  throw const FormatException('Invalid generated durable-work payload.');
+
+  final int generation;
+  final Set<String>? entityIds;
+
+  String encode() => jsonEncode({
+    'generation': generation,
+    if (entityIds case final ids?) 'entityIds': ids.toList()..sort(),
+  });
 }
 
 LocalEntityBackgroundTask _durableBackgroundTask(
@@ -6005,6 +6302,14 @@ final class _EntityPredicateSqlWriter<
       );
 
   @override
+  String visitColumnMembership<V>(
+    EntityField<E, V> field,
+    EntityColumnQuery<Object?, Object?> column,
+  ) =>
+      '${engine._field(field.name).columnName} in '
+      '(${column._selectSql(variables)})';
+
+  @override
   String visitText<V>(
     EntityField<E, V> field,
     String expected, {
@@ -6024,6 +6329,56 @@ final class _EntityPredicateSqlWriter<
     final separator = operator == EntityLogicalOperator.and ? ' and ' : ' or ';
     return '(${operands.map((part) => part._accept(this)).join(separator)})';
   }
+}
+
+/// Reads the raw ID pinned by an `id.equals(...)` predicate.
+final class _ExactIdReader<E> implements _EntityPredicateVisitor<E, String?> {
+  const _ExactIdReader();
+
+  @override
+  String? visitComparison<V>(
+    EntityField<E, V> field,
+    EntityComparison comparison,
+    V expected,
+  ) {
+    if (field.name != EntityConventions.idFieldName ||
+        comparison != EntityComparison.equal) {
+      return null;
+    }
+    return switch (field.encode(expected)) {
+      final String id => id,
+      _ => null,
+    };
+  }
+
+  @override
+  String? visitAll() => null;
+
+  @override
+  String? visitNull<V>(EntityField<E, V?> field, {required bool expectsNull}) =>
+      null;
+
+  @override
+  String? visitMembership<V>(EntityField<E, V> field, List<V> expected) => null;
+
+  @override
+  String? visitColumnMembership<V>(
+    EntityField<E, V> field,
+    EntityColumnQuery<Object?, Object?> column,
+  ) => null;
+
+  @override
+  String? visitText<V>(
+    EntityField<E, V> field,
+    String expected, {
+    required bool caseSensitive,
+  }) => null;
+
+  @override
+  String? visitLogical(
+    EntityLogicalOperator operator,
+    List<EntityPredicate<E>> operands,
+  ) => null;
 }
 
 final class _DriftEntityQueryCursor implements EntityQueryCursor {

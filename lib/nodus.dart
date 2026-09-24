@@ -3,6 +3,7 @@
 library;
 
 export 'src/annotations.dart';
+export 'src/wire_name.dart' show EnumWireName, EnumWireNames;
 
 import 'dart:async';
 import 'dart:collection';
@@ -194,6 +195,9 @@ abstract interface class OwnedBy<Self, Owner> {
 
   DateTime? get deletedAt;
 
+  /// Whether the entity is tombstoned locally or by its sync authority.
+  bool get isRemoved;
+
   ServerVersion get serverVersion;
 
   GeneratedEntityAccess<Self> get generatedAccess;
@@ -214,11 +218,13 @@ abstract interface class SoftDeletable {
 
 /// Adds generated archive lifecycle and default active-list visibility.
 ///
-/// The generator supplies [archivedAt], both lifecycle actions, the owner-scoped
+/// The generator supplies [archivedAt], [isArchived], both lifecycle actions, the owner-scoped
 /// index, local/remote persistence, synchronization, and typed archive-aware
 /// query surfaces. Entity declarations must not repeat any of those members.
 abstract interface class Archivable {
   DateTime? get archivedAt;
+
+  bool get isArchived;
 
   Future<void> archive();
 
@@ -276,9 +282,17 @@ abstract interface class Collaborative<Principal> {
 /// application to keep domain-specific labels without repeating persistence
 /// infrastructure.
 abstract interface class WorkflowMembership<Target, Principal, Status> {
+  LocalId<Target> get targetId;
+
+  LocalId<Principal> get ownerId;
+
   LocalId<Principal> get memberId;
 
   Status get status;
+
+  bool get isPending;
+
+  bool get isAccepted;
 
   Future<void> accept();
 
@@ -287,6 +301,27 @@ abstract interface class WorkflowMembership<Target, Principal, Status> {
   Future<void> revoke();
 
   Future<void> reinvite();
+
+  /// Ends this membership from the authenticated account's side: the owner
+  /// revokes it and the member declines it. Any other account is rejected
+  /// with an `EntityAuthorizationException`.
+  Future<void> end();
+}
+
+/// The generated entity set of a [WorkflowMembership] entity, so shared
+/// collaboration code can list and invite without knowing the target type.
+abstract interface class WorkflowMembershipSet<M, Target, Principal> {
+  /// Memberships of one target.
+  EntityList<M> forTarget(LocalId<Target> targetId, {EntityOrder<M>? orderBy});
+
+  /// Memberships the account owns or is invited to.
+  EntityList<M> visibleTo(
+    LocalId<Principal> accountId, {
+    EntityOrder<M>? orderBy,
+  });
+
+  /// Invites [memberId], reusing a declined or revoked membership.
+  Future<M> invite(LocalId<Target> targetId, LocalId<Principal> memberId);
 }
 
 /// One stable semantic operation recorded in a generated activity trail.
@@ -433,6 +468,22 @@ final class ReadOnlyObservableList<E> extends IterableBase<E> {
   int get length => _source.length;
 
   E operator [](int index) => _source[index];
+}
+
+/// A declared `@Action(guard: ...)` rejected a call before any change.
+final class ActionGuardException implements Exception {
+  const ActionGuardException({
+    required this.entityType,
+    required this.action,
+    required this.guard,
+  });
+
+  final String entityType;
+  final String action;
+  final String guard;
+
+  @override
+  String toString() => '$entityType.$action: rejected by `$guard`.';
 }
 
 final class EntityValidationException implements Exception {
@@ -1143,10 +1194,16 @@ final class GeneratedDurableWorkContext {
   const GeneratedDurableWorkContext({
     required this.operationId,
     required this.attempt,
+    this.entityIds,
   });
 
   final SyncOperationId operationId;
   final int attempt;
+
+  /// Raw IDs of the source entities whose changes triggered this run, or null
+  /// when the whole source set must be processed (first run after opening, or
+  /// a change whose entities are unknown).
+  final Set<String>? entityIds;
 }
 
 /// Internal binding emitted from an [EntityProcess] or [SecondaryProjection].
@@ -1221,8 +1278,6 @@ final class SystemClock implements Clock {
   DateTime nowUtc() => DateTime.now().toUtc();
 }
 
-enum MutationOrigin { local, hydration, remote, rollback, migration }
-
 enum SyncDirection { push, pull }
 
 enum SyncWorkKind { statePatch, semanticCommand, pullChanges }
@@ -1288,6 +1343,9 @@ sealed class EntityPredicate<E> {
 
   Set<String> get _fieldNames;
 
+  /// Other entity selections this predicate reads through column subqueries.
+  Iterable<_EntityQueryDependency> get _dependencies => const [];
+
   R _accept<R>(_EntityPredicateVisitor<E, R> visitor);
 }
 
@@ -1303,6 +1361,11 @@ abstract interface class _EntityPredicateVisitor<E, R> {
   R visitNull<V>(EntityField<E, V?> field, {required bool expectsNull});
 
   R visitMembership<V>(EntityField<E, V> field, List<V> expected);
+
+  R visitColumnMembership<V>(
+    EntityField<E, V> field,
+    EntityColumnQuery<Object?, Object?> column,
+  );
 
   R visitText<V>(
     EntityField<E, V> field,
@@ -1395,6 +1458,93 @@ final class _MembershipEntityPredicate<E, V> extends EntityPredicate<E> {
 
   @override
   int get hashCode => Object.hash(field, _stableKey);
+}
+
+/// A selected column of another entity's query, used as the right-hand side
+/// of [EntityField.isInColumn].
+///
+/// Generated sets create it through `column(...)` with the same lifecycle
+/// visibility as their queries, so a relationship filter such as "tasks with
+/// one of these tags" is one SQL subquery instead of an intermediate link-list
+/// query whose identifiers feed a second query.
+final class EntityColumnQuery<L, V> {
+  EntityColumnQuery._(this._engine, this.field, this.where);
+
+  final LocalEntityEngine<L, TypedGeneratedEntityRecord<L>> _engine;
+  final EntityField<L, V> field;
+  final EntityPredicate<L> where;
+
+  String _selectSql(List<Variable> variables) {
+    final column = _engine._field(field.name).columnName;
+    return 'select $column from ${_engine.descriptor.tableName} '
+        'where (${_engine._predicateSql(where, variables)}) '
+        'and $column is not null';
+  }
+
+  String get _stableKey =>
+      '${_engine.descriptor.entityType}.${field.name}'
+      '[${where._stableKey}]';
+
+  Iterable<_EntityQueryDependency> get _dependencies => [
+    _EntityQueryDependency(_engine.projectionChanges, {
+      field.name,
+      ...where._fieldNames,
+    }),
+    ...where._dependencies,
+  ];
+
+  @override
+  bool operator ==(Object other) =>
+      other is EntityColumnQuery<L, V> &&
+      identical(_engine, other._engine) &&
+      field == other.field &&
+      where == other.where;
+
+  @override
+  int get hashCode => Object.hash(_engine, field, where);
+}
+
+final class _EntityQueryDependency {
+  const _EntityQueryDependency(this.changes, this.fieldNames);
+
+  final Stream<EntityProjectionChange<Object?>> changes;
+  final Set<String> fieldNames;
+}
+
+final class _ColumnMembershipEntityPredicate<E, V> extends EntityPredicate<E> {
+  const _ColumnMembershipEntityPredicate(this.field, this.column);
+
+  final EntityField<E, V> field;
+  final EntityColumnQuery<Object?, Object?> column;
+
+  /// Column subqueries read another table, so they are evaluated only by the
+  /// database-backed query loader.
+  @override
+  bool test(E entity) => throw UnsupportedError(
+    'A column subquery predicate can only be evaluated by a database query.',
+  );
+
+  @override
+  String get _stableKey => '${field.name}:inColumn(${column._stableKey})';
+
+  @override
+  Set<String> get _fieldNames => {field.name};
+
+  @override
+  Iterable<_EntityQueryDependency> get _dependencies => column._dependencies;
+
+  @override
+  R _accept<R>(_EntityPredicateVisitor<E, R> visitor) =>
+      visitor.visitColumnMembership(field, column);
+
+  @override
+  bool operator ==(Object other) =>
+      other is _ColumnMembershipEntityPredicate<E, V> &&
+      field == other.field &&
+      column == other.column;
+
+  @override
+  int get hashCode => Object.hash(field, column);
 }
 
 final class _AllEntityPredicate<E> extends EntityPredicate<E> {
@@ -1559,6 +1709,11 @@ final class _LogicalEntityPredicate<E> extends EntityPredicate<E> {
   };
 
   @override
+  Iterable<_EntityQueryDependency> get _dependencies => [
+    for (final operand in operands) ...operand._dependencies,
+  ];
+
+  @override
   R _accept<R>(_EntityPredicateVisitor<E, R> visitor) =>
       visitor.visitLogical(operator, operands);
 
@@ -1618,6 +1773,23 @@ sealed class EntityField<E, V> extends EntityFieldReference<E> {
   /// Matches any of the provided typed values. Empty input matches nothing.
   EntityPredicate<E> isIn(Iterable<V> expected) =>
       _MembershipEntityPredicate(this, expected.map(canonicalize));
+
+  /// Matches values selected by another entity's query, such as the task IDs
+  /// of the tag links for one tag:
+  ///
+  /// ```dart
+  /// TaskFields.id.isInColumn(
+  ///   entityGraph.taskTagLinks.column(
+  ///     TaskTagLinkFields.taskId,
+  ///     where: TaskTagLinkFields.taskTagId.equals(tagId),
+  ///   ),
+  /// )
+  /// ```
+  ///
+  /// The selection runs as a SQL subquery, and queries using it refresh when
+  /// the selected entity's rows change.
+  EntityPredicate<E> isInColumn(EntityColumnQuery<Object?, V?> column) =>
+      _ColumnMembershipEntityPredicate(this, column);
 
   @override
   bool operator ==(Object other) =>
@@ -1994,24 +2166,36 @@ final class EntityProjectionChange<E> {
   const EntityProjectionChange.unknown()
     : isUnknown = true,
       affectsMembership = true,
-      _fieldNames = const {};
+      _fieldNames = const {},
+      entityIds = null;
 
-  const EntityProjectionChange.membership()
+  const EntityProjectionChange.membership({this.entityIds})
     : isUnknown = false,
       affectsMembership = true,
       _fieldNames = const {};
 
-  EntityProjectionChange.fields(Iterable<EntityFieldReference<E>> fields)
-    : this._fromFieldNames(fields.map((field) => field.name));
+  EntityProjectionChange.fields(
+    Iterable<EntityFieldReference<E>> fields, {
+    Iterable<String>? entityIds,
+  }) : this._fromFieldNames(
+         fields.map((field) => field.name),
+         entityIds: entityIds,
+       );
 
-  EntityProjectionChange._fromFieldNames(Iterable<String> fields)
-    : isUnknown = false,
-      affectsMembership = false,
-      _fieldNames = Set.unmodifiable(fields);
+  EntityProjectionChange._fromFieldNames(
+    Iterable<String> fields, {
+    Iterable<String>? entityIds,
+  }) : isUnknown = false,
+       affectsMembership = false,
+       _fieldNames = Set.unmodifiable(fields),
+       entityIds = entityIds == null ? null : Set.unmodifiable(entityIds);
 
   final bool isUnknown;
   final bool affectsMembership;
   final Set<String> _fieldNames;
+
+  /// Raw IDs of the changed entities, or null when they are not known.
+  final Set<String>? entityIds;
 
   bool affectsFields(Iterable<String> fieldNames) {
     if (isUnknown || affectsMembership) return true;
@@ -2023,13 +2207,18 @@ final class EntityProjectionChange<E> {
     if (isUnknown || other.isUnknown) {
       return EntityProjectionChange<E>.unknown();
     }
+    final ids = entityIds;
+    final otherIds = other.entityIds;
+    final mergedIds = ids == null || otherIds == null
+        ? null
+        : {...ids, ...otherIds};
     if (affectsMembership || other.affectsMembership) {
-      return EntityProjectionChange<E>.membership();
+      return EntityProjectionChange<E>.membership(entityIds: mergedIds);
     }
     return EntityProjectionChange<E>._fromFieldNames({
       ..._fieldNames,
       ...other._fieldNames,
-    });
+    }, entityIds: mergedIds);
   }
 
   bool _affects(EntityQuerySpec<E> spec) {
@@ -2208,6 +2397,9 @@ abstract interface class ExhaustiveEntityRead<E> {
   void dispose();
 }
 
+/// Rows requested per round trip once a read is known to be exhaustive.
+const _exhaustiveChunkSize = 500;
+
 final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
   factory LocalEntityQuery({
     required ReadOnlyObservableList<E> source,
@@ -2240,6 +2432,13 @@ final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
   late final Computed<EntityQueryState<E>> state;
 
   EntityQuerySpec<E> get spec => _controller.spec;
+
+  /// Whether [other] leases the same cached selection as this query.
+  ///
+  /// Generated sets cache queries by structural specification, so two
+  /// acquisitions of an equal selection share one computation.
+  bool sharesSelectionWith(LocalEntityQuery<E> other) =>
+      identical(_controller, other._controller);
 
   List<E> get items => state.value.items;
 
@@ -2297,7 +2496,7 @@ final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
       if (!current.hasMore) return List<E>.unmodifiable(current.items);
 
       final previousLength = current.items.length;
-      await _controller.loadNextPage();
+      await _controller.loadNextPage(limit: _exhaustiveChunkSize);
       await _controller.waitForIdle();
       final next = state.value;
       if (next case EntityQueryFailure<E>(:final error)) throw error;
@@ -2350,8 +2549,9 @@ final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
   /// separate library. Domain callers use the named operation emitted on their
   /// concrete `EntityList`; exposing arbitrary callbacks from feature code is
   /// not a supported application surface.
-  Future<EntityBulkMutationResult> runGeneratedBulkAction(
+  Future<EntityBulkMutationResult<E>> runGeneratedBulkAction(
     Future<bool> Function(E entity) action, {
+    required LocalId<E> Function(E entity) idOf,
     required Future<void> Function(FutureOr<void> Function() body)
     runTransaction,
   }) async {
@@ -2359,17 +2559,20 @@ final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
       throw StateError('Cannot mutate through a disposed entity query.');
     }
     var matched = 0;
-    var changed = 0;
+    final changedIds = <LocalId<E>>[];
     try {
       if (!_controller.databaseBacked) {
         final entities = await loadAll();
         await runTransaction(() async {
           for (final entity in entities) {
             matched++;
-            if (await action(entity)) changed++;
+            if (await action(entity)) changedIds.add(idOf(entity));
           }
         });
-        return EntityBulkMutationResult(matched: matched, changed: changed);
+        return EntityBulkMutationResult(
+          matched: matched,
+          changedIds: changedIds,
+        );
       }
 
       EntityQueryCursor? cursor;
@@ -2384,7 +2587,7 @@ final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
           await runTransaction(() async {
             for (final entity in page.items) {
               matched++;
-              if (await action(entity)) changed++;
+              if (await action(entity)) changedIds.add(idOf(entity));
             }
           });
         } finally {
@@ -2396,7 +2599,7 @@ final class LocalEntityQuery<E> implements ExhaustiveEntityRead<E> {
         }
         cursor = nextCursor;
       }
-      return EntityBulkMutationResult(matched: matched, changed: changed);
+      return EntityBulkMutationResult(matched: matched, changedIds: changedIds);
     } finally {
       dispose();
     }
@@ -2706,12 +2909,17 @@ class EntityList<E> implements ExhaustiveEntityRead<E> {
   /// `markReadAll` on its generated entity list. Each database-backed batch is
   /// retained only for its transaction, committed in canonical query order,
   /// and released before the next page is loaded.
-  Future<EntityBulkMutationResult> runGeneratedBulkAction(
+  Future<EntityBulkMutationResult<E>> runGeneratedBulkAction(
     Future<bool> Function(E entity) action, {
+    required LocalId<E> Function(E entity) idOf,
     required Future<void> Function(FutureOr<void> Function() body)
     runTransaction,
   }) {
-    return query.runGeneratedBulkAction(action, runTransaction: runTransaction);
+    return query.runGeneratedBulkAction(
+      action,
+      idOf: idOf,
+      runTransaction: runTransaction,
+    );
   }
 
   /// Infrastructure entry point used by a named generated process binding.
@@ -2731,14 +2939,21 @@ class EntityList<E> implements ExhaustiveEntityRead<E> {
 }
 
 /// Result of one generated query-owned or hierarchy lifecycle operation.
-final class EntityBulkMutationResult {
-  const EntityBulkMutationResult({
+final class EntityBulkMutationResult<E> {
+  EntityBulkMutationResult({
     required this.matched,
-    required this.changed,
-  });
+    required Iterable<LocalId<E>> changedIds,
+  }) : changedIds = List.unmodifiable(changedIds);
 
   final int matched;
-  final int changed;
+
+  /// The entities this operation changed, in the order it changed them.
+  ///
+  /// Passing them to the inverse operation's `only:` reverses exactly this
+  /// operation, leaving entities that were already in the target state alone.
+  final List<LocalId<E>> changedIds;
+
+  int get changed => changedIds.length;
 
   int get skipped => matched - changed;
 }
@@ -3241,16 +3456,70 @@ final class LocalEntityQueryCache<E> {
     : _source = source,
       _loader = null;
 
+  /// Database-backed queries reload when a projection change can affect them.
+  ///
+  /// With [resolveLoaded], a change naming entities that are loaded in memory
+  /// skips every settled query that neither lists them nor matches them after
+  /// the change, so editing one row does not reload unrelated selections.
   LocalEntityQueryCache.database({
     required EntityQueryPageLoader<E> loader,
     required Stream<EntityProjectionChange<E>> invalidations,
-  }) : _source = null,
+    E? Function(String rawId)? resolveLoaded,
+  }) : this._(
+         source: null,
+         loader: loader,
+         invalidations: invalidations,
+         resolveLoaded: resolveLoaded,
+       );
+
+  /// Serves a fully loaded bounded entity set from memory, except for
+  /// predicates with column subqueries, which read other tables through
+  /// [loader].
+  LocalEntityQueryCache.bounded({
+    required ReadOnlyObservableList<E> source,
+    required EntityQueryPageLoader<E> loader,
+    required Stream<EntityProjectionChange<E>> invalidations,
+    E? Function(String rawId)? resolveLoaded,
+  }) : this._(
+         source: source,
+         loader: loader,
+         invalidations: invalidations,
+         resolveLoaded: resolveLoaded,
+       );
+
+  LocalEntityQueryCache._({
+    required ReadOnlyObservableList<E>? source,
+    required EntityQueryPageLoader<E> loader,
+    required Stream<EntityProjectionChange<E>> invalidations,
+    required E? Function(String rawId)? resolveLoaded,
+  }) : _source = source,
        _loader = loader {
     _invalidationSubscription = invalidations.listen((change) {
+      final changed = _loadedEntities(change, resolveLoaded);
       for (final entry in _queries.entries.toList(growable: false)) {
-        if (change._affects(entry.key)) entry.value.controller.invalidate();
+        if (!change._affects(entry.key)) continue;
+        final controller = entry.value.controller;
+        if (changed != null && controller._isUnaffectedBy(changed)) continue;
+        controller.invalidate();
       }
     });
+  }
+
+  /// The changed entities in their post-change state, or null when any of
+  /// them is unknown or no longer loaded.
+  static List<E>? _loadedEntities<E>(
+    EntityProjectionChange<E> change,
+    E? Function(String rawId)? resolveLoaded,
+  ) {
+    final ids = change.entityIds;
+    if (change.isUnknown || ids == null || resolveLoaded == null) return null;
+    final entities = <E>[];
+    for (final id in ids) {
+      final entity = resolveLoaded(id);
+      if (entity == null) return null;
+      entities.add(entity);
+    }
+    return entities;
   }
 
   final ReadOnlyObservableList<E>? _source;
@@ -3263,17 +3532,7 @@ final class LocalEntityQueryCache<E> {
     if (_disposed) throw StateError('The query cache is disposed.');
     final cached = _queries.putIfAbsent(
       spec,
-      () => _CachedLocalEntityQuery(switch ((_source, _loader)) {
-        (final source?, null) => _LocalEntityQueryController.inMemory(
-          source: source,
-          spec: spec,
-        ),
-        (null, final loader?) => _LocalEntityQueryController.database(
-          loader: loader,
-          spec: spec,
-        ),
-        _ => throw StateError('Invalid query cache configuration.'),
-      }),
+      () => _CachedLocalEntityQuery(_controllerFor(spec)),
     );
     cached.leaseCount++;
     return LocalEntityQuery._(cached.controller, () => _release(spec, cached));
@@ -3322,19 +3581,33 @@ final class LocalEntityQueryCache<E> {
     controller.onCancel = subscription.cancel;
   });
 
+  _LocalEntityQueryController<E> _controllerFor(EntityQuerySpec<E> spec) {
+    final source = _source;
+    final loader = _loader;
+    if (source != null && spec.where._dependencies.isEmpty) {
+      return _LocalEntityQueryController.inMemory(source: source, spec: spec);
+    }
+    if (loader == null) {
+      throw UnsupportedError(
+        'A column subquery predicate needs a database-backed query.',
+      );
+    }
+    return _LocalEntityQueryController.database(loader: loader, spec: spec);
+  }
+
   void _release(EntityQuerySpec<E> spec, _CachedLocalEntityQuery<E> cached) {
     if (cached.leaseCount == 0) return;
     cached.leaseCount--;
     if (cached.leaseCount != 0) return;
     if (identical(_queries[spec], cached)) _queries.remove(spec);
-    cached.controller.dispose();
+    cached.dispose();
   }
 
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     for (final cached in _queries.values) {
-      cached.controller.dispose();
+      cached.dispose();
     }
     _queries.clear();
     final subscription = _invalidationSubscription;
@@ -3344,10 +3617,26 @@ final class LocalEntityQueryCache<E> {
 }
 
 final class _CachedLocalEntityQuery<E> {
-  _CachedLocalEntityQuery(this.controller);
+  _CachedLocalEntityQuery(this.controller)
+    : _dependencySubscriptions = [
+        for (final dependency in controller.spec.where._dependencies)
+          dependency.changes.listen((change) {
+            if (change.affectsFields(dependency.fieldNames)) {
+              controller.invalidate();
+            }
+          }),
+      ];
 
   final _LocalEntityQueryController<E> controller;
+  final List<StreamSubscription<Object?>> _dependencySubscriptions;
   int leaseCount = 0;
+
+  void dispose() {
+    controller.dispose();
+    for (final subscription in _dependencySubscriptions) {
+      unawaited(subscription.cancel());
+    }
+  }
 }
 
 final class _LocalEntityQueryController<E> {
@@ -3441,18 +3730,39 @@ final class _LocalEntityQueryController<E> {
     return loader(spec, after: after, limit: limit);
   }
 
-  Future<void> loadNextPage() async {
+  /// Loads [limit] more rows, one page by default. Exhaustive reads pass a
+  /// larger limit so a complete selection takes few round trips.
+  Future<void> loadNextPage({int? limit}) async {
     if (_disposed.value || !state.value.hasMore) return;
+    final count = math.max(limit ?? spec.pageSize, spec.pageSize);
     if (_loader != null) {
-      await _loadNextDatabasePage();
+      await _loadNextDatabasePage(count);
       return;
     }
-    runInAction(() => _visibleLimit.value += spec.pageSize);
+    runInAction(() => _visibleLimit.value += count);
   }
 
   void invalidate() {
     if (_disposed.value || _loader == null) return;
     unawaited(_reload());
+  }
+
+  /// Whether a settled database selection provably ignores [changed]: none of
+  /// them is listed, and none matches the predicate in its current state.
+  bool _isUnaffectedBy(List<E> changed) {
+    if (_loader == null ||
+        _activeLoad != null ||
+        _databasePhase.value != _DatabaseQueryPhase.ready ||
+        spec.where._dependencies.isNotEmpty) {
+      return false;
+    }
+    return untracked(
+      () => changed.every(
+        (entity) =>
+            !_databaseItems.any((item) => identical(item, entity)) &&
+            !spec.where.test(entity),
+      ),
+    );
   }
 
   Future<void> refresh() =>
@@ -3506,7 +3816,7 @@ final class _LocalEntityQueryController<E> {
     return _track(operation);
   }
 
-  Future<void> _loadNextDatabasePage() {
+  Future<void> _loadNextDatabasePage(int limit) {
     final active = _activeLoad;
     if (active != null) return active;
     final generation = ++_loadGeneration;
@@ -3517,7 +3827,7 @@ final class _LocalEntityQueryController<E> {
     final operation = _loadDatabasePage(
       generation: generation,
       after: _databaseCursor,
-      limit: spec.pageSize,
+      limit: limit,
       replace: false,
     );
     return _track(operation);
@@ -3781,8 +4091,6 @@ List<Object?> canonicalJsonArray(Object? source, {required String field}) {
   }
   return canonical;
 }
-
-enum FieldConflictPolicy { localWins, serverWins }
 
 /// Reserved infrastructure names shared by every synchronized entity.
 ///
@@ -4708,14 +5016,24 @@ final class PushSyncWorkItem extends SyncWorkItem {
     PushSyncWorkKind.semanticCommand => SyncWorkKind.semanticCommand,
   };
 
-  PushSyncWorkItem upcast(EntityDescriptorBase descriptor) {
+  /// Upgrades a queued operation to the descriptor's protocol version.
+  ///
+  /// Graph-level semantic commands decode only through [definition].
+  PushSyncWorkItem upcast(
+    EntityDescriptorBase descriptor, {
+    EntityGraphDefinition? definition,
+  }) {
     final wire = operation.toWire();
     final upgradedPayload = upcastSyncOperation(descriptor, wire);
     if (identical(upgradedPayload, wire)) return this;
     return PushSyncWorkItem(
       id: id,
       target: target,
-      operation: _decodePushOperation(descriptor, upgradedPayload),
+      operation: _decodePushOperation(
+        descriptor,
+        upgradedPayload,
+        definition: definition,
+      ),
       pushKind: pushKind,
       status: status,
       attemptCount: attemptCount,
@@ -6024,7 +6342,7 @@ MergeResolution mergeRemoteFields({
   required JsonMap visibleFields,
   required JsonMap pendingPatch,
   required JsonMap remoteFields,
-  required Map<String, FieldConflictPolicy> policies,
+  required Map<String, ConflictStrategy> policies,
   required ServerVersion remoteVersion,
   required ServerVersion pendingBaseVersion,
 }) {
@@ -6041,10 +6359,10 @@ MergeResolution mergeRemoteFields({
       continue;
     }
 
-    switch (policies[entry.key] ?? FieldConflictPolicy.serverWins) {
-      case FieldConflictPolicy.localWins:
+    switch (policies[entry.key] ?? ConflictStrategy.serverWins) {
+      case ConflictStrategy.localWins:
         break;
-      case FieldConflictPolicy.serverWins:
+      case ConflictStrategy.serverWins:
         if (remoteIsNewerThanPendingBase) {
           visible[entry.key] = entry.value;
           pending.remove(entry.key);
@@ -6062,7 +6380,6 @@ final class LocalPersistenceFailure {
   final Object error;
 }
 
-typedef PersistMutation = Future<void> Function(LocalEntityMutation mutation);
 typedef PersistMutationBatch =
     Future<void> Function(List<LocalEntityMutation> mutations);
 
@@ -6082,18 +6399,6 @@ final class _PendingMutation {
 }
 
 final class MutationCoordinator {
-  MutationCoordinator({
-    required PersistMutation persist,
-    this.clock = const SystemClock(),
-    this.diagnostics = const NoopLocalEntityDiagnostics(),
-  }) : _persist = ((mutations) async {
-         for (final mutation in mutations) {
-           await persist(mutation);
-         }
-       }) {
-    failures = ReadOnlyObservableList(_failures);
-  }
-
   MutationCoordinator.batches({
     required PersistMutationBatch persist,
     this.clock = const SystemClock(),

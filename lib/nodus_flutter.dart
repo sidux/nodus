@@ -165,35 +165,61 @@ final class _AccountEntityGraphInherited<G, A> extends InheritedWidget {
 
 /// Acquires one value-cached query lease and releases it with the widget.
 ///
-/// Put every value that changes the query specification in [keys]. Entity
-/// fields and predicates are generated/value-based, so feature widgets only
-/// declare business selection criteria. Set [loadAllPages] only for a bounded
-/// selector or other UI that requires the complete result; failures remain in
-/// typed query state until a refresh or invalidation.
+/// Without [keys], [acquire] runs on every build and the widget keeps its
+/// current lease while the new selection is structurally equal, so a changed
+/// predicate, order, page size, or entity graph re-acquires automatically.
+/// Pass [keys] only to re-acquire on values the selection does not capture.
+/// Set [loadAllPages] only for a bounded selector or other UI that requires
+/// the complete result; failures remain in typed query state until a refresh
+/// or invalidation.
 LocalEntityQuery<E> useEntityQuery<E>(
   LocalEntityQuery<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
   bool loadAllPages = false,
 }) {
-  final query = useMemoized(acquire, keys);
-  useEffect(() => query.dispose, [query]);
+  final query = _useSelection(acquire, (query) => query, keys);
   _useCompleteEntityQuery(query, loadAllPages: loadAllPages);
   return query;
+}
+
+/// Owns one selection lease, keyed by [keys] or by the selection itself.
+S _useSelection<S extends Object, E>(
+  S Function() acquire,
+  LocalEntityQuery<E> Function(S selection) queryOf,
+  List<Object?>? keys,
+) {
+  final current = useRef<S?>(null);
+  final S selection;
+  if (keys != null) {
+    selection = useMemoized(acquire, keys);
+  } else {
+    final candidate = acquire();
+    final previous = current.value;
+    if (previous != null &&
+        queryOf(previous).sharesSelectionWith(queryOf(candidate))) {
+      queryOf(candidate).dispose();
+      selection = previous;
+    } else {
+      selection = candidate;
+    }
+  }
+  current.value = selection;
+  useEffect(() => queryOf(selection).dispose, [selection]);
+  return selection;
 }
 
 /// Acquires one generated domain-named list and releases it with the widget.
 ///
 /// Use this with generated constructors such as `TaskList.forOwner(...)` or
-/// inverse accessors such as `goal.tasks(entityGraph)`. It has the same paging
-/// and exhaustive-loading semantics as [useEntityQuery] without exposing generic
-/// predicate construction at ordinary feature call sites.
+/// inverse accessors such as `project.tasks(entityGraph)`. It has the same
+/// paging and exhaustive-loading semantics as [useEntityQuery] without exposing
+/// generic predicate construction at ordinary feature call sites.
 L useEntityList<E, L extends EntityList<E>>(
   L Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
   bool loadAllPages = false,
 }) {
-  final list = useMemoized(acquire, keys);
-  useEffect(() => list.dispose, [list]);
+  final list = _useSelection(acquire, (list) => list.query, keys);
   _useCompleteEntityQuery(list.query, loadAllPages: loadAllPages);
   return list;
 }
@@ -203,10 +229,9 @@ L useEntityList<E, L extends EntityList<E>>(
 /// widget lifetime; no provider or detached view-model copy is introduced.
 L useEntityLookup<E, L extends EntityLookup<E>>(
   L Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
 }) {
-  final lookup = useMemoized(acquire, keys);
-  useEffect(() => lookup.dispose, [lookup]);
+  final lookup = _useSelection(acquire, (lookup) => lookup.query, keys);
   _useCompleteEntityQuery(lookup.query, loadAllPages: false);
   return lookup;
 }
@@ -214,10 +239,13 @@ L useEntityLookup<E, L extends EntityLookup<E>>(
 /// Acquires one generated existence selection and releases it with the widget.
 EntityExistence<E> useEntityExistence<E>(
   EntityExistence<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
 }) {
-  final existence = useMemoized(acquire, keys);
-  useEffect(() => existence.dispose, [existence]);
+  final existence = _useSelection(
+    acquire,
+    (existence) => existence.query,
+    keys,
+  );
   _useCompleteEntityQuery(existence.query, loadAllPages: false);
   return existence;
 }
@@ -226,10 +254,9 @@ EntityExistence<E> useEntityExistence<E>(
 /// widget.
 EntityFirst<E> useEntityFirst<E>(
   EntityFirst<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
 }) {
-  final first = useMemoized(acquire, keys);
-  useEffect(() => first.dispose, [first]);
+  final first = _useSelection(acquire, (first) => first.query, keys);
   _useCompleteEntityQuery(first.query, loadAllPages: false);
   return first;
 }
@@ -489,7 +516,7 @@ final class _EntityQueryPagingBoundaryState
 
 ObservedEntityQuery<E> useObservedEntityQuery<E>(
   LocalEntityQuery<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
   bool loadAllPages = false,
 }) {
   final query = useEntityQuery(acquire, keys: keys, loadAllPages: loadAllPages);
@@ -498,7 +525,7 @@ ObservedEntityQuery<E> useObservedEntityQuery<E>(
 
 ObservedEntityQuery<E> useObservedEntityList<E>(
   EntityList<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
   bool loadAllPages = false,
 }) {
   final list = useEntityList<E, EntityList<E>>(
@@ -568,7 +595,7 @@ final class ObservedEntityExistence<E> {
 /// Acquires and observes an existence query for the widget lifetime.
 ObservedEntityExistence<E> useObservedEntityExistence<E>(
   EntityExistence<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
 }) {
   final existence = useEntityExistence(acquire, keys: keys);
   final observed = _useObservedEntityQuery(existence.query);
@@ -595,7 +622,7 @@ final class ObservedEntityFirst<E> {
 /// Acquires and observes an explicitly ordered first-row query.
 ObservedEntityFirst<E> useObservedEntityFirst<E>(
   EntityFirst<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
 }) {
   final first = useEntityFirst(acquire, keys: keys);
   final observed = _useObservedEntityQuery(first.query);
@@ -605,7 +632,7 @@ ObservedEntityFirst<E> useObservedEntityFirst<E>(
 /// Acquires and observes one exact zero-or-one lookup for the widget lifetime.
 ObservedEntityLookup<E> useObservedEntityLookup<E extends Object>(
   EntityLookup<E> Function() acquire, {
-  List<Object?> keys = const [],
+  List<Object?>? keys,
 }) {
   final lookup = useEntityLookup<E, EntityLookup<E>>(acquire, keys: keys);
   final observed = _useObservedEntityQuery(lookup.query);
@@ -616,17 +643,15 @@ ObservedEntityLookup<E> useObservedEntityLookup<E extends Object>(
 ///
 /// The generated computed index remains the only state owner. This hook owns
 /// only the MobX reaction that rebuilds its widget when exact membership or the
-/// selected stable identity changes.
-E? useObservedEntityValue<E extends Object>(
-  E? Function() read, {
-  List<Object?> keys = const [],
-}) {
-  final currentRead = useMemoized(() => read, keys);
+/// selected stable identity changes. The reaction is re-created after every
+/// build, so it always tracks the latest [read] closure without caller keys.
+E? useObservedEntityValue<E extends Object>(E? Function() read) {
   final rebuild = useState(0);
+  rebuild.value;
   useEffect(() {
     var initial = true;
     final disposeReaction = autorun((_) {
-      currentRead();
+      read();
       if (initial) {
         initial = false;
       } else {
@@ -634,9 +659,8 @@ E? useObservedEntityValue<E extends Object>(
       }
     });
     return disposeReaction.call;
-  }, [currentRead]);
-  rebuild.value;
-  return currentRead();
+  });
+  return read();
 }
 
 ObservedEntityQuery<E> _useObservedEntityQuery<E>(LocalEntityQuery<E> query) {
@@ -706,37 +730,42 @@ useAsyncEntityMutationDraft<E, D extends EntityMutationDraft<E>>(
 }
 
 /// A text controller that writes directly into one generated draft field.
+///
+/// The controller follows [field]: a new draft gets a fresh controller seeded
+/// from its value. Only user edits write back, so an unset required field stays
+/// unset until the user types and the draft reports it as missing.
 TextEditingController useEntityDraftTextField(
   EntityDraftField<String> field, {
   String Function(String value)? normalize,
-}) {
-  final controller = useTextEditingController(text: field.valueOrNull ?? '');
-  useEffect(() {
-    void updateDraft() {
-      field.value = normalize?.call(controller.text) ?? controller.text;
-    }
-
-    controller.addListener(updateDraft);
-    updateDraft();
-    return () => controller.removeListener(updateDraft);
-  }, [controller, field, normalize]);
-  return controller;
-}
+}) => _useEntityDraftText(field, normalize);
 
 TextEditingController useEntityDraftNullableTextField(
   EntityDraftField<String?> field, {
   String? Function(String value)? normalize,
-}) {
-  final controller = useTextEditingController(text: field.valueOrNull ?? '');
+}) => _useEntityDraftText(field, normalize);
+
+TextEditingController _useEntityDraftText<T extends String?>(
+  EntityDraftField<T> field,
+  T Function(String value)? normalize,
+) {
+  final controller = useTextEditingController(
+    text: field.valueOrNull ?? '',
+    keys: [field],
+  );
+  final normalizeRef = useRef(normalize)..value = normalize;
   useEffect(() {
+    var written = controller.text;
     void updateDraft() {
-      field.value = normalize?.call(controller.text) ?? controller.text;
+      final text = controller.text;
+      if (text == written) return;
+      written = text;
+      final normalizeText = normalizeRef.value;
+      field.value = normalizeText == null ? text as T : normalizeText(text);
     }
 
     controller.addListener(updateDraft);
-    updateDraft();
     return () => controller.removeListener(updateDraft);
-  }, [controller, field, normalize]);
+  }, [controller, field]);
   return controller;
 }
 
@@ -744,17 +773,18 @@ TextEditingController useEntityDraftNullableTextField(
 final class EntityDraftValueBinding<T> {
   const EntityDraftValueBinding({required this.value, required this.set});
 
-  final T value;
+  /// The draft value, or null while the draft field is still unset.
+  final T? value;
   final ValueChanged<T> set;
 }
 
 EntityDraftValueBinding<T> useEntityDraftValue<T>(EntityDraftField<T> field) {
-  final state = useState(field.value);
+  final rebuild = useState(0);
   return EntityDraftValueBinding(
-    value: state.value,
+    value: field.valueOrNull,
     set: (value) {
       field.value = value;
-      state.value = value;
+      rebuild.value++;
     },
   );
 }
@@ -783,6 +813,7 @@ EntityActionBinding useEntityAction({ValueChanged<Object>? onError}) {
   final running = useState(false);
   final error = useState<Object?>(null);
   final errorHandler = useRef(onError)..value = onError;
+  final context = useContext();
 
   Future<void> run(Future<void> Function() action) async {
     if (running.value) return;
@@ -791,10 +822,10 @@ EntityActionBinding useEntityAction({ValueChanged<Object>? onError}) {
     try {
       await action();
     } on Object catch (caught) {
-      error.value = caught;
+      if (context.mounted) error.value = caught;
       errorHandler.value?.call(caught);
     } finally {
-      running.value = false;
+      if (context.mounted) running.value = false;
     }
   }
 

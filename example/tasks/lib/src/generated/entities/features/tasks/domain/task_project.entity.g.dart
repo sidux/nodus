@@ -222,6 +222,8 @@ final class TaskProjectRecord extends TaskProject
       : LocalMutationCompletion(commit);
 
   @override
+  bool get isRemoved => deletedAt != null;
+  @override
   TaskProject get generatedDomain => this;
   @override
   GeneratedEntityAccess<TaskProject> get generatedAccess => this;
@@ -717,7 +719,7 @@ abstract final class TaskProjectFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -739,7 +741,7 @@ abstract final class TaskProjectFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -761,7 +763,7 @@ abstract final class TaskProjectFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.trim,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 80),
@@ -785,7 +787,7 @@ abstract final class TaskProjectFields {
     protocolDefault:
         '057896044618658097711785492504343953926634992332820282019728792003956564819967',
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -808,7 +810,7 @@ abstract final class TaskProjectFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -831,7 +833,7 @@ abstract final class TaskProjectFields {
     hasProtocolDefault: true,
     protocolDefault: 0,
     inCreatePayload: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -856,7 +858,13 @@ final class TaskProjectSet {
   TaskProjectSet(LocalEntityEngine<TaskProject, TaskProjectRecord> engine)
     : _engine = engine,
       _ownerId = engine.authenticatedOwnerId<Account>(),
-      _queries = LocalEntityQueryCache<TaskProject>(source: engine.all);
+      _queries = LocalEntityQueryCache.bounded(
+        source: engine.all,
+        loader: (spec, {required after, required limit}) =>
+            engine.loadQueryPage(spec, after: after, limit: limit),
+        invalidations: engine.projectionChanges,
+        resolveLoaded: engine.loadedRawId,
+      );
   final LocalEntityEngine<TaskProject, TaskProjectRecord> _engine;
   final LocalEntityQueryCache<TaskProject> _queries;
   TaskProjectMutationDraft beginCreate({
@@ -927,6 +935,16 @@ final class TaskProjectSet {
       orderBy: orderBy,
       pageSize: pageSize,
     ),
+  );
+  EntityColumnQuery<TaskProject, V> column<V>(
+    EntityField<TaskProject, V> field, {
+    EntityPredicate<TaskProject>? where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) => _engine.column(
+    field,
+    where:
+        _tombstonePredicate(tombstones) &
+        (where ?? EntityPredicate<TaskProject>.all()),
   );
   EntityOrder<TaskProject> get canonicalOrder => TaskProjectFields._orderRank
       .ascending(tieBreakBy: (entity) => entity.id.value);

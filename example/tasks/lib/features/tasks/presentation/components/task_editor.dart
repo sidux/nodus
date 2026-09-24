@@ -47,7 +47,6 @@ final class _ExistingTaskEditor extends HookWidget {
   Widget build(BuildContext context) {
     final lookup = useObservedEntityLookup(
       () => entityGraph.tasks.lookup(taskId),
-      keys: [entityGraph, taskId],
     );
     return lookup.when(
       loading: _EditorLoading.new,
@@ -99,7 +98,6 @@ final class _TaskEditorForm extends HookWidget {
                   TaskProjectFields.id.equals(selectedProjectId),
         orderBy: TaskProjectFields.title.ascending(),
       ),
-      keys: [entityGraph, selectedProjectId],
       loadAllPages: true,
     );
 

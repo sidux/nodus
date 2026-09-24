@@ -31,6 +31,14 @@ final class InMemorySyncBackend
 
   @override
   final EntityGraphDefinition definition;
+
+  /// Transport fault injected before a push is applied, for exercising the
+  /// runtime's retry and ordering behavior. Returning null accepts the push.
+  SyncBackendException? Function(PushSyncWorkItem item)? pushFault;
+
+  /// Transport fault injected before a pull page is read.
+  SyncBackendException? Function()? pullFault;
+
   final Map<String, EntityDescriptorBase> _descriptors;
   final Map<String, Map<String, JsonMap>> _records = {};
   final Map<String, RemoteEntityChange> _changes =
@@ -115,8 +123,10 @@ final class InMemorySyncBackend
 
   @override
   Future<PushResult> push(PushSyncWorkItem item) async {
+    final fault = pushFault?.call(item);
+    if (fault != null) throw fault;
     final descriptor = _descriptorFor(item.operation.identity.entityType);
-    item = item.upcast(descriptor);
+    item = item.upcast(descriptor, definition: definition);
     final operation = item.operation;
     final entityType = operation.identity.entityType;
     final records = _recordsFor(entityType);
@@ -1213,6 +1223,8 @@ final class InMemorySyncBackend
 
   @override
   Future<PullResult> pull({required ServerSequence afterSequence}) async {
+    final fault = pullFault?.call();
+    if (fault != null) throw fault;
     final page = _changes.values
         .where((change) => change.serverSequence.value > afterSequence.value)
         .take(501)

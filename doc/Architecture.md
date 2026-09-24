@@ -56,8 +56,9 @@ integration. Handwritten code expresses business meaning, not mechanics.
 
 The handwritten abstract `<Entity>` is the public domain type. Generation emits
 its private or package-internal concrete record and a generated `<Entity>Set`.
-Entity discovery applies to every `domain/` subtree, including reusable shared
-domains; it MUST NOT assume that all entities belong to an application feature.
+Entity discovery applies to every `domain/` directory under `lib/`, including
+reusable shared domains; it MUST NOT assume that all entities belong to an
+application feature.
 The canonical creation API is
 `await entityGraph.<entities>.create(...)`. This keeps graph compatibility
 compile-time checked, preserves handwritten computed properties and business
@@ -78,6 +79,54 @@ concrete synchronization adapter is also forbidden.
 The explicit `entityGraph` receiver identifies the authenticated account's
 local database, identity map, transaction coordinator, clock, ID source, and
 synchronization-target registry.
+
+### 1.1 Implementation status
+
+This contract describes the target architecture. The capabilities below are
+part of that target but are not yet implemented by Nodus. Until they are,
+applications MUST NOT write their own substitutes for them; they use the
+nearest implemented mechanism and record the gap as migration debt.
+
+| Planned capability | Sections | Current behavior |
+| --- | --- | --- |
+| Named source constructors such as `entityGraph.<entities>.fromFile(...)` | 2, 6.6 | Use `create(...)` or an entity-owned `@EntityProcess` |
+| `nodus.yaml` for irreducible exceptions | 3.2 | Targets live in `nodus.lock`; routing overrides use `@Entity(syncTarget:)` |
+| A graph with no default sync target | 9, 10.1 | `nodus init` requires one `--target` |
+| Several targets added through the CLI | 10.1 | The lock can list several targets, but `init` configures one |
+| Pull-cursor expiration and bounded snapshot recovery | 10.1, 10.3 | Pulls resume from the stored cursor |
+| Fair, concurrency-limited lane scheduling | 10, 14 | Each target lane drains in order with retry and backoff |
+| Dead-lettering rejected export work | 10.5 | Rejected work stays visible in the sync queue |
+| Action values computed by a named pure method | 4.4 | Action values are parameters, literals, the clock, or `clear` |
+| Draft field merge policies | 6.2 | A draft that overlaps newer changes is rejected as stale |
+| Rollout policy in a generated deployment manifest | 9 | Only the reviewed migration and `--reset-drift-baseline` exist |
+| Runtime and compiler benchmark budgets | 5.1, 14, 18.5 | No benchmark suite exists yet |
+
+### 1.2 Everyday rules
+
+The rest of this document is the complete contract; these rules cover most
+day-to-day feature work:
+
+- **Declare, then generate.** Add or change fields, relationships, indexes,
+  capabilities, and `@Action`s on the abstract entity in a `domain/`
+  directory, then run the generator. Never edit generated files.
+- **Create** with `await entityGraph.<entities>.create(...)`; **edit** with
+  `entity.beginEdit()` and `await draft.save()`; **change state** by calling
+  the entity's generated action, lifecycle, or relationship method directly.
+- **Put business decisions on the entity** as pure getters or methods, and
+  reference them from `@Action(guard: ...)` or action values instead of
+  checking them in callers.
+- **Read** through generated `<Entity>List`/`<Entity>Lookup` constructors and
+  inverse relationships, observed with the `useObserved*` hooks; do not pass
+  hook keys or copy entity fields into widget state.
+- **Apply one operation to a selection** with the generated `<action>All`,
+  `removeAll`, `archiveAll`, or hierarchy operation instead of a loop, and undo
+  it with the inverse operation's `only: result.changedIds`.
+- **Group mutations** in `entityGraph.transaction(...)` only when several
+  must commit together; a single operation is already atomic and durable when
+  its future completes.
+- **Never add** repositories, services, providers, or view models that
+  forward, cache, or mirror entity state; if something seems to need one, the
+  missing piece is a Nodus capability.
 
 ## 2. Artifact decision rules
 
@@ -229,7 +278,8 @@ flutter pub add nodus
 dart run nodus init --target supabase
 ```
 
-Initialization discovers every `@Entity` library under `lib/`, derives the
+Initialization discovers every `@Entity` library in a `domain/` directory
+under `lib/`, derives the
 application graph name from the pubspec package name, creates committed
 `nodus.lock`, and generates or updates the standard Drift builder settings. For
 example, package `tasks_example` owns `TasksExampleEntityGraph`,
@@ -619,7 +669,8 @@ contextual, not a blind global rename.
 
 Generation MUST reject:
 
-- duplicate entity, table, column, route, operation, or generated type names;
+- duplicate entity, table, column, index, route, operation, or generated type
+  names, and table or column names that are reserved SQL words;
 - unsupported or ambiguous field types;
 - invalid defaults and constraints;
 - unresolved relationships or unsafe access-propagation cycles;
@@ -660,8 +711,12 @@ validated at generation time.
 Referenced guard and value methods MUST be deterministic and side-effect free:
 they read only the entity and explicit typed parameters, perform no I/O, use no
 ambient clock or randomness, and do not mutate state. Time and IDs enter through
-generated injected action values. A failed guard produces a typed domain
-error before any optimistic mutation is exposed.
+generated injected action values. A guard is a concrete `bool` getter or
+method taking no parameters or exactly the action's parameters, declared with
+`@Action(guard: #name)`. A failed guard completes the action with a typed
+`ActionGuardException` before any optimistic mutation is exposed; a generated
+bulk `<action>All` skips the entities the guard rejects and reports them as
+matched but unchanged.
 
 Generation rejects missing, ambiguous, duplicated, immutable, unauthorized, or
 type-incompatible targets. It never invents arbitrary business meaning from a
@@ -694,6 +749,7 @@ abstract interface class OwnedBy<Self, Owner> {
   LocalId<Self> get id;
   LocalId<Owner> get ownerId;
   DateTime? get deletedAt;
+  bool get isRemoved;
   ServerVersion get serverVersion;
   GeneratedEntityAccess<Self> get generatedAccess;
 }
@@ -704,6 +760,7 @@ abstract interface class Component {}
 
 abstract interface class Archivable {
   DateTime? get archivedAt;
+  bool get isArchived;
   Future<void> archive();
   Future<void> unarchive();
 }
@@ -734,6 +791,7 @@ abstract interface class WorkflowMembership<Target, Principal, Status> {
   Future<void> decline();
   Future<void> revoke();
   Future<void> reinvite();
+  Future<void> end();
 }
 
 abstract interface class ActivityTracked {
@@ -827,7 +885,13 @@ Capability visibility conventions are:
   invite/accept/decline/revoke workflow relationship. The entity declares its
   target reference and any product-specific payload; generation supplies the
   participant reference, the four-state status contract, transition actions,
-  self-membership inequality, unique-pair reuse, and `inviteOrReuse`. `Status`
+  self-membership inequality, unique-pair reuse, and `inviteOrReuse`. The
+  actions authorize their actor locally (the member accepts or declines, the
+  owner revokes or reinvites), and `end()` ends the membership from whichever
+  side the authenticated account is on, so features never repeat these checks.
+  Each membership exposes `targetId`, `isPending`, and `isAccepted`, and its set
+  implements `WorkflowMembershipSet` so collaboration UI stays generic.
+  `Status`
   remains a domain enum but MUST define exactly `pending`, `accepted`,
   `declined`, and `revoked`;
 - `Collaborative<Principal>` generates the collaboration relationship,
@@ -875,7 +939,11 @@ interfaces. `OwnedBy<Self, Owner>` publishes nominal identity and ownership to
 Dart's static type system; it does not opt into local persistence, IdentityMap
 participation, internal revision metadata, tombstones, or sync routing. Those
 mechanics are generated for every entity and MUST NOT require `Persisted`,
-`Syncable`, or adapter-specific capabilities. Domain-visible `createdAt` or
+`Syncable`, or adapter-specific capabilities. Because any authority may
+tombstone or revoke a row, `OwnedBy` exposes the read-only `deletedAt` and
+generated `isRemoved`; `SoftDeletable` adds only caller-initiated `remove` and
+`restore`. `Archivable` likewise supplies `isArchived`. Declarations MUST NOT
+repeat these supplied getters. Domain-visible `createdAt` or
 `updatedAt` fields are generated only when declared directly or introduced by a
 semantic capability; conventional names infer clock defaults and automatic
 update behavior without an extra annotation. Sync-target routing remains
@@ -912,9 +980,9 @@ An activity entry stores structured facts, never a localized or preformatted
 message. Presentation derives text and icons from `ActivityOperation` and the
 captured label. A declared `@Action` records its validated action identity;
 generation does not infer additional business meaning from the method name.
-Application code therefore calls `task.complete()`, `task.archive()`, or
-`task.setCollaborator(...)` directly. A `TaskActivityTransactions`-style helper
-or a manual `taskActivities.create(...)` call is forbidden.
+Application code therefore calls `document.publish()`, `document.archive()`,
+or `document.setCollaborator(...)` directly. A `DocumentActivityTransactions`-
+style helper or a manual `documentActivities.create(...)` call is forbidden.
 
 An explicit annotation is allowed only to override a capability default that
 cannot be inferred safely. Incompatible capabilities, ambiguous capability or
@@ -1032,7 +1100,8 @@ The supported tool workflow is:
 - `dart run nodus generate` for incremental application API generation and the
   schema-fingerprint gate;
 - `dart run nodus watch` for continuous incremental generation;
-- `dart run nodus check` for a non-persistent stale-output/fingerprint check;
+- `dart run nodus check` for a non-persistent stale-output/fingerprint check,
+  plus the configured dependency boundaries when an inventory is committed;
 - `dart run nodus explain [Entity] [--json]` for human or machine-readable
   resolved intent and provenance;
 - `dart run nodus inventory [--write|--check|--json]` for deterministic,
@@ -1167,7 +1236,9 @@ draft it MUST:
 10. roll back or rebase the optimistic projection if local persistence fails.
 
 `save()` never waits for the network. Remote convergence is observable through
-generated synchronization state.
+generated synchronization state. When a local write resolves, live generated
+queries already show it, so feature code MUST NOT keep optimistic copies of
+persisted state.
 
 `beginEdit()` is required only when an edit lives across time, such as a form.
 An immediate fully specified mutation MAY invoke its generated atomic action
@@ -1245,11 +1316,11 @@ projection is applied synchronously; awaiting the action resolves only after the
 Drift projection and, for replicated or exported entities, target-aware durable
 outbound intent commit atomically, or rethrows the persistence failure after
 rollback or rebase.
-Public `void` mutation methods and separate `flush()` calls are forbidden.
-One generated create, action, draft save, or lifecycle operation MUST be awaited
-directly; wrapping that sole operation in `entityGraph.transaction(...)` adds no
-atomicity and is forbidden. A graph transaction exists only when two or more
-generated mutations must share one irreducible business commit.
+Public `void` mutation methods are forbidden, and correctness never depends on
+a separate `flushLocal()` call. One generated create, action, draft save, or
+lifecycle operation SHOULD be awaited directly; wrapping that sole operation in
+`entityGraph.transaction(...)` adds no atomicity. A graph transaction exists
+for two or more generated mutations that must share one business commit.
 Generated multi-entity code MUST still `await` generated mutation APIs inside
 an asynchronous graph transaction. Those inner futures register and bind their
 real local commit but do not wait for a batch that cannot be scheduled until
@@ -1490,8 +1561,8 @@ query-owned action on every compatible generated `<Entity>List`. Standard
 lifecycle capabilities generate the corresponding query-owned lifecycle
 actions without another declaration. The query, not feature code, owns
 canonical paging, identity retention, page transactions, cleanup, and the
-`EntityBulkMutationResult(matched, changed)` result; `skipped` is derived from
-those counts. An unbounded operation is atomic per generated page, not across
+`EntityBulkMutationResult<E>` result: `matched`, the typed `changedIds`, and
+the derived `changed` and `skipped` counts. An unbounded operation is atomic per generated page, not across
 an unlimited result set. A business rule requiring global all-or-nothing
 semantics MUST use a proved-bounded aggregate transaction; work requiring
 restart recovery, external I/O, progress, or cancellation MUST use a durable
@@ -1506,7 +1577,10 @@ page, and orders parent/child lifecycle safely. Removal and archive are
 children-first where required; restoration is parent-first and rejects a root
 whose external parent is still deleted. For separately owned entities,
 foreign-owned descendants count as skipped rather than receiving unauthorized
-mutations. Feature code MUST NOT reconstruct descendants from a bounded
+mutations. Each hierarchy operation accepts `only:` and reports the
+`changedIds` it changed, so undo passes those IDs to the inverse operation and
+reverses exactly that operation: descendants that were already deleted or
+archived stay so. Feature code MUST NOT reconstruct descendants from a bounded
 identity map or issue its own recursive lifecycle loop.
 
 Relationship mutation MUST enforce source and target existence, ownership or
@@ -1688,7 +1762,10 @@ can trigger the work; an empty field list means every projection change. The
 compiler validates the source, field symbols, and unique lower-camel name.
 Generation exposes one typed graph installer whose handler receives the stable
 source identity and a `GeneratedDurableWorkContext` containing the operation ID
-and attempt. Nodus owns coalescing, durable registration, leases, restart
+and attempt. Each run delivers only the sources whose triggering changes are
+pending, including removed or archived ones; after the graph opens, or when a
+change's identities are unknown, the run covers the whole active source set.
+Delivery is at least once, so handlers stay idempotent. Nodus owns coalescing, durable registration, leases, restart
 recovery, retry/backoff, scheduling, and page cleanup. The handler owns only
 the irreducible domain decision and applies outcomes through generated entity,
 relationship, aggregate, or query-owned actions. A successful checkpoint MUST
@@ -1745,7 +1822,7 @@ fields cannot be supplied through the canonical create contract.
 
 A generated `<Entity>Lookup` represents exactly zero or one retained stable
 identity. Its constructor name and typed parameters derive from the unique key,
-for example `DailyPlanLookup.byOwnerAndPlanDate(entityGraph, ownerId, date)`.
+for example `JournalEntryLookup.byOwnerAndEntryDate(entityGraph, ownerId, date)`.
 It requests one indexed row and exposes no caller-supplied predicate, ordering,
 or page size: adding any of those would weaken or duplicate the exact declared
 selection. Imperative code uses `lookup.use((entity) async { ... })`, which
@@ -1792,6 +1869,16 @@ a dedicated normalized search field or projection. Search filters before
 paging; downloading an unbounded collection and then applying a presentation
 search is forbidden. Empty text normalizes to the all predicate, and nullable
 text never matches a non-empty search while null.
+
+A relationship filter is one query, not a chain of them. `field.isInColumn(
+entityGraph.<links>.column(LinkFields.targetId, where: ...))` selects entities
+whose field appears in another entity's filtered column; `column` applies the
+same lifecycle visibility defaults as that set's queries. It runs as a SQL
+subquery, refreshes when the selected entity's rows change, and keeps
+structural equality. Loading a link list only to feed its IDs into a second
+query's `isIn` is forbidden: the first query must page completely or the filter
+silently truncates, and every change repeats two loads. Column predicates cannot
+be evaluated in memory; a bounded set serves them from the database.
 
 A generated `<Entity>List` is the live acquired result of one query. Named
 constructors such as `<Entity>List.forOwner(entityGraph, ownerId)` combine the
@@ -1854,6 +1941,15 @@ Flutter Hooks or local widget state owns only widget-lifetime resources and
 ephemeral interaction state, including controllers, focus nodes, animations,
 hover, expansion, temporary form presentation, debounce, and scroll lifecycle.
 
+Selection hooks such as `useObservedEntityList` key their lease by the
+selection itself: the acquire callback runs each build, and the hook keeps its
+lease while the generated query is structurally equal and re-acquires when the
+predicate, order, page size, or entity graph changes. Call sites therefore do
+not repeat their selection inputs as hook keys; explicit keys are reserved for
+a deliberate re-acquire that the selection does not express.
+`useObservedEntityValue` takes no keys: it re-tracks its latest read after
+every build.
+
 An entity value change automatically updates the stable identity and rebuilds
 only observers that read the changed fields; membership or rank changes update
 only lists that contain that entity and consumers that observe their membership
@@ -1890,10 +1986,16 @@ absent or not ready and subscribes only to lifecycle transitions. An API named
 as optional MUST NOT throw merely because no scope exists.
 
 Reactions and subscriptions MUST observe only state used by their consumer.
-Global invalidation and feature-wide refresh registries are forbidden. One
+Global invalidation and feature-wide refresh registries are forbidden. A
+settled database query reloads only when a change can affect it: a changed
+field its predicate or order reads, and a changed entity it lists or that now
+matches its predicate. Changes to unloaded or unknown entities reload
+conservatively. One
 database query, stream, or remote subscription per rendered row is forbidden;
 one narrow MobX reaction per visible row is permitted and normally preferred to
-rebuilding an entire list. Virtualization bounds active row reactions, the list
+rebuilding an entire list. Exact generated lookups are the exception: the
+runtime merges exact-ID loads that start together into one query, so a row MAY
+look up the single entity it renders. Virtualization bounds active row reactions, the list
 reaction observes membership and order, and each row reaction observes only the
 fields it renders.
 
@@ -2089,12 +2191,12 @@ abstract class DefaultEntity {} // Inherits replicated + supabase.
 abstract class DeviceOnlyEntity {}
 ```
 
-Multiple targets and per-entity non-default routing are irreducible package
-configuration in `nodus.yaml`. Generation validates those names and emits the
-typed enum; domain declarations retain only synchronization semantics such as
-`imported`, `exported`, or `localOnly`. Renaming a target after it has durable
-work requires an explicit stable wire-name override and reviewed routing
-migration.
+The package's targets live in tool-owned `nodus.lock`; generation validates
+their names and emits the typed target enum. An entity that does not use the
+default target names one generated enum value with `@Entity(syncTarget: ...)`,
+and otherwise declares only synchronization semantics such as `imported`,
+`exported`, or `localOnly`. Renaming a target after it has durable work
+requires an explicit stable wire-name override and reviewed routing migration.
 
 The canonical graph freezes one `SyncBindingDefinition` per entity and
 one erased `SyncTargetId` per used generated enum value. The erased target
@@ -2298,9 +2400,18 @@ idempotent destination receipt and removes acknowledged outbox work without
 creating an accepted remote base. Imported and local-only entities do not
 produce ordinary outbound entity work.
 
+Push work is strictly first-in-first-out per target lane: a later operation
+never overtakes an earlier one that is backing off after a retryable failure or
+is leased by another process on the same device. The lane waits for that head
+and wakes when it becomes claimable, because later creates, patches, and
+commands may depend on it.
+
 State patches MAY coalesce only when the final visible state and conflict
-semantics are unchanged. Semantic actions, creates required by dependants, and
-ordered lifecycle events do not coalesce across meaning boundaries.
+semantics are unchanged. A patch merges into the entity's newest pending patch
+only when no later queued work touches the same entity or creates an entity the
+patch references; otherwise it queues after that work. Semantic actions,
+creates required by dependants, and ordered lifecycle events do not coalesce
+across meaning boundaries.
 
 Every outbound operation has a stable operation ID, nominal entity identity,
 target protocol version, sync-target identifier, and typed payload. Replicated
@@ -2366,14 +2477,19 @@ pending operations over a new canonical base according to generated field,
 transition, action, and ordering policies.
 
 Conflict policies MUST be deterministic, typed, and declared once. Automatic
-resolution is allowed only where field semantics make it safe. Rejection must
+resolution is allowed only where field semantics make it safe. A field's pending
+local value either survives a newer canonical value (`localWins`) or yields to
+it (`serverWins`, the default). An entity whose user-edited fields share one
+policy declares it once with `@Entity(conflict: ...)`; a field's own
+`@Persisted(conflict: ...)` overrides it, while server-authoritative fields and
+the conventional `createdAt`/`updatedAt` always keep `serverWins`. Rejection must
 restore or rebase the visible projection without losing the accepted base and
 must expose typed diagnostic state.
 
 Imported entities replace their accepted projection from ordered remote input
 and have no local-write conflict policy. Export rejection preserves the
-authoritative local state, retains or dead-letters the outbox operation by typed
-policy, and exposes diagnostics; it never rolls local entity state back merely
+authoritative local state, retains the outbox operation (dead-lettering by typed
+policy is planned; see section 21), and exposes diagnostics; it never rolls local entity state back merely
 because a projection destination rejected it.
 
 ## 11. Remote schema, protocol, and security
@@ -2455,6 +2571,13 @@ values, and incomplete snapshots fail with typed boundary errors.
 
 Nominal IDs are never converted to arbitrary strings inside domain code. Raw
 strings are parsed exactly once at untrusted boundaries.
+
+A persisted enum value's wire spelling is the snake_case of its Dart name.
+Code that must exchange that spelling with an external boundary uses the
+runtime's `value.wireName` and `Enum.values.byWireName(...)` or
+`asWireNameMap()`, the same derivation the generated codecs use, rather than a
+handwritten mapping. A handwritten parser remains appropriate only where the
+boundary accepts aliases or lenient input.
 
 ## 13. Routing
 
@@ -2753,10 +2876,11 @@ Every architectural change runs:
 
 1. code generation;
 2. formatting;
-3. static analysis with zero infos, warnings, or errors;
+3. static analysis with zero warnings or errors, and infos as configured by
+   `analysis_options.yaml`;
 4. relevant generator, compile-failure, and public conformance tests;
 5. relevant entity-graph, database, sync-adapter, and UI tests;
-6. affected runtime and compiler-budget benchmarks;
+6. affected runtime and compiler-budget benchmarks, where they exist;
 7. generated-output, explanation-provenance, and migration-inventory drift
    checks.
 
@@ -2791,9 +2915,9 @@ they SHOULD be implemented and validated in the reusable architecture first,
 then consumers SHOULD be converted mechanically in broad passes. Handwriting
 the same temporary pattern in more features is forbidden.
 
-A coordinated rewrite SHOULD be preferred while replacing a nonconforming
-architecture when preserving its application protocols would slow the rewrite
-or retain obsolete seams. Build the reusable capability set first, migrate
+Prefer incremental migration. A coordinated rewrite MAY replace a
+nonconforming architecture when preserving its application protocols would
+retain obsolete seams: build the reusable capability set first, migrate
 declarations and consumers in mechanical batches, then run one reviewed remote
 business-data migration at cutover. Do not build per-feature compatibility
 bridges that the completed rewrite will delete.

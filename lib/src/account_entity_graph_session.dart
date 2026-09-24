@@ -136,9 +136,12 @@ final class AccountEntityGraphSession<G, A> {
   AccountEntityGraphSessionState<G, A> _state =
       const AccountEntityGraphSignedOut();
   Future<void> _tail = Future.value();
+  int _activeLeases = 0;
+  Completer<void>? _leasesReleased;
   G? _currentEntityGraph;
   LocalId<A>? _currentAccountId;
   int _requestGeneration = 0;
+  ({LocalId<A>? accountId, Future<void> transition})? _pendingSwitch;
   bool _disposing = false;
   bool _disposed = false;
 
@@ -226,45 +229,60 @@ final class AccountEntityGraphSession<G, A> {
     if (_disposing || _disposed) {
       throw StateError('The account entity-graph session is disposed.');
     }
+    // Identity providers repeat the current account (initial session, token
+    // refresh); joining the pending request avoids reopening the same graph.
+    final pending = _pendingSwitch;
+    if (pending != null && pending.accountId == accountId) {
+      return pending.transition;
+    }
     final generation = ++_requestGeneration;
-    return _enqueue(() => _transition(accountId, generation));
+    final transition = _enqueue(() => _transition(accountId, generation));
+    final request = (accountId: accountId, transition: transition);
+    _pendingSwitch = request;
+    transition.then<void>((_) {}, onError: (_, _) {}).whenComplete(() {
+      if (identical(_pendingSwitch, request)) _pendingSwitch = null;
+    });
+    return transition;
   }
 
-  /// Runs account-scoped work in the same serial queue as auth transitions.
+  /// Runs account-scoped work against the ready entity graph.
   ///
-  /// A later sign-out or account switch cannot close `entityGraph` until [action]
-  /// completes. The action never receives a stale or partially opened graph.
+  /// Leases run concurrently with each other. A lease requested after an
+  /// account switch or sign-out runs after that transition, and a transition
+  /// closes the previous graph only once every lease on it has completed, so
+  /// [action] never receives a stale or partially opened graph.
   Future<R> withReadyEntityGraph<R>(
     FutureOr<R> Function(LocalId<A> accountId, G entityGraph) action,
-  ) {
+  ) async {
     final inherited = Zone.current[_readyZoneKey];
     if (inherited is _ReadyEntityGraphLease<G, A> && inherited.active) {
-      return Future.sync(
-        () => action(inherited.accountId, inherited.entityGraph),
-      );
+      return action(inherited.accountId, inherited.entityGraph);
     }
     if (_disposing || _disposed) {
       throw StateError('The account entity-graph session is disposed.');
     }
-    return _enqueueValue(() async {
-      final current = state;
-      if (current is! AccountEntityGraphReady<G, A>) {
-        throw StateError('The account entity-graph session is not ready.');
-      }
-      final lease = _ReadyEntityGraphLease<G, A>(
-        accountId: current.accountId,
-        entityGraph: current.entityGraph,
+    await _tail;
+    final current = state;
+    if (current is! AccountEntityGraphReady<G, A>) {
+      throw StateError('The account entity-graph session is not ready.');
+    }
+    final lease = _ReadyEntityGraphLease<G, A>(
+      accountId: current.accountId,
+      entityGraph: current.entityGraph,
+    );
+    _activeLeases++;
+    try {
+      return await runZoned(
+        () => Future.sync(() => action(current.accountId, current.entityGraph)),
+        zoneValues: {_readyZoneKey: lease},
       );
-      try {
-        return await runZoned(
-          () =>
-              Future.sync(() => action(current.accountId, current.entityGraph)),
-          zoneValues: {_readyZoneKey: lease},
-        );
-      } finally {
-        lease.active = false;
+    } finally {
+      lease.active = false;
+      if (--_activeLeases == 0) {
+        _leasesReleased?.complete();
+        _leasesReleased = null;
       }
-    });
+    }
   }
 
   /// Runs account-scoped work when only the ready entity graph is needed.
@@ -327,6 +345,9 @@ final class AccountEntityGraphSession<G, A> {
   }
 
   Future<void> _closeCurrent() async {
+    if (_activeLeases > 0) {
+      await (_leasesReleased ??= Completer<void>()).future;
+    }
     final entityGraph = _currentEntityGraph;
     _currentEntityGraph = null;
     _currentAccountId = null;
@@ -334,11 +355,7 @@ final class AccountEntityGraphSession<G, A> {
   }
 
   Future<void> _enqueue(Future<void> Function() transition) {
-    return _enqueueValue(transition);
-  }
-
-  Future<R> _enqueueValue<R>(FutureOr<R> Function() operation) {
-    final task = _tail.then((_) => operation());
+    final task = _tail.then((_) => transition());
     _tail = task.then<void>((_) {}, onError: (_, _) {});
     return task;
   }
@@ -356,9 +373,13 @@ final class AccountEntityGraphSession<G, A> {
     }
     _disposing = true;
     _requestGeneration++;
-    await _enqueue(_closeCurrent);
-    _emit(const AccountEntityGraphSignedOut());
-    _disposed = true;
-    await _changes.close();
+    _pendingSwitch = null;
+    try {
+      await _enqueue(_closeCurrent);
+    } finally {
+      _emit(const AccountEntityGraphSignedOut());
+      _disposed = true;
+      await _changes.close();
+    }
   }
 }

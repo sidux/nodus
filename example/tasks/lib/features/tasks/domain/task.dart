@@ -60,7 +60,6 @@ abstract class Task
 
   abstract final DateTime createdAt;
 
-  bool get isArchived => archivedAt != null;
   bool get isCompleted => status == TaskStatus.done;
 
   @override
@@ -90,6 +89,7 @@ abstract class Task
       ActionValue(#status, TaskStatus.todo),
       ActionValue.clear(#completedAt),
     ],
+    guard: #isCompleted,
   )
   Future<void> reopen();
 }

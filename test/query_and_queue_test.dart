@@ -56,7 +56,7 @@ void main() {
       kind: EntityFieldKind.text,
       nullable: false,
       mutable: true,
-      conflictPolicy: FieldConflictPolicy.localWins,
+      conflictPolicy: ConflictStrategy.localWins,
       constraints: EntityFieldConstraints(
         minLength: 2,
         maxLength: 5,
@@ -69,7 +69,7 @@ void main() {
       kind: EntityFieldKind.integer,
       nullable: false,
       mutable: true,
-      conflictPolicy: FieldConflictPolicy.localWins,
+      conflictPolicy: ConflictStrategy.localWins,
       constraints: EntityFieldConstraints(minValue: 1, maxValue: 3),
     );
     const score = EntityFieldDescriptor(
@@ -78,7 +78,7 @@ void main() {
       kind: EntityFieldKind.real,
       nullable: false,
       mutable: true,
-      conflictPolicy: FieldConflictPolicy.localWins,
+      conflictPolicy: ConflictStrategy.localWins,
       constraints: EntityFieldConstraints(minValue: 0, maxValue: 100),
     );
 
@@ -166,7 +166,7 @@ void main() {
         kind: EntityFieldKind.text,
         nullable: false,
         mutable: true,
-        conflictPolicy: FieldConflictPolicy.localWins,
+        conflictPolicy: ConflictStrategy.localWins,
         constraints: EntityFieldConstraints(minLength: 2, maxLength: 5),
         normalization: FieldNormalization.trim,
       );
@@ -176,7 +176,7 @@ void main() {
         kind: EntityFieldKind.text,
         nullable: true,
         mutable: true,
-        conflictPolicy: FieldConflictPolicy.localWins,
+        conflictPolicy: ConflictStrategy.localWins,
         normalization: FieldNormalization.trimToNull,
       );
 
@@ -235,7 +235,7 @@ void main() {
       visibleFields: const {'state': 'declined'},
       pendingPatch: const {'state': 'pending'},
       remoteFields: const {'state': 'declined'},
-      policies: const {'state': FieldConflictPolicy.serverWins},
+      policies: const {'state': ConflictStrategy.serverWins},
       remoteVersion: ServerVersion(2),
       pendingBaseVersion: ServerVersion(2),
     );
@@ -246,7 +246,7 @@ void main() {
       visibleFields: acknowledged.visibleFields,
       pendingPatch: acknowledged.rebasedPendingPatch,
       remoteFields: const {'state': 'accepted'},
-      policies: const {'state': FieldConflictPolicy.serverWins},
+      policies: const {'state': ConflictStrategy.serverWins},
       remoteVersion: ServerVersion(3),
       pendingBaseVersion: ServerVersion(2),
     );
@@ -297,7 +297,7 @@ void main() {
           kind: EntityFieldKind.uuid,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         const EntityFieldDescriptor(
           name: 'title',
@@ -305,7 +305,7 @@ void main() {
           kind: EntityFieldKind.text,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
           sinceProtocolVersion: 2,
           renamedFrom: 'name',
         ),
@@ -507,7 +507,7 @@ void main() {
       kind: EntityFieldKind.boolean,
       nullable: false,
       mutable: true,
-      conflictPolicy: FieldConflictPolicy.localWins,
+      conflictPolicy: ConflictStrategy.localWins,
     );
     final persisted = PersistedEqualityEntityField<_Item, bool>(
       persistence: persistence,
@@ -536,7 +536,7 @@ void main() {
       kind: EntityFieldKind.timestamp,
       nullable: false,
       mutable: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     );
     const mutableCreatedAt = EntityFieldDescriptor(
       name: EntityConventions.createdAtFieldName,
@@ -544,7 +544,7 @@ void main() {
       kind: EntityFieldKind.timestamp,
       nullable: false,
       mutable: true,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     );
     const serverVersion = EntityFieldDescriptor(
       name: EntityConventions.serverVersionFieldName,
@@ -552,7 +552,7 @@ void main() {
       kind: EntityFieldKind.integer,
       nullable: false,
       mutable: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     );
     const updatedAt = EntityFieldDescriptor(
       name: EntityConventions.updatedAtFieldName,
@@ -560,7 +560,7 @@ void main() {
       kind: EntityFieldKind.timestamp,
       nullable: false,
       mutable: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     );
 
     expect(createdAt.serverGenerated, isTrue);
@@ -632,7 +632,7 @@ void main() {
           kind: EntityFieldKind.boolean,
           nullable: false,
           mutable: true,
-          conflictPolicy: FieldConflictPolicy.localWins,
+          conflictPolicy: ConflictStrategy.localWins,
         ),
         read: (entity) => entity.isActive,
         encode: (value) => value,
@@ -1384,7 +1384,7 @@ void main() {
           kind: EntityFieldKind.uuid,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'title',
@@ -1392,7 +1392,7 @@ void main() {
           kind: EntityFieldKind.text,
           nullable: false,
           mutable: true,
-          conflictPolicy: FieldConflictPolicy.localWins,
+          conflictPolicy: ConflictStrategy.localWins,
           constraints: EntityFieldConstraints(minLength: 1, maxLength: 5),
         ),
         EntityFieldDescriptor(
@@ -1401,7 +1401,7 @@ void main() {
           kind: EntityFieldKind.integer,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
       ],
     );
@@ -1455,7 +1455,7 @@ void main() {
           kind: EntityFieldKind.uuid,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'isActive',
@@ -1463,7 +1463,7 @@ void main() {
           kind: EntityFieldKind.boolean,
           nullable: false,
           mutable: true,
-          conflictPolicy: FieldConflictPolicy.localWins,
+          conflictPolicy: ConflictStrategy.localWins,
         ),
         EntityFieldDescriptor(
           name: 'createdAt',
@@ -1471,7 +1471,7 @@ void main() {
           kind: EntityFieldKind.timestamp,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'updatedAt',
@@ -1479,7 +1479,7 @@ void main() {
           kind: EntityFieldKind.timestamp,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'serverVersion',
@@ -1487,7 +1487,7 @@ void main() {
           kind: EntityFieldKind.integer,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
       ],
     );
@@ -1626,7 +1626,7 @@ void main() {
             kind: EntityFieldKind.uuid,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
           ),
           EntityFieldDescriptor(
             name: 'ownerId',
@@ -1634,7 +1634,7 @@ void main() {
             kind: EntityFieldKind.uuid,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
           ),
           EntityFieldDescriptor(
             name: 'friendId',
@@ -1642,7 +1642,7 @@ void main() {
             kind: EntityFieldKind.uuid,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
           ),
           EntityFieldDescriptor(
             name: 'deletedAt',
@@ -1650,7 +1650,7 @@ void main() {
             kind: EntityFieldKind.timestamp,
             nullable: true,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
           ),
           EntityFieldDescriptor(
             name: 'serverVersion',
@@ -1658,7 +1658,7 @@ void main() {
             kind: EntityFieldKind.integer,
             nullable: false,
             mutable: false,
-            conflictPolicy: FieldConflictPolicy.serverWins,
+            conflictPolicy: ConflictStrategy.serverWins,
           ),
         ],
         uniqueConstraints: [
@@ -1785,7 +1785,7 @@ void main() {
           kind: EntityFieldKind.uuid,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'taskKey',
@@ -1793,7 +1793,7 @@ void main() {
           kind: EntityFieldKind.text,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'status',
@@ -1801,7 +1801,7 @@ void main() {
           kind: EntityFieldKind.text,
           nullable: false,
           mutable: true,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'serverVersion',
@@ -1809,7 +1809,7 @@ void main() {
           kind: EntityFieldKind.integer,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
       ],
       uniqueConstraints: const [
@@ -1894,7 +1894,7 @@ void main() {
           kind: EntityFieldKind.uuid,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'status',
@@ -1902,7 +1902,7 @@ void main() {
           kind: EntityFieldKind.text,
           nullable: false,
           mutable: true,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
           hasProtocolDefault: true,
           protocolDefault: 'pending',
           allowedTransitions: [EntityValueTransition('pending', 'accepted')],
@@ -1913,7 +1913,7 @@ void main() {
           kind: EntityFieldKind.integer,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
       ],
     );
@@ -2051,7 +2051,7 @@ void main() {
           kind: EntityFieldKind.uuid,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'status',
@@ -2059,7 +2059,7 @@ void main() {
           kind: EntityFieldKind.text,
           nullable: false,
           mutable: true,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
           hasProtocolDefault: true,
           protocolDefault: 'active',
           allowedTransitions: [
@@ -2073,7 +2073,7 @@ void main() {
           kind: EntityFieldKind.timestamp,
           nullable: true,
           mutable: true,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
         EntityFieldDescriptor(
           name: 'serverVersion',
@@ -2081,7 +2081,7 @@ void main() {
           kind: EntityFieldKind.integer,
           nullable: false,
           mutable: false,
-          conflictPolicy: FieldConflictPolicy.serverWins,
+          conflictPolicy: ConflictStrategy.serverWins,
         ),
       ],
       actionPolicy: const ActionPolicy(
@@ -2481,6 +2481,30 @@ void main() {
     expect(() => LocalDate.parse('2028-2-09'), throwsFormatException);
   });
 
+  test('LocalDate adds and counts calendar days across boundaries', () {
+    final fallBack = LocalDate.parse('2026-11-01');
+    final springForward = LocalDate.parse('2026-03-08');
+
+    expect(fallBack.addDays(1), LocalDate.parse('2026-11-02'));
+    expect(springForward.addDays(-1), LocalDate.parse('2026-03-07'));
+    expect(springForward.daysUntil(springForward.addDays(1)), 1);
+    expect(LocalDate.parse('2028-02-28').addDays(1).value, '2028-02-29');
+    expect(LocalDate.parse('2026-12-31').addDays(1).value, '2027-01-01');
+    expect(LocalDate.parse('2027-01-01').daysUntil(fallBack), -61);
+  });
+
+  test('LocalDate reads a UTC instant as the local calendar date', () {
+    final leapDay = LocalDate.parse('2028-02-29');
+    final localMidnightAsUtc = leapDay.toDateTime().toUtc();
+    final lateEveningAsUtc = leapDay
+        .toDateTime()
+        .add(const Duration(hours: 23, minutes: 59))
+        .toUtc();
+
+    expect(LocalDate.fromDateTime(localMidnightAsUtc), leapDay);
+    expect(LocalDate.fromDateTime(lateEveningAsUtc), leapDay);
+  });
+
   test('typed query exposes observable state as an owned stream', () async {
     final source = ObservableList<_Item>();
     final active = PersistedEqualityEntityField<_Item, bool>(
@@ -2490,7 +2514,7 @@ void main() {
         kind: EntityFieldKind.boolean,
         nullable: false,
         mutable: true,
-        conflictPolicy: FieldConflictPolicy.localWins,
+        conflictPolicy: ConflictStrategy.localWins,
       ),
       read: (item) => item.isActive,
       encode: (value) => value,
@@ -2874,6 +2898,8 @@ void main() {
       final query = cache.acquire(EntityQuerySpec(pageSize: 2));
       await Future<void>.delayed(Duration.zero);
       var transactions = 0;
+      LocalId<_Item> idFor(String name) =>
+          LocalId('00000000-0000-4000-8000-00000000000$name');
 
       final result = await query.runGeneratedBulkAction(
         (item) async {
@@ -2881,6 +2907,7 @@ void main() {
           item.isActive = false;
           return true;
         },
+        idOf: (item) => idFor(item.name),
         runTransaction: (body) async {
           transactions++;
           await body();
@@ -2888,7 +2915,9 @@ void main() {
       );
 
       expect(result.matched, 5);
-      expect(result.changed, 4);
+      expect(result.changedIds, [
+        for (final name in ['A', 'B', 'D', 'E']) idFor(name),
+      ]);
       expect(result.skipped, 1);
       expect(transactions, 3);
       expect(releases, 4); // Three detached pages plus the cached first page.
@@ -3846,7 +3875,7 @@ final class _OrderedLinkDescriptor
     kind: EntityFieldKind.uuid,
     nullable: false,
     mutable: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
   );
 
   @override
@@ -3857,7 +3886,7 @@ final class _OrderedLinkDescriptor
       kind: EntityFieldKind.uuid,
       nullable: false,
       mutable: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     ),
     EntityFieldDescriptor(
       name: 'ownerId',
@@ -3865,7 +3894,7 @@ final class _OrderedLinkDescriptor
       kind: EntityFieldKind.uuid,
       nullable: false,
       mutable: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     ),
     _sourceIdField,
     EntityFieldDescriptor(
@@ -3874,7 +3903,7 @@ final class _OrderedLinkDescriptor
       kind: EntityFieldKind.text,
       nullable: false,
       mutable: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     ),
     EntityFieldDescriptor(
       name: 'deletedAt',
@@ -3882,7 +3911,7 @@ final class _OrderedLinkDescriptor
       kind: EntityFieldKind.timestamp,
       nullable: true,
       mutable: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     ),
     EntityFieldDescriptor(
       name: 'active',
@@ -3892,7 +3921,7 @@ final class _OrderedLinkDescriptor
       mutable: true,
       hasProtocolDefault: true,
       protocolDefault: true,
-      conflictPolicy: FieldConflictPolicy.localWins,
+      conflictPolicy: ConflictStrategy.localWins,
     ),
     EntityFieldDescriptor(
       name: 'serverVersion',
@@ -3901,7 +3930,7 @@ final class _OrderedLinkDescriptor
       nullable: false,
       mutable: false,
       inCreatePayload: false,
-      conflictPolicy: FieldConflictPolicy.serverWins,
+      conflictPolicy: ConflictStrategy.serverWins,
     ),
   ];
 

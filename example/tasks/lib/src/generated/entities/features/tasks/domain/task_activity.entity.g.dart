@@ -247,6 +247,8 @@ final class TaskActivityRecord extends TaskActivity
       : LocalMutationCompletion(commit);
 
   @override
+  bool get isRemoved => deletedAt != null;
+  @override
   TaskActivity get generatedDomain => this;
   @override
   GeneratedEntityAccess<TaskActivity> get generatedAccess => this;
@@ -521,7 +523,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -543,7 +545,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -565,7 +567,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -587,7 +589,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -609,7 +611,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.none,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 160),
@@ -632,7 +634,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.none,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 240),
@@ -654,7 +656,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.none,
     reference: null,
     constraints: EntityFieldConstraints(minLength: 1, maxLength: 64),
@@ -677,7 +679,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.localWins,
+    conflictPolicy: ConflictStrategy.localWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -699,7 +701,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: false,
     protocolDefault: null,
     inCreatePayload: true,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -722,7 +724,7 @@ abstract final class TaskActivityFields {
     hasProtocolDefault: true,
     protocolDefault: 0,
     inCreatePayload: false,
-    conflictPolicy: FieldConflictPolicy.serverWins,
+    conflictPolicy: ConflictStrategy.serverWins,
     normalization: FieldNormalization.none,
     reference: null,
   );
@@ -754,6 +756,7 @@ final class TaskActivitySet {
         loader: (spec, {required after, required limit}) =>
             engine.loadQueryPage(spec, after: after, limit: limit),
         invalidations: engine.projectionChanges,
+        resolveLoaded: engine.loadedRawId,
       );
   final LocalEntityEngine<TaskActivity, TaskActivityRecord> _engine;
   final LocalEntityQueryCache<TaskActivity> _queries;
@@ -832,6 +835,16 @@ final class TaskActivitySet {
       orderBy: orderBy,
       pageSize: pageSize,
     ),
+  );
+  EntityColumnQuery<TaskActivity, V> column<V>(
+    EntityField<TaskActivity, V> field, {
+    EntityPredicate<TaskActivity>? where,
+    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
+  }) => _engine.column(
+    field,
+    where:
+        _tombstonePredicate(tombstones) &
+        (where ?? EntityPredicate<TaskActivity>.all()),
   );
   Stream<EntityQueryState<TaskActivity>> watchQuery({
     EntityPredicate<TaskActivity>? where,

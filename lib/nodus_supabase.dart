@@ -315,7 +315,7 @@ final class SupabaseSyncBackend
   Future<PushResult> push(PushSyncWorkItem item) async {
     try {
       final descriptor = _descriptorFor(item.operation.identity.entityType);
-      item = item.upcast(descriptor);
+      item = item.upcast(descriptor, definition: definition);
       final payload = item.operation.toRemoteWire();
       _validateEntityType(payload['entityType'], descriptor);
       final response = await _client.rpc(

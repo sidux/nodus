@@ -139,12 +139,16 @@ abstract class Task
 
   @Action(values: [ActionValue(#status, TaskStatus.done)])
   Future<void> complete();
+
+  @Action(values: [ActionValue(#status, TaskStatus.todo)], guard: #isCompleted)
+  Future<void> reopen();
 }
 ```
 
 Fields and annotations express persisted intent. Getters and pure business
 logic remain ordinary handwritten Dart on the same generated, observable
-`Task` identity.
+`Task` identity. A guard names one of those pure decisions: `reopen()` on an
+open task fails with a typed `ActionGuardException` before anything changes.
 
 ### 3. Initialize and generate
 
