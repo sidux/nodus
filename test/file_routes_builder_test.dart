@@ -221,6 +221,70 @@ Widget notFoundPage(Object error) => Widget();
     },
   );
 
+  test('accepts a recover VoidCallback declared by unresolved dart:ui', () async {
+    await testBuilder(
+      fileRoutesBuilder(BuilderOptions.empty),
+      {
+        'example|lib/features/home/presentation/pages/page.dart': '''
+class Widget { const Widget(); }
+
+final class HomePage extends Widget {
+  const HomePage();
+}
+''',
+        'example|lib/features/shell/presentation/pages/not_found.dart': '''
+import 'dart:ui';
+
+final class GoRouterState {}
+final class Widget {}
+
+Widget notFoundPage(
+  GoRouterState state,
+  Object error,
+  VoidCallback recover,
+) => Widget();
+''',
+      },
+      rootPackage: 'example',
+      outputs: {
+        'example|lib/features/shell/presentation/pages/not_found.routes.g.dart':
+            decodedMatches(
+              allOf([
+                contains('return route1.notFoundPage('),
+                contains('() => context.go(const HomeRoute().location),'),
+              ]),
+            ),
+      },
+    );
+  });
+
+  test('rejects a recover parameter that is not a callback', () async {
+    final messages = <String>[];
+
+    await testBuilder(fileRoutesBuilder(BuilderOptions.empty), {
+      'example|lib/features/home/presentation/pages/page.dart': '''
+class Widget { const Widget(); }
+
+final class HomePage extends Widget {
+  const HomePage();
+}
+''',
+      'example|lib/features/shell/presentation/pages/not_found.dart': '''
+final class Widget {}
+
+Widget notFoundPage(Object error, String recover) => Widget();
+''',
+    }, onLog: (record) => messages.add(record.message));
+
+    expect(
+      messages.join('\n'),
+      contains(
+        'The not-found `recover` parameter must be declared as '
+        '`VoidCallback` or `void Function()`; found `String`.',
+      ),
+    );
+  });
+
   test('omits type imports already re-exported by a route dependency', () async {
     await testBuilder(
       fileRoutesBuilder(BuilderOptions.empty),
@@ -268,17 +332,15 @@ Widget notFoundPage(Object error) => Widget();
   test('rejects a dynamic folder without its typed parameter', () async {
     final messages = <String>[];
 
-    await testBuilder(
-      fileRoutesBuilder(BuilderOptions.empty),
-      {
-        'example|lib/features/home/presentation/pages/page.dart': '''
+    await testBuilder(fileRoutesBuilder(BuilderOptions.empty), {
+      'example|lib/features/home/presentation/pages/page.dart': '''
 class Widget { const Widget(); }
 
 final class HomePage extends Widget {
   const HomePage();
 }
 ''',
-        'example|lib/features/shell/presentation/pages/not_found.dart': '''
+      'example|lib/features/shell/presentation/pages/not_found.dart': '''
 final class BuildContext {}
 final class GoRouterState {}
 final class Widget {}
@@ -291,17 +353,15 @@ Widget notFoundPage(
   VoidCallback recover,
 ) => const SizedBox();
 ''',
-        'example|lib/features/rules/presentation/pages/rules/[ruleId]/page.dart':
-            '''
+      'example|lib/features/rules/presentation/pages/rules/[ruleId]/page.dart':
+          '''
 class Widget { const Widget(); }
 
 final class RuleDetailsPage extends Widget {
   const RuleDetailsPage();
 }
 ''',
-      },
-      onLog: (record) => messages.add(record.message),
-    );
+    }, onLog: (record) => messages.add(record.message));
 
     expect(
       messages,
@@ -358,24 +418,22 @@ Widget notFoundPage(Object error) => Widget();
   test('rejects the same route path claimed by separate features', () async {
     final messages = <String>[];
 
-    await testBuilder(
-      fileRoutesBuilder(BuilderOptions.empty),
-      {
-        'example|lib/features/first/presentation/pages/rules/page.dart': '''
+    await testBuilder(fileRoutesBuilder(BuilderOptions.empty), {
+      'example|lib/features/first/presentation/pages/rules/page.dart': '''
 class Widget { const Widget(); }
 
 final class FirstRulesPage extends Widget {
   const FirstRulesPage();
 }
 ''',
-        'example|lib/features/second/presentation/pages/rules/page.dart': '''
+      'example|lib/features/second/presentation/pages/rules/page.dart': '''
 class Widget { const Widget(); }
 
 final class SecondRulesPage extends Widget {
   const SecondRulesPage();
 }
 ''',
-        'example|lib/features/shell/presentation/pages/not_found.dart': '''
+      'example|lib/features/shell/presentation/pages/not_found.dart': '''
 final class GoRouterState {}
 final class Widget {}
 typedef VoidCallback = void Function();
@@ -386,9 +444,7 @@ Widget notFoundPage(
   VoidCallback recover,
 ) => Widget();
 ''',
-      },
-      onLog: (record) => messages.add(record.message),
-    );
+    }, onLog: (record) => messages.add(record.message));
 
     expect(messages.join('\n'), contains('Duplicate file route `/rules`.'));
   });
@@ -396,20 +452,18 @@ Widget notFoundPage(
   test('rejects loose feature presentation files', () async {
     final messages = <String>[];
 
-    await testBuilder(
-      fileRoutesBuilder(BuilderOptions.empty),
-      {
-        'example|lib/features/rules/presentation/rules_view.dart': '''
+    await testBuilder(fileRoutesBuilder(BuilderOptions.empty), {
+      'example|lib/features/rules/presentation/rules_view.dart': '''
 final class RulesView {}
 ''',
-        'example|lib/features/rules/presentation/pages/rules/page.dart': '''
+      'example|lib/features/rules/presentation/pages/rules/page.dart': '''
 class Widget { const Widget(); }
 
 final class RulesPage extends Widget {
   const RulesPage();
 }
 ''',
-        'example|lib/features/shell/presentation/pages/not_found.dart': '''
+      'example|lib/features/shell/presentation/pages/not_found.dart': '''
 final class GoRouterState {}
 final class Widget {}
 typedef VoidCallback = void Function();
@@ -420,9 +474,7 @@ Widget notFoundPage(
   VoidCallback recover,
 ) => Widget();
 ''',
-      },
-      onLog: (record) => messages.add(record.message),
-    );
+    }, onLog: (record) => messages.add(record.message));
 
     expect(
       messages.join('\n'),

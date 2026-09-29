@@ -1,3 +1,4 @@
+import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/nullability_suffix.dart';
 import 'package:analyzer/dart/element/type.dart';
@@ -166,6 +167,10 @@ Future<FileRouteSpec> _parseAsset(
     dynamicNames: pathInfo.$2,
     kind: kind,
     owner: function,
+    unresolvedTypeNames: await _unresolvedTypeNames(
+      buildStep,
+      function.formalParameters,
+    ),
   );
   final package = asset.package;
   final relative = asset.path.substring('lib/'.length);
@@ -190,6 +195,35 @@ Future<FileRouteSpec> _parseAsset(
     buildsPage: false,
     isPageFunction: false,
   );
+}
+
+/// Returns the declared annotation of each parameter whose type is unresolved.
+///
+/// build_runner's analyzer cannot resolve `dart:ui`, so Flutter typedefs it
+/// declares, such as `VoidCallback`, surface as [InvalidType].
+Future<Map<String, String>> _unresolvedTypeNames(
+  BuildStep buildStep,
+  List<FormalParameterElement> formalParameters,
+) async {
+  final typeNames = <String, String>{};
+  for (final parameter in formalParameters) {
+    if (parameter.type is! InvalidType) continue;
+    final node = await buildStep.resolver.astNodeFor(parameter.firstFragment);
+    final typeName = _declaredTypeAnnotation(node)?.toSource();
+    if (typeName != null) typeNames[parameter.name!] = typeName;
+  }
+  return typeNames;
+}
+
+/// Finds a parameter's annotation across analyzer 12 (wrapped by
+/// `DefaultFormalParameter`) and analyzer 13 (`RegularFormalParameter`) ASTs.
+TypeAnnotation? _declaredTypeAnnotation(AstNode? node) {
+  if (node == null) return null;
+  for (final child in node.childEntities) {
+    if (child is TypeAnnotation) return child;
+    if (child is FormalParameter) return _declaredTypeAnnotation(child);
+  }
+  return null;
 }
 
 FileRouteSpec _parsePageAsset(
@@ -327,6 +361,7 @@ _parseParameters(
   required List<String> dynamicNames,
   required FileRouteKind kind,
   required Element owner,
+  Map<String, String> unresolvedTypeNames = const {},
 }) {
   final parameters = <RouteParameterSpec>[];
   final typeImports = <String>{};
@@ -337,7 +372,7 @@ _parseParameters(
     final typeName = type.getDisplayString();
     final parameterKind = _parameterKind(
       parameter,
-      typeName,
+      unresolvedTypeNames[parameter.name] ?? typeName,
       dynamicNames,
       kind,
     );
@@ -470,7 +505,8 @@ RouteParameterKind _parameterKind(
   if (routeKind == FileRouteKind.notFound && parameter.name == 'recover') {
     if (typeName != 'VoidCallback' && typeName != 'void Function()') {
       throw InvalidGenerationSourceError(
-        'The not-found `recover` parameter must be a VoidCallback.',
+        'The not-found `recover` parameter must be declared as '
+        '`VoidCallback` or `void Function()`; found `$typeName`.',
         element: parameter,
       );
     }
