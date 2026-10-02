@@ -272,19 +272,27 @@ final class SupabaseSyncBackend
   SupabaseSyncBackend({
     required SupabaseClient client,
     required EntityDescriptorBase descriptor,
+    Duration requestTimeout = defaultRequestTimeout,
   }) : this._definition(
          client: client,
          definition: EntityGraphDefinition.single(descriptor),
+         requestTimeout: requestTimeout,
        );
 
   SupabaseSyncBackend.graph({
     required SupabaseClient client,
     required EntityGraphDefinition definition,
-  }) : this._definition(client: client, definition: definition);
+    Duration requestTimeout = defaultRequestTimeout,
+  }) : this._definition(
+         client: client,
+         definition: definition,
+         requestTimeout: requestTimeout,
+       );
 
   SupabaseSyncBackend._definition({
     required SupabaseClient client,
     required this.definition,
+    required this.requestTimeout,
   }) : _client = client,
        _descriptors = Map.unmodifiable({
          for (final descriptor in definition.descriptors)
@@ -299,9 +307,15 @@ final class SupabaseSyncBackend
     _channel = _subscribeGraph(tables);
   }
 
+  /// Bounds every request so an unanswered one, such as a half-open
+  /// connection after a network change, fails as retryable instead of
+  /// holding its sync lane. Pushes are idempotent by operation ID.
+  static const defaultRequestTimeout = Duration(seconds: 30);
+
   final SupabaseClient _client;
   @override
   final EntityGraphDefinition definition;
+  final Duration requestTimeout;
   final Map<String, EntityDescriptorBase> _descriptors;
   final String _pullRpcName;
   final StreamController<void> _remoteChanges = StreamController.broadcast();
@@ -318,11 +332,13 @@ final class SupabaseSyncBackend
       item = item.upcast(descriptor);
       final payload = item.operation.toRemoteWire();
       _validateEntityType(payload['entityType'], descriptor);
-      final response = await _client.rpc(
-        'push_${descriptor.tableName}_operations',
-        params: {
-          'p_operations': [payload],
-        },
+      final response = await _bounded(
+        _client.rpc(
+          'push_${descriptor.tableName}_operations',
+          params: {
+            'p_operations': [payload],
+          },
+        ),
       );
       final results = _list(response);
       if (results.length != 1) {
@@ -409,9 +425,11 @@ final class SupabaseSyncBackend
   @override
   Future<PullResult> pull({required ServerSequence afterSequence}) async {
     try {
-      final response = await _client.rpc(
-        _pullRpcName,
-        params: {'p_after_sequence': afterSequence.value},
+      final response = await _bounded(
+        _client.rpc(
+          _pullRpcName,
+          params: {'p_after_sequence': afterSequence.value},
+        ),
       );
       final envelope = _map(response);
       final rows = _list(envelope['changes']);
@@ -477,11 +495,13 @@ final class SupabaseSyncBackend
   ) async {
     try {
       final descriptor = _descriptorFor(identity.entityType);
-      final response = await _client
-          .from(descriptor.tableName)
-          .select()
-          .eq(EntityConventions.idColumnName, identity.rawId)
-          .maybeSingle();
+      final response = await _bounded(
+        _client
+            .from(descriptor.tableName)
+            .select()
+            .eq(EntityConventions.idColumnName, identity.rawId)
+            .maybeSingle(),
+      );
       if (response == null) return null;
       final fields = RemoteEntityFields.decode(
         descriptor,
@@ -509,6 +529,14 @@ final class SupabaseSyncBackend
       );
     }
   }
+
+  Future<T> _bounded<T>(Future<T> request) => request.timeout(
+    requestTimeout,
+    onTimeout: () => throw RetryableSyncException(
+      code: 'request_timeout',
+      message: 'Supabase did not answer within $requestTimeout.',
+    ),
+  );
 
   @override
   Future<void> disposeRemoteChangeSignals() async {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -70,6 +71,36 @@ void main() {
     expect(snapshot!.identity.rawId, entityId);
     expect(snapshot.serverVersion, ServerVersion(4));
     expect(snapshot.fields['isActive'], isTrue);
+  });
+
+  test('an unanswered request fails as retryable instead of holding the '
+      'sync lane', () async {
+    final unanswered = Completer<http.Response>();
+    final client = SupabaseClient(
+      'https://example.invalid',
+      'test-anon-key',
+      httpClient: MockClient((_) => unanswered.future),
+    );
+    final backend = SupabaseSyncBackend.graph(
+      client: client,
+      definition: _testGraphDefinition(),
+      requestTimeout: const Duration(milliseconds: 20),
+    );
+    addTearDown(() async {
+      await backend.disposeRemoteChangeSignals();
+      await client.dispose();
+    });
+
+    await expectLater(
+      backend.pull(afterSequence: ServerSequence.zero),
+      throwsA(
+        isA<RetryableSyncException>().having(
+          (error) => error.code,
+          'code',
+          'request_timeout',
+        ),
+      ),
+    );
   });
 
   test('PostgreSQL constraint codes retain typed sync meaning', () async {

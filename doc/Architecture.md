@@ -2535,6 +2535,9 @@ The architecture MUST make common costs explicit and bounded:
 - synchronization coalesces safe state patches and pull wake-ups;
 - sync, process, and projection lanes are scheduled fairly and one target's
   backoff cannot cause head-of-line blocking for another;
+- every remote request a sync adapter issues is bounded by a transport
+  timeout that surfaces as a retryable failure, so an unanswered request
+  cannot hold its lane; idempotent operation IDs make the retry safe;
 - ordinary rank movement is O(log n) lookup plus O(1) member writes, excluding
   an explicit bounded rank-window rebalance;
 - remote decoding occurs once before stable identities update;
