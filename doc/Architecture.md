@@ -1288,7 +1288,11 @@ Its generated `entityGraph.transaction(...)` MUST:
 - order creates and deletes by declared relationships;
 - roll back observable identities in reverse order on failure;
 - join an existing transaction only when the generated root and coordinator are
-  identical; reject cross-root, cross-graph, or otherwise ambiguous nesting.
+  identical; reject cross-root, cross-graph, or otherwise ambiguous nesting;
+- serialize transactions started by independent asynchronous flows: a later
+  flow waits for the open transaction to settle instead of failing, and a
+  standalone mutation from another flow commits as its own batch without
+  joining or rejecting the open transaction.
 
 The callback accepts `FutureOr<R>` so synchronous invariants remain concise and
 asynchronous generated preparation can be composed safely. Ordered boundary

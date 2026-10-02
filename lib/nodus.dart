@@ -6066,6 +6066,17 @@ typedef PersistMutation = Future<void> Function(LocalEntityMutation mutation);
 typedef PersistMutationBatch =
     Future<void> Function(List<LocalEntityMutation> mutations);
 
+/// One asynchronous flow's open transaction batch.
+///
+/// The scope is stored in that flow's zone, so concurrent flows never share or
+/// join each other's batches; it is deactivated once the batch settles.
+final class _TransactionScope {
+  _TransactionScope(this.pending);
+
+  final List<_PendingMutation> pending;
+  bool active = true;
+}
+
 final class _PendingMutation {
   _PendingMutation(this.mutation, this.rollbackIfCurrent, {this.onSettled});
 

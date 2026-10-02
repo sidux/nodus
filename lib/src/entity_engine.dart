@@ -3853,8 +3853,9 @@ final class LocalEntityGraphCoordinator
   final Observable<SyncState> _syncState = Observable(const SyncState.idle());
   late final ReadOnlyObservableList<LocalPersistenceFailure>
   persistenceFailures;
-  List<_PendingMutation>? _transactionBuffer;
-  Object? _transactionOwnerToken;
+
+  /// Serializes whole transactions; later transactions wait their turn.
+  Future<void> _transactionTail = Future<void>.value();
   final Map<SyncTargetId, StreamSubscription<void>> _remoteSignalSubscriptions =
       {};
   StreamSubscription<Set<TableUpdate>>? _queueUpdateSubscription;
@@ -3989,25 +3990,17 @@ final class LocalEntityGraphCoordinator
     );
     final transaction = _transactionBuffer;
     if (transaction != null) {
-      if (!_ownsCurrentTransaction) {
-        throw StateError(
-          'A mutation cannot join an entity graph transaction owned by '
-          'another asynchronous flow.',
-        );
-      }
       transaction.add(pending);
       _appendActivityForMutation(mutation);
       return pending.committed;
     }
 
     final batch = <_PendingMutation>[pending];
-    final ownerToken = Object();
-    _transactionBuffer = batch;
-    _transactionOwnerToken = ownerToken;
+    final scope = _TransactionScope(batch);
     try {
       runZoned(
         () => _appendActivityForMutation(mutation),
-        zoneValues: {this: ownerToken},
+        zoneValues: {this: scope},
       );
     } catch (error, stackTrace) {
       runInAction(() {
@@ -4022,8 +4015,7 @@ final class LocalEntityGraphCoordinator
       }
       rethrow;
     } finally {
-      _transactionBuffer = null;
-      _transactionOwnerToken = null;
+      scope.active = false;
     }
     _mutationCoordinator._scheduleBatch(batch);
     return pending.committed;
@@ -4081,33 +4073,37 @@ final class LocalEntityGraphCoordinator
     return ActivityOperation.edited;
   }
 
+  /// Runs [body] atomically.
+  ///
+  /// Nested calls from the same asynchronous flow join the open transaction.
+  /// Transactions started by other flows wait until it settles, and their
+  /// standalone mutations commit as their own batches meanwhile.
   Future<R> transaction<R>(FutureOr<R> Function() body) async {
     if (_closed) throw StateError('The entity graph is closed.');
     if (_ownsCurrentTransaction) {
       return _runJoinedTransaction(body);
     }
-    if (_transactionBuffer != null) {
-      throw StateError(
-        'The entity graph already has a transaction owned by another '
-        'asynchronous flow.',
-      );
+    final previous = _transactionTail;
+    final released = Completer<void>();
+    _transactionTail = released.future;
+    try {
+      await previous;
+      if (_closed) throw StateError('The entity graph is closed.');
+      return await _runExclusiveTransaction(body);
+    } finally {
+      released.complete();
     }
+  }
+
+  Future<R> _runExclusiveTransaction<R>(FutureOr<R> Function() body) async {
     await _mutationCoordinator.flush();
-    if (_transactionBuffer != null) {
-      throw StateError(
-        'The entity graph acquired another transaction while waiting to '
-        'flush pending mutations.',
-      );
-    }
     final pending = <_PendingMutation>[];
-    final ownerToken = Object();
-    _transactionBuffer = pending;
-    _transactionOwnerToken = ownerToken;
+    final scope = _TransactionScope(pending);
     late R result;
     try {
       result = await runZoned(
         () => Future<R>.value(runInAction(body)),
-        zoneValues: {this: ownerToken},
+        zoneValues: {this: scope},
       );
       _validateComponentCreates(pending);
     } catch (error, stackTrace) {
@@ -4123,8 +4119,7 @@ final class LocalEntityGraphCoordinator
       }
       rethrow;
     } finally {
-      _transactionBuffer = null;
-      _transactionOwnerToken = null;
+      scope.active = false;
     }
     _mutationCoordinator._scheduleBatch(pending);
     await _mutationCoordinator.flush();
@@ -4240,9 +4235,16 @@ final class LocalEntityGraphCoordinator
     );
   });
 
-  bool get _ownsCurrentTransaction =>
-      _transactionBuffer != null &&
-      identical(Zone.current[this], _transactionOwnerToken);
+  _TransactionScope? get _currentTransaction {
+    final scope = Zone.current[this];
+    return scope is _TransactionScope && scope.active ? scope : null;
+  }
+
+  /// The pending batch of the transaction owned by the current flow, if any.
+  List<_PendingMutation>? get _transactionBuffer =>
+      _currentTransaction?.pending;
+
+  bool get _ownsCurrentTransaction => _currentTransaction != null;
 
   Future<R> _runJoinedTransaction<R>(FutureOr<R> Function() body) async {
     final pending = _transactionBuffer!;
