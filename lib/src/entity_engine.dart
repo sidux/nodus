@@ -1997,6 +1997,10 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
             return null;
           }
         } else {
+          await graphCoordinator._loadComposedComponents(
+            descriptor.entityType,
+            snapshot.fields,
+          );
           final resolved = await database.transaction(
             () => _mergeRemoteIntoDatabase(
               identity: snapshot.identity,
@@ -5463,6 +5467,23 @@ final class LocalEntityGraphCoordinator
     await release(database.close);
     if (firstError case final error?) {
       Error.throwWithStackTrace(error, firstStackTrace!);
+    }
+  }
+
+  /// Materializes the components an aggregate snapshot composes, so the
+  /// local composition constraint finds them before the aggregate row lands.
+  Future<void> _loadComposedComponents(
+    String aggregateEntityType,
+    RemoteEntityFields fields,
+  ) async {
+    for (final composition
+        in _compositionsByAggregate[aggregateEntityType] ?? const []) {
+      if (fields[composition.fieldName] case final String componentId) {
+        final lease = await _engineFor(
+          composition.componentEntityType,
+        ).loadRawId(componentId);
+        lease?.release();
+      }
     }
   }
 

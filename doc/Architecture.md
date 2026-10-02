@@ -2190,7 +2190,9 @@ Remote-change signals and demand snapshot fetches MAY improve latency, but
 signals never replace ordered recovery. Snapshot recovery is mandatory when the
 ordered log is not retained indefinitely. `SnapshotSyncAdapter` extends
 `SyncAdapter`, so even this optional read path carries and validates the exact
-generated target subgraph. No adapter may silently emulate an unsupported
+generated target subgraph. A demand snapshot of an aggregate materializes the
+components it composes before merging the aggregate row, preserving the
+component-first order that ordered pulls guarantee. No adapter may silently emulate an unsupported
 capability with an unbounded fetch, polling fan-out, timestamp ordering, or loss
 of conflict semantics. Generated adapter conformance suites verify every
 capability claimed by a binding.
