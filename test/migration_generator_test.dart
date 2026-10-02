@@ -361,6 +361,29 @@ void main() {
       ]);
     });
 
+    test('drops a removed index by name without a manual plan', () {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      final oldFile = fixture.writeSchema(
+        1,
+        [_column('id')],
+        indexOwner: 0,
+        indexSql: 'create unique index notes_id_idx on notes(id)',
+      );
+      final newFile = fixture.writeSchema(2, [_column('id')]);
+
+      final proposal = fixture.generator().migrationStatements(
+        oldFile,
+        newFile,
+      );
+
+      expect(proposal.requiresManualChanges, isFalse);
+      expect(proposal.statements, [
+        "await migrator.database.customStatement('DROP INDEX IF EXISTS "
+            '"notes_id_idx"\');',
+      ]);
+    });
+
     test('emits generic typed plans and guards unsafe transitions', () {
       final fixture = _Fixture();
       addTearDown(fixture.dispose);

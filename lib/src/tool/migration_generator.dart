@@ -1079,10 +1079,18 @@ final class NodusGenerator {
       }
     }
 
-    if (oldEntities.keys
-        .toSet()
-        .difference(newEntities.keys.toSet())
-        .isNotEmpty) {
+    final removed = oldEntities.keys.toSet().difference(
+      newEntities.keys.toSet(),
+    );
+    // Dropping an index never loses data, so it needs no manual plan; the new
+    // schema no longer describes it, so it is dropped by name, first.
+    statements.insertAll(0, [
+      for (final key in removed)
+        if (key.type == 'index')
+          "await migrator.database.customStatement('DROP INDEX IF EXISTS "
+              '"${key.name}"\');',
+    ]);
+    if (removed.any((key) => key.type != 'index')) {
       requiresManualChanges = true;
     }
     return MigrationProposal(
