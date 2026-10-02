@@ -266,19 +266,25 @@ final class TasksExampleEntityGraph {
     LocalEntityDiagnostics diagnostics = const NoopLocalEntityDiagnostics(),
     bool autoSync = true,
   }) async {
-    final connectedSupabase = await supabase(
-      SyncConnectorContext(
-        accountId: accountId.value,
-        target: TasksExampleMetadata.supabaseSyncTarget,
-        definition: TasksExampleMetadata.supabaseSyncDefinition,
-      ),
-    );
-    final syncAdapters = TasksExampleSyncAdapters(supabase: connectedSupabase);
-    syncAdapters.bind();
     final executor = await localStore.open(
       packageName: 'tasks_example',
       accountId: accountId.value,
     );
+    final TasksExampleSyncAdapters syncAdapters;
+    try {
+      final connectedSupabase = await supabase(
+        SyncConnectorContext(
+          accountId: accountId.value,
+          target: TasksExampleMetadata.supabaseSyncTarget,
+          definition: TasksExampleMetadata.supabaseSyncDefinition,
+        ),
+      );
+      syncAdapters = TasksExampleSyncAdapters(supabase: connectedSupabase);
+      syncAdapters.bind();
+    } catch (_) {
+      await executor.close();
+      rethrow;
+    }
     return open(
       accountId: accountId,
       executor: executor,

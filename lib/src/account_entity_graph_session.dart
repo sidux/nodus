@@ -93,6 +93,38 @@ final class AccountEntityGraphReady<G, A>
   final G entityGraph;
 }
 
+/// The account's local store is owned by another live entity graph, such as
+/// the same application open in another browser tab.
+///
+/// No graph is open. The session opens one automatically as soon as the
+/// other owner releases the store, unless a later account transition has
+/// superseded this request.
+final class AccountEntityGraphStoreInUse<G, A>
+    extends AccountEntityGraphSessionState<G, A> {
+  const AccountEntityGraphStoreInUse(this.accountId);
+
+  @override
+  final LocalId<A> accountId;
+}
+
+/// Thrown by a local-store opener when another live entity graph already owns
+/// the account's store.
+///
+/// Every runtime that can reach one store grants it to exactly one entity
+/// graph at a time. [available] completes when the current owner releases the
+/// store; a new claim then has to be made, because another opener may win it.
+final class LocalStoreInUseException implements Exception {
+  const LocalStoreInUseException(this.storeName, {required this.available});
+
+  final String storeName;
+  final Future<void> available;
+
+  @override
+  String toString() =>
+      'LocalStoreInUseException: $storeName is owned by another live '
+      'entity graph.';
+}
+
 final class AccountEntityGraphFailure<G, A>
     extends AccountEntityGraphSessionState<G, A> {
   const AccountEntityGraphFailure({
@@ -304,6 +336,11 @@ final class AccountEntityGraphSession<G, A> {
     late final G opened;
     try {
       opened = await _open(accountId);
+    } on LocalStoreInUseException catch (inUse) {
+      if (generation != _requestGeneration) return;
+      _emit(AccountEntityGraphStoreInUse(accountId));
+      unawaited(_reopenWhenAvailable(inUse.available, accountId, generation));
+      return;
     } catch (error, stackTrace) {
       if (generation == _requestGeneration) {
         _emit(
@@ -324,6 +361,30 @@ final class AccountEntityGraphSession<G, A> {
     _currentEntityGraph = opened;
     _currentAccountId = accountId;
     _emit(AccountEntityGraphReady(accountId: accountId, entityGraph: opened));
+  }
+
+  /// Retries a store-in-use open once the other owner releases the store.
+  ///
+  /// The retry is dropped when a later transition superseded the request, and
+  /// a retry failure is published as [AccountEntityGraphFailure] like any other
+  /// open failure.
+  Future<void> _reopenWhenAvailable(
+    Future<void> available,
+    LocalId<A> accountId,
+    int generation,
+  ) async {
+    try {
+      await available;
+    } catch (_) {
+      // The claim is attempted again either way; a failed wait cannot strand
+      // the session in the store-in-use state.
+    }
+    if (generation != _requestGeneration || _disposing) return;
+    try {
+      await _enqueue(() => _transition(accountId, generation));
+    } catch (_) {
+      // Already published as AccountEntityGraphFailure by _transition.
+    }
   }
 
   Future<void> _closeCurrent() async {

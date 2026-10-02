@@ -2841,32 +2841,43 @@ void _emitManagedConnectorFactories(
       'const NoopLocalEntityDiagnostics(),',
     )
     ..writeln('    bool autoSync = true,')
-    ..writeln('  }) async {');
-  for (final target in graph.syncTargets) {
-    final name = lowerCamelCase(target.wireName);
-    buffer
-      ..writeln('    final connected${_upperCamel(name)} = await $name(')
-      ..writeln('      SyncConnectorContext(')
-      ..writeln('        accountId: accountId.value,')
-      ..writeln('        target: ${graph.className}Metadata.${name}SyncTarget,')
-      ..writeln(
-        '        definition: ${graph.className}Metadata.${name}SyncDefinition,',
-      )
-      ..writeln('      ),')
-      ..writeln('    );');
-  }
-  buffer.writeln('    final syncAdapters = ${graph.className}SyncAdapters(');
-  for (final target in graph.syncTargets) {
-    final name = lowerCamelCase(target.wireName);
-    buffer.writeln('      $name: connected${_upperCamel(name)},');
-  }
-  buffer
-    ..writeln('    );')
-    ..writeln('    syncAdapters.bind();')
+    ..writeln('  }) async {')
+    // The store is claimed first: a store owned by another live graph must
+    // fail before any connector subscribes to its remote target.
     ..writeln('    final executor = await localStore.open(')
     ..writeln("      packageName: '${graph.packageName}',")
     ..writeln('      accountId: accountId.value,')
     ..writeln('    );')
+    ..writeln('    final ${graph.className}SyncAdapters syncAdapters;')
+    ..writeln('    try {');
+  for (final target in graph.syncTargets) {
+    final name = lowerCamelCase(target.wireName);
+    buffer
+      ..writeln('      final connected${_upperCamel(name)} = await $name(')
+      ..writeln('        SyncConnectorContext(')
+      ..writeln('          accountId: accountId.value,')
+      ..writeln(
+        '          target: ${graph.className}Metadata.${name}SyncTarget,',
+      )
+      ..writeln(
+        '          definition: '
+        '${graph.className}Metadata.${name}SyncDefinition,',
+      )
+      ..writeln('        ),')
+      ..writeln('      );');
+  }
+  buffer.writeln('      syncAdapters = ${graph.className}SyncAdapters(');
+  for (final target in graph.syncTargets) {
+    final name = lowerCamelCase(target.wireName);
+    buffer.writeln('        $name: connected${_upperCamel(name)},');
+  }
+  buffer
+    ..writeln('      );')
+    ..writeln('      syncAdapters.bind();')
+    ..writeln('    } catch (_) {')
+    ..writeln('      await executor.close();')
+    ..writeln('      rethrow;')
+    ..writeln('    }')
     ..writeln('    return open(')
     ..writeln('      accountId: accountId,')
     ..writeln('      executor: executor,')

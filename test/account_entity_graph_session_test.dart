@@ -153,6 +153,70 @@ void main() {
     );
   });
 
+  test('a store owned elsewhere waits, then opens once released', () async {
+    final released = Completer<void>();
+    var attempts = 0;
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (accountId) async {
+        if (attempts++ == 0) {
+          throw LocalStoreInUseException('store', available: released.future);
+        }
+        return _TestEntityGraph(accountId);
+      },
+      close: (_) async {},
+    );
+    addTearDown(session.dispose);
+
+    await session.switchAccount(_accountId);
+    expect(
+      session.state,
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.accountId, 'accountId', _accountId),
+    );
+
+    final ready = session.states.firstWhere(
+      (state) =>
+          state is AccountEntityGraphReady<_TestEntityGraph, _TestAccount>,
+    );
+    released.complete();
+    expect(
+      await ready.timeout(const Duration(seconds: 1)),
+      isA<AccountEntityGraphReady<_TestEntityGraph, _TestAccount>>().having(
+        (state) => state.accountId,
+        'accountId',
+        _accountId,
+      ),
+    );
+    expect(attempts, 2);
+  });
+
+  test(
+    'signing out while the store is owned elsewhere drops the reopen',
+    () async {
+      final released = Completer<void>();
+      var attempts = 0;
+      final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+        open: (accountId) async {
+          attempts++;
+          throw LocalStoreInUseException('store', available: released.future);
+        },
+        close: (_) async {},
+      );
+      addTearDown(session.dispose);
+
+      await session.switchAccount(_accountId);
+      await session.switchAccount(null);
+      released.complete();
+      await pumpEventQueue();
+
+      expect(attempts, 1);
+      expect(
+        session.state,
+        isA<AccountEntityGraphSignedOut<_TestEntityGraph, _TestAccount>>(),
+      );
+    },
+  );
+
   test('ready work delays a later account close until it completes', () async {
     final action = Completer<void>();
     final events = <String>[];

@@ -64,12 +64,12 @@ package "GENERATED PUBLIC CONTRACT\nnever hand-edit generated files" as Generate
 
 package "ONE LIVE ACCOUNT-SCOPED RUNTIME" as Runtime #F3E5F5 {
   component "Optional <Application>EntityGraphHost\nplatform identity subscription only" as EntityGraphHost #E1BEE7
-  component "AccountEntityGraphSession\nserialized open · switch · close" as EntityGraphSession #E1BEE7
+  component "AccountEntityGraphSession\nserialized open · switch · close\nstore-in-use wait and reopen" as EntityGraphSession #E1BEE7
   component "<Application>EntityGraph\npublic domain facade" as EntityGraph #E1BEE7
   component "Generated <Entity>Sets\nqueries · transactions · relationships" as Sets #E1BEE7
   component "Private narrow runtimes\nidentity · mutation + activity · query · transaction\nlocal store · process · synchronization" as PrivateRuntimes #E1BEE7
   component "IdentityMap\none stable MobX entity object per ID" as IdentityMap #E1BEE7
-  database "One account Drift store\naccepted + optimistic state\npending operations · conflicts\nqueue work · receipts · cursors" as Drift #D1C4E9
+  database "One account Drift store\nexclusively claimed by one live graph\naccepted + optimistic state\npending operations · conflicts\nqueue work · receipts · cursors" as Drift #D1C4E9
   component "One durable work scheduler\nsync · process · projection lanes" as Scheduler #E1BEE7
   component "Generated typed adapter registry" as Registry #E1BEE7
 

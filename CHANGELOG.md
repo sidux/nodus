@@ -48,3 +48,9 @@
   object/list/void external-capability contract factories.
 - Generates Drift table rebuilds for constraint-only changes and adds an
   explicit `NodusMigrationPlan.acknowledgeGenerated()` review decision.
+- Grants each account's local store to one live entity graph at a time. The
+  web store claims it through an exclusive Web Lock shared by every tab of the
+  origin; a second claimant fails with `LocalStoreInUseException` before any
+  sync connector starts, and `AccountEntityGraphSession` publishes
+  `AccountEntityGraphStoreInUse` and reopens automatically once the store is
+  released.

@@ -287,7 +287,8 @@ descriptor groups, or adapter-registry construction.
 Opening an entity graph MUST, in order:
 
 1. validate the generated graph definition and every sync-adapter binding;
-2. open the account-specific Drift store and apply reviewed migrations;
+2. claim exclusive ownership of the account-specific Drift store, open it,
+   and apply reviewed migrations;
 3. create one local transaction/queue coordinator;
 4. create the generated typed sets plus private identity, mutation, query,
    transaction, local-store, process, and synchronization runtimes required by
@@ -298,7 +299,12 @@ Opening an entity graph MUST, in order:
 7. publish one ready entity graph only after initialization succeeds.
 
 Failure closes every partially opened resource before publishing a typed
-failure state. On account switch the session rejects new foreground work,
+failure state. A store owned by another live entity graph is not a failure:
+the opener fails with the typed `LocalStoreInUseException` before any target
+connector, signal, or worker starts, and the session publishes the
+store-in-use state described in section 9. When that owner releases the store,
+the session reopens the current account automatically; a later sign-out or
+account switch supersedes the pending reopen. On account switch the session rejects new foreground work,
 cancels target signals and claimable background work, waits for in-flight local
 commits, checkpoints durable remote work, and closes the previous graph before
 publishing the next. It MUST NOT wait indefinitely for a network request:
@@ -313,8 +319,8 @@ generated `BuildContext.withReady<Application>EntityGraph` method preserve the
 same lease while omitting an unused account argument; applications MUST NOT
 recreate either forwarding helper.
 
-`AccountEntityGraphScope` exposes signed-out, opening, ready, and failure
-lifecycle transitions only; entity/query mutations remain direct MobX
+`AccountEntityGraphScope` exposes signed-out, opening, store-in-use, ready,
+and failure lifecycle transitions only; entity/query mutations remain direct MobX
 observations and MUST NOT rebuild that scope. Tests inject account storage,
 clock, ID source, and sync adapters through the same opening boundary rather
 than global overrides hidden from the entity graph.
@@ -1987,6 +1993,20 @@ One account entity graph owns one Drift database connection/coordinator.
 Background work uses the same owner or an explicit supported bridge.
 Independent writers to the same file are forbidden because they break
 observation and transaction ordering.
+
+Ownership is exclusive across every runtime that can reach the store, not only
+within one process: browser tabs and workers of one origin share one store per
+account, and so may several processes sharing a file. The local-store opener
+claims the store before opening it and releases the claim when its executor
+closes; the default browser opener holds an exclusive Web Lock named after the
+store. A second claimant receives `LocalStoreInUseException`, which exposes
+when the current owner releases the store. The application presents that
+store-in-use state, such as "open in another tab", and offers no entity data
+until it owns the store. Keeping several live graphs coherent by broadcasting
+committed changes and reloading projections is forbidden: identity maps,
+query membership, outbound queue ordering, synchronization leases, and pull
+cursors each assume a single owner, and a second graph would replay, reorder,
+or silently miss accepted work.
 
 The generated `EntityGraphDefinition` is the source of truth for entity-owned
 local schema objects. Mappings, indexes, constraints, and ordinary migration
