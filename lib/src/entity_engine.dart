@@ -3162,10 +3162,15 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       ...(mutation.syncPatch ?? mutation.patch).toWire(),
     };
     if (_mustPreserveCreateBoundary(
-      existingOperation,
-      mutation.syncPatch ?? mutation.patch,
-      mergedPatch,
-    )) {
+          existingOperation,
+          mutation.syncPatch ?? mutation.patch,
+          mergedPatch,
+        ) ||
+        await _wouldReorderUniqueKey(
+          target,
+          existing.read<int>('id'),
+          mutation.syncPatch ?? mutation.patch,
+        )) {
       await _insertPushWork(target, mutation, operation);
       return;
     }
@@ -3185,6 +3190,37 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         existing.read<int>('id'),
       ],
     );
+  }
+
+  /// Whether merging [nextPatch] into queued work [existingId] would move a
+  /// unique-key change ahead of later work, such as the deletion that freed
+  /// the key, so the server would see the key taken twice.
+  Future<bool> _wouldReorderUniqueKey(
+    SyncTargetId target,
+    int existingId,
+    EntityPatch nextPatch,
+  ) async {
+    final constraints = switch (descriptor) {
+      final EntityUniqueConstraintDescriptor value => value.uniqueConstraints,
+      _ => const <EntityUniqueConstraint>[],
+    };
+    final next = nextPatch.toWire();
+    if (!constraints.any(
+      (constraint) => constraint.fieldNames.any(next.containsKey),
+    )) {
+      return false;
+    }
+    final later = await database
+        .customSelect(
+          "select 1 from local_entity_sync_work where direction = 'push' "
+          'and sync_target = ? and id > ? limit 1',
+          variables: [
+            Variable.withString(target.wireName),
+            Variable.withInt(existingId),
+          ],
+        )
+        .getSingleOrNull();
+    return later != null;
   }
 
   bool _mustPreserveCreateBoundary(
