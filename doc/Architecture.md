@@ -2538,6 +2538,9 @@ The architecture MUST make common costs explicit and bounded:
 - every remote request a sync adapter issues is bounded by a transport
   timeout that surfaces as a retryable failure, so an unanswered request
   cannot hold its lane; idempotent operation IDs make the retry safe;
+- generated SQL raises deterministic conflicts (stale versions, changed
+  memberships or scopes) with the PostgREST status code `PT409`, never the
+  `40001` serialization failure that PostgREST retries without bound;
 - ordinary rank movement is O(log n) lookup plus O(1) member writes, excluding
   an explicit bounded rank-window rebalance;
 - remote decoding occurs once before stable identities update;

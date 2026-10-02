@@ -122,6 +122,17 @@ void main() {
     }
   });
 
+  test('a version conflict arrives as a PostgREST status code, never as a '
+      'serialization failure PostgREST would retry', () async {
+    final fixture = _errorFixture('PT409');
+    addTearDown(fixture.dispose);
+
+    await expectLater(
+      fixture.backend.push(_createWork()),
+      throwsA(isA<VersionConflictException>()),
+    );
+  });
+
   test(
     'malformed pull booleans become typed server-contract rejections',
     () async {

@@ -1184,6 +1184,15 @@ void main() {
       hasLength(2),
       reason: 'Patch and delete authorization each emit one rejection.',
     );
+    expect(
+      sql,
+      contains("raise exception 'Version conflict' using errcode = 'PT409';"),
+    );
+    expect(
+      sql,
+      isNot(contains("'40001'")),
+      reason: 'PostgREST retries serialization failures indefinitely.',
+    );
     expect(sql, contains('Patch contains a forbidden field'));
     expect(sql, contains('server_version bigint not null default 1'));
     expect(sql, contains('check (sort_order >= 0)'));

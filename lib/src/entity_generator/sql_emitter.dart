@@ -1831,7 +1831,7 @@ where member.${sourceField.columnName} = $sourceId
 for update;
 if $baseComparison then
   raise exception 'Exact relationship membership changed'
-    using errcode = '40001';
+    using errcode = 'PT409';
 end if;
 if exists (
   with $requestedCte
@@ -1858,7 +1858,7 @@ if exists (
   where occupied.${sourceField.columnName} <> $sourceId
      or occupied.${targetField.columnName} <> requested.target_id
 ) then
-  raise exception 'Relationship pair identity changed' using errcode = '40001';
+  raise exception 'Relationship pair identity changed' using errcode = 'PT409';
 end if;
 if exists (
   select 1 from public.${spec.tableName} member
@@ -2087,7 +2087,7 @@ where candidate.${spec.idField.columnName} = (current_operation ->> 'entityId'):
   and $lockedSourceKey = source_order_scope_key
 for update;
 if not found then
-  raise exception 'Ordered entity left its source scope' using errcode = '40001';
+  raise exception 'Ordered entity left its source scope' using errcode = 'PT409';
 end if;
 $referenceValidation$cycleValidation
 source_order_scope := ${_orderScopeRowJsonExpression(spec, 'canonical')};
@@ -2214,7 +2214,7 @@ where candidate.${spec.idField.columnName} = (current_operation ->> 'entityId'):
   and $lockedScopeExpression = order_scope_key
 for update;
 if not found then
-  raise exception 'Ordered entity left its canonical scope' using errcode = '40001';
+  raise exception 'Ordered entity left its canonical scope' using errcode = 'PT409';
 end if;
 insert into public.local_entity_order_scopes (entity_type, scope_key)
 values ('${spec.className}', order_scope_key)
@@ -2245,7 +2245,7 @@ if exists (
   full outer join active_members using (member_id)
   where requested.member_id is null or active_members.member_id is null
 ) then
-  raise exception 'Exact ordered membership changed' using errcode = '40001';
+  raise exception 'Exact ordered membership changed' using errcode = 'PT409';
 end if;
 if exists (
   select 1
@@ -2390,7 +2390,7 @@ where candidate.${spec.idField.columnName} = (current_operation ->> 'entityId'):
   and $lockedScopeExpression = order_scope_key
 for update;
 if not found then
-  raise exception 'Ordered entity left its canonical scope' using errcode = '40001';
+  raise exception 'Ordered entity left its canonical scope' using errcode = 'PT409';
 end if;
 insert into public.local_entity_order_scopes (entity_type, scope_key)
 values ('${spec.className}', order_scope_key)
@@ -2803,7 +2803,7 @@ void _emitEntityFunctions(
           '<> p_base_server_version then',
         )
         ..writeln(
-          "    raise exception 'Version conflict' using errcode = '40001';",
+          "    raise exception 'Version conflict' using errcode = 'PT409';",
         )
         ..writeln('  end if;')
         ..writeln('  update public.${spec.tableName}')

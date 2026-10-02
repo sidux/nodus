@@ -636,7 +636,9 @@ final class SupabaseSyncBackend
 
   static SyncBackendException _mapPostgrestError(PostgrestException error) {
     return switch (error.code) {
-      '40001' => VersionConflictException(error.message),
+      // A deterministic conflict uses a PostgREST status code: PostgREST
+      // retries `40001` serialization failures itself, indefinitely.
+      'PT409' => VersionConflictException(error.message),
       '42501' => RejectedSyncException.authorization(
         code: 'authorization_denied',
         message: error.message,
