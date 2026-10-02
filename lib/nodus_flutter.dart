@@ -15,6 +15,7 @@ import 'package:mobx/mobx.dart' hide Listenable;
 
 import 'src/flutter_local_store_stub.dart'
     if (dart.library.io) 'src/flutter_local_store_io.dart'
+    if (dart.library.js_interop) 'src/flutter_local_store_web.dart'
     as local_store;
 
 part 'src/file_routes.dart';
@@ -27,7 +28,8 @@ abstract interface class NodusLocalStore {
   });
 }
 
-/// Default Flutter storage: one background SQLite database per account.
+/// Default Flutter storage: one background SQLite database per account, or a
+/// browser-persisted WebAssembly SQLite database per account on the web.
 final class ApplicationSupportNodusLocalStore implements NodusLocalStore {
   const ApplicationSupportNodusLocalStore();
 
