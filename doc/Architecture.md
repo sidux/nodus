@@ -854,7 +854,10 @@ Capability visibility conventions are:
 `Component` is also a marker, but it narrows lifecycle and creation. The
 component has no independent collaboration or `SoftDeletable` API. Its
 relationship select/update grants are derived from the aggregate composition,
-and deletion belongs only to generated physical aggregate cleanup. Remote
+so a component is readable exactly when its aggregate is, including readable
+workflow states, and is published to every new viewer before the aggregate
+row that references it. Deletion belongs only to generated physical aggregate
+cleanup. Remote
 insertion is owner-authorized solely so dependency-ordered synchronization can
 write the component before the restrictive aggregate reference; this does not
 grant owner read, update, delete, or a standalone domain creation API. Its

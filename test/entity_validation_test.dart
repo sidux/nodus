@@ -7942,6 +7942,118 @@ abstract class TaskAttachment
     },
   );
 
+  test('composed components follow workflow preview access and precede their '
+      'aggregate in pulls', () async {
+    final sources =
+        _sources(r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/document.dart';
+import 'package:nodus/membership_status.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  collaboration: CollaborationAccess.workflow(
+    additionalReadableStates: [MembershipStatus.pending],
+  ),
+)
+abstract class Task implements OwnedBy<Task, Account> {
+  @Composition()
+  abstract final LocalId<Document> documentId;
+}
+''', fileName: 'task.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}'
+          ..['nodus|lib/membership_status.dart'] =
+              'enum MembershipStatus { pending, accepted, revoked }'
+          ..['nodus|lib/document.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity()
+abstract class Document implements OwnedBy<Document, Account>, Component {}
+'''
+          ..['nodus|lib/task_member.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/membership_status.dart';
+import 'package:nodus/task.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.select, RlsPrincipal.participant),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.participant),
+  ],
+)
+abstract class TaskMember implements OwnedBy<TaskMember, Account> {
+  @OwnerReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+
+  @AccessParticipant()
+  abstract final LocalId<Account> memberId;
+
+  @Persisted(defaultValue: MembershipStatus.pending, transitions: [
+    AllowedTransition(
+      MembershipStatus.pending,
+      MembershipStatus.accepted,
+      by: [RlsPrincipal.participant],
+    ),
+    AllowedTransition(
+      MembershipStatus.accepted,
+      MembershipStatus.revoked,
+      by: [RlsPrincipal.owner],
+    ),
+  ])
+  abstract final MembershipStatus status;
+
+  @Action(values: [ActionValue(#status, MembershipStatus.accepted)])
+  Future<void> accept();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.revoked)])
+  Future<void> revoke();
+}
+''';
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            predicate<String>((sql) {
+              final start = sql.lastIndexOf(
+                'function public.is_documents_relationship_select(p_id uuid)',
+              );
+              final body = sql.substring(start, sql.indexOf(r'$$;', start));
+              return body.contains("member.status in ('accepted', 'pending')");
+            }, 'derives component select from task preview access'),
+            contains(
+              "    perform public.publish_documents_relationship_access(\n"
+              "      target_row.document_id,\n"
+              "      new.member_id\n"
+              "    );\n"
+              "    delete from public.local_entity_changes\n"
+              "    where entity_type = 'Task'",
+            ),
+          ]),
+        ),
+      },
+    );
+  });
+
   test('rejects non-enum workflow readable states', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';

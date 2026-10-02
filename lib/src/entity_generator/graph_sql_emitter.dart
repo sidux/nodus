@@ -374,7 +374,7 @@ begin
   where ${target.idField.columnName} = p_target_id;
   if not found then return; end if;
 
-  delete from public.local_entity_changes
+${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression: 'p_user_id', indent: '  ')}  delete from public.local_entity_changes
   where entity_type = '${target.className}'
     and entity_id = p_target_id
     and audience_user_id = p_user_id;
@@ -553,6 +553,7 @@ String _relationshipAudienceSelect(
         relationship,
         entityId: '$rowAlias.${relationship.idField.columnName}',
         aliasPrefix: _sqlAlias('audience_${relationship.tableName}_self'),
+        includeReadableStates: true,
       ),
     );
   }
@@ -603,12 +604,15 @@ String _relationshipAudienceByUserExpression(
       '$rowAlias.${participant.columnName} = $userExpression',
   };
   if (relationship.accessTargetFields.any((field) => field.isComposition)) {
+    // A component is part of its aggregate's record, so it is readable exactly
+    // when the aggregate itself is, including readable workflow states.
     expressions.add(
       _readableByUserExpression(
         graph,
         relationship,
         rowAlias: rowAlias,
         userExpression: userExpression,
+        includeReadableStates: true,
       ),
     );
   }
@@ -651,6 +655,7 @@ List<String> _entityAudienceCandidates(
   EntitySpec target, {
   required String entityId,
   required String aliasPrefix,
+  bool includeReadableStates = false,
 }) {
   final candidates = <String>[];
   final targetAlias = _sqlAlias('${aliasPrefix}_${target.tableName}');
@@ -693,8 +698,7 @@ List<String> _entityAudienceCandidates(
         'select $memberAlias.${workflow.participant.columnName} as user_id '
         'from public.${membership.tableName} $memberAlias where '
         '$memberAlias.${workflow.targetReference.columnName} = $entityId '
-        'and $memberAlias.${workflow.status.columnName} = '
-        '${_sqlLiteral(collaboration.acceptedValue!)} '
+        'and ${_workflowStatePredicate('$memberAlias.${workflow.status.columnName}', collaboration, includeReadableStates: includeReadableStates)} '
         'and $memberAlias.${membership.deletedAtField!.columnName} is null',
       );
     }
@@ -955,7 +959,7 @@ begin
       raise exception 'Collaboration target not found' using errcode = 'P0001';
     end if;
 
-    delete from public.local_entity_changes
+${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression: 'new.${workflow.participant.columnName}', indent: '    ')}    delete from public.local_entity_changes
     where entity_type = '${target.className}'
       and entity_id = target_row.${target.idField.columnName}
       and audience_user_id = new.${workflow.participant.columnName};
@@ -1036,7 +1040,7 @@ begin
     raise exception 'Collaboration target not found' using errcode = 'P0001';
   end if;
 
-  delete from public.local_entity_changes
+${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression: 'new.${workflow.participant.columnName}', indent: '  ')}  delete from public.local_entity_changes
   where entity_type = '${target.className}'
     and entity_id = target_row.${target.idField.columnName}
     and audience_user_id = new.${workflow.participant.columnName};
@@ -1104,6 +1108,19 @@ String _emitReferenceAccessPropagationSql(EntityGraphSpec graph) {
         rowAlias: 'entity',
         userExpression: 'p_user_id',
       );
+      for (final (field, component) in _publishedCompositions(
+        graph,
+        dependent,
+      )) {
+        body
+          ..writeln(
+            '  perform public.publish_${component.tableName}_relationship_access(',
+          )
+          ..writeln('    entity.${field.columnName}, p_user_id')
+          ..writeln('  )')
+          ..writeln('  from public.${dependent.tableName} entity')
+          ..writeln('  where $affected;');
+      }
       body
         ..writeln('  delete from public.local_entity_changes changes')
         ..writeln('  using public.${dependent.tableName} entity')
@@ -1173,6 +1190,40 @@ revoke all on function public.$functionName(uuid, uuid) from $supabaseApiRoles;$
   return sections.join('\n\n');
 }
 
+/// Composition fields of [aggregate] whose component has derived read access.
+Iterable<(FieldSpec, EntitySpec)> _publishedCompositions(
+  EntityGraphSpec graph,
+  EntitySpec aggregate,
+) sync* {
+  for (final field in aggregate.fields.where((field) => field.isComposition)) {
+    final component = graph.entities.singleWhere(
+      (entity) => entity.className == field.reference!.targetClassName,
+    );
+    if (component.relationshipAccessOperations.contains(RlsOperation.select)) {
+      yield (field, component);
+    }
+  }
+}
+
+/// Publishes [aggregate]'s components to a user whose access to the aggregate
+/// changed. It runs before the aggregate row is published, so an inbound
+/// aggregate never reaches a client without the component its record needs.
+String _componentPublicationSql(
+  EntityGraphSpec graph,
+  EntitySpec aggregate, {
+  required String rowAlias,
+  required String userExpression,
+  required String indent,
+}) => _publishedCompositions(graph, aggregate)
+    .map(
+      (composition) =>
+          '${indent}perform public.publish_${composition.$2.tableName}_relationship_access(\n'
+          '$indent  $rowAlias.${composition.$1.columnName},\n'
+          '$indent  $userExpression\n'
+          '$indent);\n',
+    )
+    .join();
+
 bool _hasReferenceAccessDependents(EntityGraphSpec graph, EntitySpec target) =>
     graph.entities.any(
       (entity) => entity.accessReferenceFields.any(
@@ -1235,6 +1286,7 @@ String _readableByUserExpression(
   EntitySpec entity, {
   required String rowAlias,
   required String userExpression,
+  bool includeReadableStates = false,
 }) {
   final expressions = entity.security.grants
       .where((grant) => grant.operation == RlsOperation.select)
@@ -1245,6 +1297,7 @@ String _readableByUserExpression(
           grant.principal,
           rowAlias: rowAlias,
           userExpression: userExpression,
+          includeReadableStates: includeReadableStates,
         ),
       )
       .toSet();
@@ -1271,6 +1324,7 @@ String _principalByUserExpression(
   RlsPrincipal principal, {
   required String rowAlias,
   required String userExpression,
+  bool includeReadableStates = false,
 }) => switch (principal) {
   RlsPrincipal.owner =>
     '$rowAlias.${entity.ownerField.columnName} = $userExpression',
@@ -1283,6 +1337,7 @@ String _principalByUserExpression(
     entity,
     entityId: '$rowAlias.${entity.idField.columnName}',
     userExpression: userExpression,
+    includeReadableStates: includeReadableStates,
   ),
   RlsPrincipal.reference => _referencesByUserExpression(
     graph,
@@ -1308,6 +1363,7 @@ String _collaboratorByUserExpression(
   EntitySpec entity, {
   required String entityId,
   required String userExpression,
+  bool includeReadableStates = false,
 }) {
   final collaboration = entity.security.collaboration;
   if (collaboration == null) return 'false';
@@ -1327,10 +1383,19 @@ String _collaboratorByUserExpression(
   return 'exists (select 1 from public.${membership.tableName} member '
       'where member.${workflow.targetReference.columnName} = $entityId '
       'and member.${workflow.participant.columnName} = $userExpression '
-      'and member.${workflow.status.columnName} = '
-      '${_sqlLiteral(collaboration.acceptedValue!)} '
+      'and ${_workflowStatePredicate('member.${workflow.status.columnName}', collaboration, includeReadableStates: includeReadableStates)} '
       'and member.${deletedAt.columnName} is null)';
 }
+
+/// Matches active workflow members, or every readable state when the caller
+/// derives visibility that must equal the collaboration target's own select.
+String _workflowStatePredicate(
+  String column,
+  CollaborationSpec collaboration, {
+  required bool includeReadableStates,
+}) => includeReadableStates && collaboration.hasAdditionalReadableStates
+    ? '$column in (${collaboration.readableValues.map(_sqlLiteral).join(', ')})'
+    : '$column = ${_sqlLiteral(collaboration.acceptedValue!)}';
 
 String _referencesByUserExpression(
   EntityGraphSpec graph,
