@@ -45,7 +45,7 @@ void main() {
   );
 
   test(
-    'Given an active graph transaction, When unrelated asynchronous work mutates, Then it cannot join the batch',
+    'Given an active graph transaction, When unrelated asynchronous work mutates, Then it commits as its own batch',
     () async {
       final graph = await openGraph();
       addTearDown(graph.close);
@@ -56,29 +56,19 @@ void main() {
         await graph.tasks.create(title: 'Owned transaction');
         transactionStarted.complete();
         await releaseTransaction.future;
+        throw StateError('Roll back the owned batch.');
       });
       await transactionStarted.future;
 
-      try {
-        await expectLater(
-          graph.tasks.create(title: 'Unrelated mutation'),
-          throwsA(
-            isA<StateError>().having(
-              (error) => error.message,
-              'message',
-              contains('owned by another asynchronous flow'),
-            ),
-          ),
-        );
-      } finally {
-        releaseTransaction.complete();
-        await transaction;
-      }
+      await graph.tasks.create(title: 'Unrelated mutation');
+
+      releaseTransaction.complete();
+      await expectLater(transaction, throwsStateError);
 
       final tasks = await TaskList.all(
         graph,
       ).useAll((items) => List<Task>.of(items));
-      expect(tasks.map((task) => task.title), ['Owned transaction']);
+      expect(tasks.map((task) => task.title), ['Unrelated mutation']);
     },
   );
 

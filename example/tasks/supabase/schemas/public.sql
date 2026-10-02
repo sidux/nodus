@@ -182,7 +182,7 @@ begin
     raise exception 'Entity not found' using errcode = 'P0002';
   end if;
   if current_row.server_version <> p_base_server_version then
-    raise exception 'Version conflict' using errcode = '40001';
+    raise exception 'Version conflict' using errcode = 'PT409';
   end if;
   update public.task_projects
   set
@@ -441,7 +441,7 @@ begin
     and candidate.owner_id::text = order_scope_key
   for update;
   if not found then
-    raise exception 'Ordered entity left its canonical scope' using errcode = '40001';
+    raise exception 'Ordered entity left its canonical scope' using errcode = 'PT409';
   end if;
   insert into public.local_entity_order_scopes (entity_type, scope_key)
   values ('TaskProject', order_scope_key)
@@ -685,7 +685,7 @@ begin
     and candidate.owner_id::text = order_scope_key
   for update;
   if not found then
-    raise exception 'Ordered entity left its canonical scope' using errcode = '40001';
+    raise exception 'Ordered entity left its canonical scope' using errcode = 'PT409';
   end if;
   insert into public.local_entity_order_scopes (entity_type, scope_key)
   values ('TaskProject', order_scope_key)
@@ -716,7 +716,7 @@ begin
     full outer join active_members using (member_id)
     where requested.member_id is null or active_members.member_id is null
   ) then
-    raise exception 'Exact ordered membership changed' using errcode = '40001';
+    raise exception 'Exact ordered membership changed' using errcode = 'PT409';
   end if;
   if exists (
     select 1
@@ -1046,7 +1046,7 @@ begin
     raise exception 'State transition is not allowed' using errcode = '23514';
   end if;
   if current_row.server_version <> p_base_server_version then
-    raise exception 'Version conflict' using errcode = '40001';
+    raise exception 'Version conflict' using errcode = 'PT409';
   end if;
   update public.tasks
   set
@@ -1451,7 +1451,7 @@ begin
     and jsonb_build_array(candidate.owner_id, candidate.project_id)::text = order_scope_key
   for update;
   if not found then
-    raise exception 'Ordered entity left its canonical scope' using errcode = '40001';
+    raise exception 'Ordered entity left its canonical scope' using errcode = 'PT409';
   end if;
   insert into public.local_entity_order_scopes (entity_type, scope_key)
   values ('Task', order_scope_key)
@@ -1718,7 +1718,7 @@ begin
     and jsonb_build_array(candidate.owner_id, candidate.project_id)::text = source_order_scope_key
   for update;
   if not found then
-    raise exception 'Ordered entity left its source scope' using errcode = '40001';
+    raise exception 'Ordered entity left its source scope' using errcode = 'PT409';
   end if;
   if (current_operation -> 'patch' -> 'targetScope') ? 'projectId' and jsonb_typeof(current_operation -> 'patch' -> 'targetScope' -> 'projectId') <> 'null' and not (public.is_task_projects_owner((current_operation -> 'patch' -> 'targetScope' ->> 'projectId')::uuid)) then
     raise exception 'Referenced entity access denied' using errcode = '42501';
@@ -1987,7 +1987,7 @@ create table if not exists public.task_activities (
 
 create index if not exists task_activities_subject_id_occurred_at_idx on public.task_activities (subject_id, occurred_at);
 create index if not exists task_activities_occurred_at_idx on public.task_activities (occurred_at);
-create unique index if not exists task_activities_source_operation_id_idx on public.task_activities (source_operation_id);
+create unique index if not exists task_activities_source_operation_id_active_idx on public.task_activities (source_operation_id) where deleted_at is null;
 
 create or replace function public.is_task_activities_owner(p_id uuid)
 returns boolean language sql stable security definer

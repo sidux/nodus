@@ -1,152 +1,21 @@
--- GENERATED FILE. DO NOT EDIT.
--- Source: package:tasks_example/nodus.lock
--- Sync target: supabase
--- The target descriptor subgraph is the source of truth for this public schema fragment.
+-- Sync conflicts raise PostgREST status code PT409 instead of the 40001
+-- serialization failure PostgREST retries without bound, and a deleted row no
+-- longer holds an unconditional unique key.
+--
+-- Regenerated from the Nodus declarations.
 
--- GENERATED FILE. DO NOT EDIT.
--- Source: package:tasks_example/features/tasks/domain/task_project.dart
--- Entity declarations are the schema source of truth.
+drop index if exists "public"."task_activities_source_operation_id_idx";
 
-create table if not exists public.task_projects (
-  id uuid not null primary key,
-  owner_id uuid not null references auth.users (id) on delete cascade,
-  title text not null check (title = btrim(title)) check (char_length(btrim(title)) >= 1) check (char_length(title) <= 80),
-  order_rank text not null default '057896044618658097711785492504343953926634992332820282019728792003956564819967' check (order_rank ~ '^[0-9]{78}$' and order_rank::numeric > 0 and order_rank::numeric < 115792089237316195423570985008687907853269984665640564039457584007913129639935::numeric),
-  deleted_at timestamptz,
-  server_version bigint not null default 1
-);
+CREATE UNIQUE INDEX task_activities_source_operation_id_active_idx ON public.task_activities USING btree (source_operation_id) WHERE (deleted_at IS NULL);
 
-create index if not exists task_projects_owner_id_deleted_at_order_rank_id_idx on public.task_projects (owner_id, deleted_at, order_rank, id);
-create index if not exists task_projects_owner_id_deleted_at_title_id_idx on public.task_projects (owner_id, deleted_at, title, id);
+set check_function_bodies = off;
 
-create or replace function public.is_task_projects_owner(p_id uuid)
-returns boolean language sql stable security definer
-set search_path = '' as $$
-  select exists (select 1 from public.task_projects entity where entity.id = p_id and entity.owner_id = auth.uid());
-$$;
-create or replace function public.is_task_projects_collaborator(p_id uuid)
-returns boolean language sql immutable security definer
-set search_path = '' as $$ select false; $$;
-revoke all on function public.is_task_projects_owner(uuid) from public, anon, authenticated, service_role;
-revoke all on function public.is_task_projects_collaborator(uuid) from public, anon, authenticated, service_role;
-grant execute on function public.is_task_projects_owner(uuid) to authenticated;
-grant execute on function public.is_task_projects_collaborator(uuid) to authenticated;
-
-alter table public.task_projects enable row level security;
-drop policy if exists task_projects_select_owner on public.task_projects;
-create policy task_projects_select_owner on public.task_projects for select to authenticated using ((select auth.uid()) = owner_id);
-drop policy if exists task_projects_insert_owner on public.task_projects;
-create policy task_projects_insert_owner on public.task_projects for insert to authenticated with check ((select auth.uid()) = owner_id);
-drop policy if exists task_projects_update_owner on public.task_projects;
-create policy task_projects_update_owner on public.task_projects for update to authenticated using ((select auth.uid()) = owner_id) with check ((select auth.uid()) = owner_id);
-drop policy if exists task_projects_delete_owner on public.task_projects;
-create policy task_projects_delete_owner on public.task_projects for delete to authenticated using ((select auth.uid()) = owner_id);
-revoke all on public.task_projects from anon;
-revoke all on public.task_projects from authenticated;
-grant select on public.task_projects to authenticated;
-
-do $$
-begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'task_projects') then
-    alter publication supabase_realtime add table public.task_projects;
-  end if;
-end;
-$$;
-
-
-create table if not exists public.local_entity_operation_receipts (
-  operation_id uuid primary key,
-  user_id uuid not null,
-  entity_type text not null,
-  entity_id uuid not null,
-  result jsonb not null,
-  accepted_at timestamptz not null default now()
-);
-alter table public.local_entity_operation_receipts enable row level security;
-drop policy if exists local_entity_receipts_owner on public.local_entity_operation_receipts;
-create policy local_entity_receipts_owner on public.local_entity_operation_receipts for all to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
-revoke all on public.local_entity_operation_receipts from anon, authenticated;
-
-create table if not exists public.local_entity_order_scopes (
-  entity_type text not null,
-  scope_key text not null,
-  version bigint not null default 0 check (version >= 0),
-  primary key (entity_type, scope_key)
-);
-alter table public.local_entity_order_scopes enable row level security;
-revoke all on public.local_entity_order_scopes from anon, authenticated;
-
-create table if not exists public.local_entity_changes (
-  sequence bigint generated always as identity primary key,
-  entity_type text not null,
-  entity_id uuid not null,
-  owner_id uuid not null,
-  server_version bigint not null,
-  operation_id uuid,
-  audience_user_id uuid,
-  is_revocation boolean not null default false,
-  record jsonb not null,
-  changed_at timestamptz not null default now()
-);
-create index if not exists local_entity_changes_type_sequence_idx on public.local_entity_changes (entity_type, sequence);
-create index if not exists local_entity_changes_identity_idx on public.local_entity_changes (entity_type, entity_id, audience_user_id, sequence);
-alter table public.local_entity_changes enable row level security;
-revoke all on public.local_entity_changes from anon, authenticated;
-
-create or replace function public.capture_task_projects_change()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  delete from public.local_entity_changes where entity_type = 'TaskProject' and entity_id = new.id and audience_user_id is null;
-  insert into public.local_entity_changes (entity_type, entity_id, owner_id, server_version, operation_id, audience_user_id, is_revocation, record)
-  values ('TaskProject', new.id, new.owner_id, new.server_version, nullif(current_setting('app.operation_id', true), '')::uuid, null, false, to_jsonb(new));
-  return new;
-end;
-$$;
-revoke all on function public.capture_task_projects_change() from public, anon, authenticated, service_role;
-drop trigger if exists task_projects_capture_change on public.task_projects;
-create trigger task_projects_capture_change after insert or update on public.task_projects for each row execute function public.capture_task_projects_change();
-
-create or replace function public.upcast_task_projects_operation(p_operation jsonb)
-returns jsonb
-language plpgsql
-immutable
-set search_path = ''
-as $$
-declare
-  current_version integer;
-begin
-  current_version := coalesce((p_operation ->> 'protocolVersion')::integer, 0);
-  if current_version < 1 or current_version > 2 then
-    raise exception 'Unsupported protocol version' using errcode = '22023';
-  end if;
-  if jsonb_typeof(p_operation -> 'patch') <> 'object' then
-    raise exception 'Patch must be an object' using errcode = '22023';
-  end if;
-  if current_version < 2 then
-    if p_operation ->> 'operation' = 'create' and not ((p_operation -> 'patch') ? 'orderRank') then
-      p_operation := jsonb_set(p_operation, '{patch,orderRank}', '"057896044618658097711785492504343953926634992332820282019728792003956564819967"'::jsonb, true);
-    end if;
-    p_operation := jsonb_set(p_operation, '{protocolVersion}', '2'::jsonb, true);
-    current_version := 2;
-  end if;
-  return p_operation;
-end;
-$$;
-
-create or replace function public.apply_task_projects_patch(
-  p_id uuid,
-  p_base_server_version bigint,
-  p_operation text,
-  p_patch jsonb
-) returns public.task_projects
-language plpgsql
-security definer
-set search_path = ''
-as $$
+CREATE OR REPLACE FUNCTION public.apply_task_projects_patch(p_id uuid, p_base_server_version bigint, p_operation text, p_patch jsonb)
+ RETURNS public.task_projects
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
 declare
   current_row public.task_projects;
   updated_row public.task_projects;
@@ -193,14 +62,95 @@ begin
   returning * into updated_row;
   return updated_row;
 end;
-$$;
+$function$
+;
 
-create or replace function public.push_task_projects_operations(p_operations jsonb)
-returns jsonb
-language plpgsql
-security definer
-set search_path = ''
-as $$
+CREATE OR REPLACE FUNCTION public.apply_tasks_patch(p_id uuid, p_base_server_version bigint, p_operation text, p_patch jsonb)
+ RETURNS public.tasks
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  current_row public.tasks;
+  updated_row public.tasks;
+begin
+  if auth.uid() is null then
+    raise exception 'Authentication required' using errcode = '42501';
+  end if;
+  if p_operation not in ('patch', 'delete') then
+    raise exception 'Unsupported operation' using errcode = '22023';
+  end if;
+  if p_operation = 'patch' and not (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id)) then
+    raise exception 'Entity access denied' using errcode = '42501';
+  end if;
+  if p_operation = 'delete' and not (public.is_tasks_owner(p_id)) then
+    raise exception 'Entity access denied' using errcode = '42501';
+  end if;
+  if p_operation = 'patch' and exists (
+    select 1 from jsonb_object_keys(p_patch) key where not (key = any(array['title', 'description', 'status', 'priority', 'dueAt', 'completedAt', 'archivedAt']::text[]))
+  ) then
+    raise exception 'Patch contains a forbidden field' using errcode = '22023';
+  end if;
+  if p_operation = 'delete' and exists (
+    select 1 from jsonb_object_keys(p_patch) key where not (key = any(array['deletedAt']::text[]))
+  ) then
+    raise exception 'Delete contains a forbidden field' using errcode = '22023';
+  end if;
+  if p_operation = 'delete' and (select count(*) from jsonb_object_keys(p_patch)) <> 1 then
+    raise exception 'Delete requires exactly one command field' using errcode = '22023';
+  end if;
+  if (p_patch) ? 'projectId' and jsonb_typeof(p_patch -> 'projectId') <> 'null' and not (public.is_task_projects_owner((p_patch ->> 'projectId')::uuid)) then
+    raise exception 'Referenced entity access denied' using errcode = '42501';
+  end if;
+  select * into current_row from public.tasks where id = p_id for update;
+  if not found then
+    raise exception 'Entity not found' using errcode = 'P0002';
+  end if;
+  if p_operation = 'patch' and p_patch ? 'archivedAt'
+     and not ((p_patch ?& array['archivedAt']::text[] and p_patch -> 'archivedAt' <> 'null'::jsonb and (current_row.archived_at is null or current_row.archived_at is not distinct from ((p_patch -> 'archivedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['archivedAt']::text[] and p_patch -> 'archivedAt' = 'null'::jsonb)) then
+    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
+  end if;
+  if p_operation = 'patch' and p_patch ? 'completedAt'
+     and not ((p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'in_progress' and p_patch -> 'completedAt' = 'null'::jsonb) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'done' and p_patch -> 'completedAt' <> 'null'::jsonb and (current_row.completed_at is null or current_row.completed_at is not distinct from ((p_patch -> 'completedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'todo' and p_patch -> 'completedAt' = 'null'::jsonb)) then
+    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
+  end if;
+  if p_operation = 'patch' and p_patch ? 'status'
+     and not ((p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'in_progress' and p_patch -> 'completedAt' = 'null'::jsonb) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'done' and p_patch -> 'completedAt' <> 'null'::jsonb and (current_row.completed_at is null or current_row.completed_at is not distinct from ((p_patch -> 'completedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'todo' and p_patch -> 'completedAt' = 'null'::jsonb)) then
+    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
+  end if;
+  if p_operation = 'patch' and p_patch ? 'status'
+     and current_row.status is distinct from (p_patch -> 'status' #>> '{}')
+     and not ((current_row.status = 'todo' and (p_patch -> 'status' #>> '{}') = 'in_progress' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'todo' and (p_patch -> 'status' #>> '{}') = 'done' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'in_progress' and (p_patch -> 'status' #>> '{}') = 'todo' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'in_progress' and (p_patch -> 'status' #>> '{}') = 'done' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'done' and (p_patch -> 'status' #>> '{}') = 'todo' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id)))) then
+    raise exception 'State transition is not allowed' using errcode = '23514';
+  end if;
+  if current_row.server_version <> p_base_server_version then
+    raise exception 'Version conflict' using errcode = 'PT409';
+  end if;
+  update public.tasks
+  set
+    title = case when p_operation = 'patch' and p_patch ? 'title' then p_patch -> 'title' #>> '{}' else current_row.title end,
+    description = case when p_operation = 'patch' and p_patch ? 'description' then p_patch -> 'description' #>> '{}' else current_row.description end,
+    status = case when p_operation = 'patch' and p_patch ? 'status' then p_patch -> 'status' #>> '{}' else current_row.status end,
+    priority = case when p_operation = 'patch' and p_patch ? 'priority' then p_patch -> 'priority' #>> '{}' else current_row.priority end,
+    due_at = case when p_operation = 'patch' and p_patch ? 'dueAt' then (p_patch -> 'dueAt' #>> '{}')::timestamptz else current_row.due_at end,
+    completed_at = case when p_operation = 'patch' and p_patch ? 'completedAt' then (p_patch -> 'completedAt' #>> '{}')::timestamptz else current_row.completed_at end,
+    archived_at = case when p_operation = 'patch' and p_patch ? 'archivedAt' then (p_patch -> 'archivedAt' #>> '{}')::timestamptz else current_row.archived_at end,
+    deleted_at = case when p_operation = 'delete' and p_patch ? 'deletedAt' then (p_patch -> 'deletedAt' #>> '{}')::timestamptz else current_row.deleted_at end
+    , server_version = current_row.server_version + 1
+  where id = p_id
+  returning * into updated_row;
+  return updated_row;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.push_task_projects_operations(p_operations jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
 declare
   current_operation jsonb;
   operation_uuid uuid;
@@ -828,249 +778,15 @@ begin
   end loop;
   return results;
 end;
-$$;
+$function$
+;
 
-revoke all on function public.upcast_task_projects_operation(jsonb) from public, anon, authenticated, service_role;
-revoke all on function public.apply_task_projects_patch(uuid, bigint, text, jsonb) from public, anon, authenticated, service_role;
-revoke all on function public.push_task_projects_operations(jsonb) from public, anon, authenticated, service_role;
-grant execute on function public.push_task_projects_operations(jsonb) to authenticated;
-
--- GENERATED FILE. DO NOT EDIT.
--- Source: package:tasks_example/features/tasks/domain/task.dart
--- Entity declarations are the schema source of truth.
-
-create table if not exists public.tasks (
-  id uuid not null primary key,
-  owner_id uuid not null references auth.users (id) on delete cascade,
-  project_id uuid references public.task_projects (id) on delete set null deferrable initially deferred,
-  title text not null check (title = btrim(title)) check (char_length(btrim(title)) >= 1) check (char_length(title) <= 160),
-  description text check (description is null or (description = btrim(description) and char_length(description) > 0)) check (char_length(description) <= 1000),
-  status text not null default 'todo' check (status in ('todo', 'in_progress', 'done')),
-  priority text not null default 'normal' check (priority in ('low', 'normal', 'high')),
-  due_at timestamptz,
-  completed_at timestamptz,
-  archived_at timestamptz,
-  created_at timestamptz not null default now(),
-  order_rank text not null default '057896044618658097711785492504343953926634992332820282019728792003956564819967' check (order_rank ~ '^[0-9]{78}$' and order_rank::numeric > 0 and order_rank::numeric < 115792089237316195423570985008687907853269984665640564039457584007913129639935::numeric),
-  deleted_at timestamptz,
-  server_version bigint not null default 1
-);
-
-create index if not exists tasks_owner_id_project_id_deleted_at_order_rank_id_idx on public.tasks (owner_id, project_id, deleted_at, order_rank, id);
-create index if not exists tasks_project_id_idx on public.tasks (project_id);
-create index if not exists tasks_owner_id_archived_at_idx on public.tasks (owner_id, archived_at);
-create index if not exists tasks_owner_id_project_id_archived_at_dele_01d92b15705390c6_idx on public.tasks (owner_id, project_id, archived_at, deleted_at, status, due_at, id);
-create index if not exists tasks_owner_id_project_id_archived_at_deleted_at_id_idx on public.tasks (owner_id, project_id, archived_at, deleted_at, id);
-
-create table if not exists public.task_members (
-  task_id uuid not null references public.tasks (id) on delete cascade,
-  user_id uuid not null references auth.users (id) on delete cascade,
-  active boolean not null default true,
-  primary key (task_id, user_id)
-);
-alter table public.task_members enable row level security;
-
-create or replace function public.is_tasks_owner(p_id uuid)
-returns boolean language sql stable security definer
-set search_path = '' as $$
-  select exists (select 1 from public.tasks entity where entity.id = p_id and entity.owner_id = auth.uid());
-$$;
-drop policy if exists task_members_select on public.task_members;
-drop policy if exists task_members_owner_insert on public.task_members;
-drop policy if exists task_members_owner_update on public.task_members;
-drop policy if exists task_members_owner_delete on public.task_members;
-create or replace function public.is_tasks_collaborator(p_id uuid)
-returns boolean language sql stable security definer
-set search_path = '' as $$
-  select exists (select 1 from public.task_members member where member.task_id = p_id and member.user_id = auth.uid() and member.active);
-$$;
-revoke all on function public.is_tasks_owner(uuid) from public, anon, authenticated, service_role;
-revoke all on function public.is_tasks_collaborator(uuid) from public, anon, authenticated, service_role;
-grant execute on function public.is_tasks_owner(uuid) to authenticated;
-grant execute on function public.is_tasks_collaborator(uuid) to authenticated;
-create policy task_members_select on public.task_members for select to authenticated using (user_id = (select auth.uid()) or public.is_tasks_owner(task_id));
-create policy task_members_owner_insert on public.task_members for insert to authenticated with check (public.is_tasks_owner(task_id));
-create policy task_members_owner_update on public.task_members for update to authenticated using (public.is_tasks_owner(task_id)) with check (public.is_tasks_owner(task_id));
-create policy task_members_owner_delete on public.task_members for delete to authenticated using (public.is_tasks_owner(task_id));
-revoke all on public.task_members from anon;
-revoke all on public.task_members from authenticated;
-grant select on public.task_members to authenticated;
-
-alter table public.tasks enable row level security;
-drop policy if exists tasks_select_owner on public.tasks;
-create policy tasks_select_owner on public.tasks for select to authenticated using ((select auth.uid()) = owner_id);
-drop policy if exists tasks_insert_owner on public.tasks;
-create policy tasks_insert_owner on public.tasks for insert to authenticated with check ((select auth.uid()) = owner_id);
-drop policy if exists tasks_update_owner on public.tasks;
-create policy tasks_update_owner on public.tasks for update to authenticated using ((select auth.uid()) = owner_id) with check ((select auth.uid()) = owner_id);
-drop policy if exists tasks_delete_owner on public.tasks;
-create policy tasks_delete_owner on public.tasks for delete to authenticated using ((select auth.uid()) = owner_id);
-drop policy if exists tasks_select_collaborator on public.tasks;
-create policy tasks_select_collaborator on public.tasks for select to authenticated using (public.is_tasks_collaborator(tasks.id));
-drop policy if exists tasks_update_collaborator on public.tasks;
-create policy tasks_update_collaborator on public.tasks for update to authenticated using (public.is_tasks_collaborator(tasks.id)) with check (public.is_tasks_collaborator(tasks.id));
-revoke all on public.tasks from anon;
-revoke all on public.tasks from authenticated;
-grant select on public.tasks to authenticated;
-
-do $$
-begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'tasks') then
-    alter publication supabase_realtime add table public.tasks;
-  end if;
-end;
-$$;
-do $$
-begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
-     and not exists (
-       select 1 from pg_publication_tables
-       where pubname = 'supabase_realtime'
-         and schemaname = 'public'
-         and tablename = 'task_members'
-     ) then
-    alter publication supabase_realtime add table public.task_members;
-  end if;
-end;
-$$;
-
-create or replace function public.capture_tasks_change()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  delete from public.local_entity_changes where entity_type = 'Task' and entity_id = new.id and audience_user_id is null;
-  insert into public.local_entity_changes (entity_type, entity_id, owner_id, server_version, operation_id, audience_user_id, is_revocation, record)
-  values ('Task', new.id, new.owner_id, new.server_version, nullif(current_setting('app.operation_id', true), '')::uuid, null, false, to_jsonb(new));
-  return new;
-end;
-$$;
-revoke all on function public.capture_tasks_change() from public, anon, authenticated, service_role;
-drop trigger if exists tasks_capture_change on public.tasks;
-create trigger tasks_capture_change after insert or update on public.tasks for each row execute function public.capture_tasks_change();
-
-create or replace function public.upcast_tasks_operation(p_operation jsonb)
-returns jsonb
-language plpgsql
-immutable
-set search_path = ''
-as $$
-declare
-  current_version integer;
-begin
-  current_version := coalesce((p_operation ->> 'protocolVersion')::integer, 0);
-  if current_version < 1 or current_version > 3 then
-    raise exception 'Unsupported protocol version' using errcode = '22023';
-  end if;
-  if jsonb_typeof(p_operation -> 'patch') <> 'object' then
-    raise exception 'Patch must be an object' using errcode = '22023';
-  end if;
-  if current_version < 2 then
-    if p_operation ->> 'operation' = 'create' and not ((p_operation -> 'patch') ? 'orderRank') then
-      p_operation := jsonb_set(p_operation, '{patch,orderRank}', '"057896044618658097711785492504343953926634992332820282019728792003956564819967"'::jsonb, true);
-    end if;
-    p_operation := jsonb_set(p_operation, '{protocolVersion}', '2'::jsonb, true);
-    current_version := 2;
-  end if;
-  if current_version < 3 then
-    p_operation := jsonb_set(p_operation, '{protocolVersion}', '3'::jsonb, true);
-    current_version := 3;
-  end if;
-  return p_operation;
-end;
-$$;
-
-create or replace function public.apply_tasks_patch(
-  p_id uuid,
-  p_base_server_version bigint,
-  p_operation text,
-  p_patch jsonb
-) returns public.tasks
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  current_row public.tasks;
-  updated_row public.tasks;
-begin
-  if auth.uid() is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-  if p_operation not in ('patch', 'delete') then
-    raise exception 'Unsupported operation' using errcode = '22023';
-  end if;
-  if p_operation = 'patch' and not (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id)) then
-    raise exception 'Entity access denied' using errcode = '42501';
-  end if;
-  if p_operation = 'delete' and not (public.is_tasks_owner(p_id)) then
-    raise exception 'Entity access denied' using errcode = '42501';
-  end if;
-  if p_operation = 'patch' and exists (
-    select 1 from jsonb_object_keys(p_patch) key where not (key = any(array['title', 'description', 'status', 'priority', 'dueAt', 'completedAt', 'archivedAt']::text[]))
-  ) then
-    raise exception 'Patch contains a forbidden field' using errcode = '22023';
-  end if;
-  if p_operation = 'delete' and exists (
-    select 1 from jsonb_object_keys(p_patch) key where not (key = any(array['deletedAt']::text[]))
-  ) then
-    raise exception 'Delete contains a forbidden field' using errcode = '22023';
-  end if;
-  if p_operation = 'delete' and (select count(*) from jsonb_object_keys(p_patch)) <> 1 then
-    raise exception 'Delete requires exactly one command field' using errcode = '22023';
-  end if;
-  if (p_patch) ? 'projectId' and jsonb_typeof(p_patch -> 'projectId') <> 'null' and not (public.is_task_projects_owner((p_patch ->> 'projectId')::uuid)) then
-    raise exception 'Referenced entity access denied' using errcode = '42501';
-  end if;
-  select * into current_row from public.tasks where id = p_id for update;
-  if not found then
-    raise exception 'Entity not found' using errcode = 'P0002';
-  end if;
-  if p_operation = 'patch' and p_patch ? 'archivedAt'
-     and not ((p_patch ?& array['archivedAt']::text[] and p_patch -> 'archivedAt' <> 'null'::jsonb and (current_row.archived_at is null or current_row.archived_at is not distinct from ((p_patch -> 'archivedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['archivedAt']::text[] and p_patch -> 'archivedAt' = 'null'::jsonb)) then
-    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
-  end if;
-  if p_operation = 'patch' and p_patch ? 'completedAt'
-     and not ((p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'in_progress' and p_patch -> 'completedAt' = 'null'::jsonb) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'done' and p_patch -> 'completedAt' <> 'null'::jsonb and (current_row.completed_at is null or current_row.completed_at is not distinct from ((p_patch -> 'completedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'todo' and p_patch -> 'completedAt' = 'null'::jsonb)) then
-    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
-  end if;
-  if p_operation = 'patch' and p_patch ? 'status'
-     and not ((p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'in_progress' and p_patch -> 'completedAt' = 'null'::jsonb) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'done' and p_patch -> 'completedAt' <> 'null'::jsonb and (current_row.completed_at is null or current_row.completed_at is not distinct from ((p_patch -> 'completedAt' #>> '{}')::timestamptz))) or (p_patch ?& array['status', 'completedAt']::text[] and (p_patch -> 'status' #>> '{}') is not distinct from 'todo' and p_patch -> 'completedAt' = 'null'::jsonb)) then
-    raise exception 'Patch does not match a declared entity action' using errcode = '22023';
-  end if;
-  if p_operation = 'patch' and p_patch ? 'status'
-     and current_row.status is distinct from (p_patch -> 'status' #>> '{}')
-     and not ((current_row.status = 'todo' and (p_patch -> 'status' #>> '{}') = 'in_progress' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'todo' and (p_patch -> 'status' #>> '{}') = 'done' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'in_progress' and (p_patch -> 'status' #>> '{}') = 'todo' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'in_progress' and (p_patch -> 'status' #>> '{}') = 'done' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id))) or (current_row.status = 'done' and (p_patch -> 'status' #>> '{}') = 'todo' and (public.is_tasks_owner(p_id) or public.is_tasks_collaborator(p_id)))) then
-    raise exception 'State transition is not allowed' using errcode = '23514';
-  end if;
-  if current_row.server_version <> p_base_server_version then
-    raise exception 'Version conflict' using errcode = 'PT409';
-  end if;
-  update public.tasks
-  set
-    title = case when p_operation = 'patch' and p_patch ? 'title' then p_patch -> 'title' #>> '{}' else current_row.title end,
-    description = case when p_operation = 'patch' and p_patch ? 'description' then p_patch -> 'description' #>> '{}' else current_row.description end,
-    status = case when p_operation = 'patch' and p_patch ? 'status' then p_patch -> 'status' #>> '{}' else current_row.status end,
-    priority = case when p_operation = 'patch' and p_patch ? 'priority' then p_patch -> 'priority' #>> '{}' else current_row.priority end,
-    due_at = case when p_operation = 'patch' and p_patch ? 'dueAt' then (p_patch -> 'dueAt' #>> '{}')::timestamptz else current_row.due_at end,
-    completed_at = case when p_operation = 'patch' and p_patch ? 'completedAt' then (p_patch -> 'completedAt' #>> '{}')::timestamptz else current_row.completed_at end,
-    archived_at = case when p_operation = 'patch' and p_patch ? 'archivedAt' then (p_patch -> 'archivedAt' #>> '{}')::timestamptz else current_row.archived_at end,
-    deleted_at = case when p_operation = 'delete' and p_patch ? 'deletedAt' then (p_patch -> 'deletedAt' #>> '{}')::timestamptz else current_row.deleted_at end
-    , server_version = current_row.server_version + 1
-  where id = p_id
-  returning * into updated_row;
-  return updated_row;
-end;
-$$;
-
-create or replace function public.push_tasks_operations(p_operations jsonb)
-returns jsonb
-language plpgsql
-security definer
-set search_path = ''
-as $$
+CREATE OR REPLACE FUNCTION public.push_tasks_operations(p_operations jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
 declare
   current_operation jsonb;
   operation_uuid uuid;
@@ -1961,247 +1677,7 @@ begin
   end loop;
   return results;
 end;
-$$;
-
-revoke all on function public.upcast_tasks_operation(jsonb) from public, anon, authenticated, service_role;
-revoke all on function public.apply_tasks_patch(uuid, bigint, text, jsonb) from public, anon, authenticated, service_role;
-revoke all on function public.push_tasks_operations(jsonb) from public, anon, authenticated, service_role;
-grant execute on function public.push_tasks_operations(jsonb) to authenticated;
-
--- GENERATED FILE. DO NOT EDIT.
--- Source: package:tasks_example/features/tasks/domain/task_activity.dart
--- Entity declarations are the schema source of truth.
-
-create table if not exists public.task_activities (
-  id uuid not null primary key,
-  owner_id uuid not null references auth.users (id) on delete cascade,
-  subject_id uuid not null,
-  actor_id uuid not null,
-  operation text not null check (char_length(btrim(operation)) >= 1) check (char_length(operation) <= 160),
-  label text not null check (char_length(btrim(label)) >= 1) check (char_length(label) <= 240),
-  source_operation_id text not null check (char_length(btrim(source_operation_id)) >= 1) check (char_length(source_operation_id) <= 64),
-  occurred_at timestamptz not null,
-  deleted_at timestamptz,
-  server_version bigint not null default 1
-);
-
-create index if not exists task_activities_subject_id_occurred_at_idx on public.task_activities (subject_id, occurred_at);
-create index if not exists task_activities_occurred_at_idx on public.task_activities (occurred_at);
-create unique index if not exists task_activities_source_operation_id_active_idx on public.task_activities (source_operation_id) where deleted_at is null;
-
-create or replace function public.is_task_activities_owner(p_id uuid)
-returns boolean language sql stable security definer
-set search_path = '' as $$
-  select exists (select 1 from public.task_activities entity where entity.id = p_id and entity.owner_id = auth.uid());
-$$;
-create or replace function public.is_task_activities_collaborator(p_id uuid)
-returns boolean language sql immutable security definer
-set search_path = '' as $$ select false; $$;
-revoke all on function public.is_task_activities_owner(uuid) from public, anon, authenticated, service_role;
-revoke all on function public.is_task_activities_collaborator(uuid) from public, anon, authenticated, service_role;
-grant execute on function public.is_task_activities_owner(uuid) to authenticated;
-grant execute on function public.is_task_activities_collaborator(uuid) to authenticated;
-
-alter table public.task_activities enable row level security;
-drop policy if exists task_activities_select_source on public.task_activities;
-create policy task_activities_select_source on public.task_activities for select to authenticated using ((task_activities.owner_id = (select source.owner_id from public.tasks source where source.id = task_activities.subject_id)) and (public.is_tasks_owner(task_activities.subject_id) or public.is_tasks_collaborator(task_activities.subject_id)));
-drop policy if exists task_activities_insert_source_operation on public.task_activities;
-create policy task_activities_insert_source_operation on public.task_activities for insert to authenticated with check ((task_activities.actor_id = auth.uid()) and (task_activities.owner_id = (select source.owner_id from public.tasks source where source.id = task_activities.subject_id)) and (public.is_tasks_owner(task_activities.subject_id) or public.is_tasks_collaborator(task_activities.subject_id)));
-revoke all on public.task_activities from anon;
-revoke all on public.task_activities from authenticated;
-grant select on public.task_activities to authenticated;
-
-do $$
-begin
-  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'task_activities') then
-    alter publication supabase_realtime add table public.task_activities;
-  end if;
-end;
-$$;
+$function$
+;
 
 
-create or replace function public.capture_task_activities_change()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-begin
-  delete from public.local_entity_changes where entity_type = 'TaskActivity' and entity_id = new.id and audience_user_id is null;
-  insert into public.local_entity_changes (entity_type, entity_id, owner_id, server_version, operation_id, audience_user_id, is_revocation, record)
-  values ('TaskActivity', new.id, new.owner_id, new.server_version, nullif(current_setting('app.operation_id', true), '')::uuid, null, false, to_jsonb(new));
-  return new;
-end;
-$$;
-revoke all on function public.capture_task_activities_change() from public, anon, authenticated, service_role;
-drop trigger if exists task_activities_capture_change on public.task_activities;
-create trigger task_activities_capture_change after insert or update on public.task_activities for each row execute function public.capture_task_activities_change();
-
-create or replace function public.upcast_task_activities_operation(p_operation jsonb)
-returns jsonb
-language plpgsql
-immutable
-set search_path = ''
-as $$
-declare
-  current_version integer;
-begin
-  current_version := coalesce((p_operation ->> 'protocolVersion')::integer, 0);
-  if current_version < 1 or current_version > 1 then
-    raise exception 'Unsupported protocol version' using errcode = '22023';
-  end if;
-  if jsonb_typeof(p_operation -> 'patch') <> 'object' then
-    raise exception 'Patch must be an object' using errcode = '22023';
-  end if;
-  return p_operation;
-end;
-$$;
-
-create or replace function public.push_task_activities_operations(p_operations jsonb)
-returns jsonb
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  current_operation jsonb;
-  operation_uuid uuid;
-  receipt_result jsonb;
-  canonical public.task_activities;
-  change_sequence bigint;
-  results jsonb := '[]'::jsonb;
-begin
-  if auth.uid() is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-  if jsonb_typeof(p_operations) <> 'array' then
-    raise exception 'Operations must be an array' using errcode = '22023';
-  end if;
-  if jsonb_array_length(p_operations) > 100 then
-    raise exception 'At most 100 operations are allowed per batch' using errcode = '22023';
-  end if;
-  for current_operation in select value from jsonb_array_elements(p_operations) loop
-    current_operation := public.upcast_task_activities_operation(current_operation);
-    operation_uuid := (current_operation ->> 'operationId')::uuid;
-    if current_operation ->> 'entityType' <> 'TaskActivity' then
-      raise exception 'Unexpected entity type' using errcode = '22023';
-    end if;
-    if coalesce((current_operation ->> 'protocolVersion')::integer, 0) <> 1 then
-      raise exception 'Unsupported protocol version' using errcode = '22023';
-    end if;
-    if jsonb_typeof(current_operation -> 'patch') <> 'object' then
-      raise exception 'Patch must be an object' using errcode = '22023';
-    end if;
-    select receipt.result into receipt_result from public.local_entity_operation_receipts receipt where receipt.operation_id = operation_uuid and receipt.user_id = auth.uid();
-    if found then
-      results := results || jsonb_build_array(receipt_result);
-      continue;
-    end if;
-    perform set_config('app.operation_id', operation_uuid::text, true);
-    if current_operation ->> 'operation' not in ('create') then
-      raise exception 'Unsupported operation' using errcode = '22023';
-    end if;
-    if current_operation ->> 'operation' = 'create' then
-      if exists (select 1 from jsonb_object_keys(current_operation -> 'patch') key
-          where not (key = any(array['id', 'ownerId', 'subjectId', 'actorId', 'operation', 'label', 'sourceOperationId', 'occurredAt', 'deletedAt']::text[])))
-          or not ((current_operation -> 'patch') ?& array['id', 'ownerId', 'subjectId', 'actorId', 'operation', 'label', 'sourceOperationId', 'occurredAt', 'deletedAt']) then
-        raise exception 'Create contains missing or forbidden fields' using errcode = '22023';
-      end if;
-      if (current_operation -> 'patch' ->> 'id')::uuid
-          <> (current_operation ->> 'entityId')::uuid then
-        raise exception 'Create entity ID mismatch' using errcode = '22023';
-      end if;
-      if not (((current_operation -> 'patch' ->> 'actorId')::uuid = auth.uid()) and ((current_operation -> 'patch' ->> 'ownerId')::uuid = (select source.owner_id from public.tasks source where source.id = (current_operation -> 'patch' ->> 'subjectId')::uuid)) and (exists (select 1 from public.local_entity_operation_receipts source_receipt where source_receipt.entity_type = 'Task' and source_receipt.entity_id = (current_operation -> 'patch' ->> 'subjectId')::uuid and source_receipt.user_id = (current_operation -> 'patch' ->> 'actorId')::uuid and source_receipt.operation_id = (current_operation -> 'patch' ->> 'sourceOperationId')::uuid))) then
-        raise exception 'Create access denied' using errcode = '42501';
-      end if;
-
-
-      insert into public.task_activities (id, owner_id, subject_id, actor_id, operation, label, source_operation_id, occurred_at, deleted_at)
-      values ((current_operation -> 'patch' -> 'id' #>> '{}')::uuid, (current_operation -> 'patch' -> 'ownerId' #>> '{}')::uuid, (current_operation -> 'patch' -> 'subjectId' #>> '{}')::uuid, (current_operation -> 'patch' -> 'actorId' #>> '{}')::uuid, current_operation -> 'patch' -> 'operation' #>> '{}', current_operation -> 'patch' -> 'label' #>> '{}', current_operation -> 'patch' -> 'sourceOperationId' #>> '{}', (current_operation -> 'patch' -> 'occurredAt' #>> '{}')::timestamptz, (current_operation -> 'patch' -> 'deletedAt' #>> '{}')::timestamptz) returning * into canonical;
-    end if;
-    select changes.sequence into change_sequence from public.local_entity_changes changes where changes.operation_id = operation_uuid order by changes.sequence desc limit 1;
-    if change_sequence is null then
-      raise exception 'Accepted operation has no change-log entry' using errcode = 'P0001';
-    end if;
-    receipt_result := jsonb_build_object('record', to_jsonb(canonical), 'sequence', change_sequence, 'operationId', operation_uuid, 'serverVersion', canonical.server_version);
-    insert into public.local_entity_operation_receipts (operation_id, user_id, entity_type, entity_id, result) values (operation_uuid, auth.uid(), 'TaskActivity', canonical.id, receipt_result);
-    results := results || jsonb_build_array(receipt_result);
-  end loop;
-  return results;
-end;
-$$;
-
-revoke all on function public.upcast_task_activities_operation(jsonb) from public, anon, authenticated, service_role;
-revoke all on function public.push_task_activities_operations(jsonb) from public, anon, authenticated, service_role;
-grant execute on function public.push_task_activities_operations(jsonb) to authenticated;
-
--- One globally ordered pull contract for this synchronization target.
-
-create or replace function public.pull_tasks_example_graph_changes(p_after_sequence bigint)
-returns jsonb
-language plpgsql
-security definer
-set search_path = ''
-stable
-as $$
-declare
-  page jsonb := '[]'::jsonb;
-  page_count integer;
-  next_cursor bigint;
-begin
-  if auth.uid() is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-  select coalesce(jsonb_agg(jsonb_build_object(
-    'sequence', visible.sequence,
-    'entity_type', visible.entity_type,
-    'record', visible.record,
-    'server_version', visible.server_version,
-    'operation_id', visible.operation_id,
-    'is_revocation', visible.is_revocation
-  ) order by visible.sequence), '[]'::jsonb)
-  into page
-  from (
-    select
-      changes.sequence,
-      changes.entity_type,
-      changes.record,
-      changes.server_version,
-      changes.operation_id,
-      (changes.is_revocation and changes.audience_user_id = auth.uid())
-        as is_revocation
-    from public.local_entity_changes changes
-    where changes.sequence > p_after_sequence
-      and (
-        (
-          changes.audience_user_id is null
-          and case changes.entity_type
-      when 'Task' then (changes.owner_id = auth.uid() or public.is_tasks_collaborator(changes.entity_id))
-      when 'TaskActivity' then (exists (select 1 from public.task_activities activity where activity.id = changes.entity_id and (public.is_tasks_owner(activity.subject_id) or public.is_tasks_collaborator(activity.subject_id))))
-      when 'TaskProject' then (changes.owner_id = auth.uid())
-            else false
-          end
-        )
-        or changes.audience_user_id = auth.uid()
-      )
-    order by changes.sequence
-    limit 500
-  ) visible;
-  page_count := jsonb_array_length(page);
-  if page_count = 500 then
-    next_cursor := (page -> (page_count - 1) ->> 'sequence')::bigint;
-  else
-    select coalesce(max(changes.sequence), p_after_sequence)
-      into next_cursor
-    from public.local_entity_changes changes;
-  end if;
-  return jsonb_build_object(
-    'changes', page,
-    'nextSequence', next_cursor,
-    'hasMore', page_count = 500
-  );
-end;
-$$;
-
-revoke all on function public.pull_tasks_example_graph_changes(bigint) from public, anon, authenticated, service_role;
-grant execute on function public.pull_tasks_example_graph_changes(bigint) to authenticated;

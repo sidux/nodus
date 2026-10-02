@@ -16,7 +16,7 @@ import 'package:tasks_example/features/tasks/domain/task.dart';
   'CREATE INDEX task_activities_occurred_at_idx ON task_activities (occurred_at)',
 )
 @TableIndex.sql(
-  'CREATE UNIQUE INDEX task_activities_source_operation_id_idx ON task_activities (source_operation_id)',
+  'CREATE UNIQUE INDEX task_activities_source_operation_id_active_idx ON task_activities (source_operation_id) WHERE deleted_at IS NULL',
 )
 class TaskActivityRows extends Table {
   @override
@@ -77,8 +77,9 @@ final class TaskActivityDescriptor
   @override
   List<EntityUniqueConstraint> get uniqueConstraints => const [
     EntityUniqueConstraint(
-      name: 'task_activities_source_operation_id_idx',
+      name: 'task_activities_source_operation_id_active_idx',
       fieldNames: ['sourceOperationId'],
+      liveOnly: true,
     ),
   ];
 

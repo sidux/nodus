@@ -2846,8 +2846,8 @@ class LocalEntitySyncCursorCompanion
   }
 }
 
-class DatabaseAtV1 extends GeneratedDatabase {
-  DatabaseAtV1(QueryExecutor e) : super(e);
+class DatabaseAtV2 extends GeneratedDatabase {
+  DatabaseAtV2(QueryExecutor e) : super(e);
   late final Tasks tasks = Tasks(this);
   late final TaskActivities taskActivities = TaskActivities(this);
   late final TaskProjects taskProjects = TaskProjects(this);
@@ -2884,9 +2884,9 @@ class DatabaseAtV1 extends GeneratedDatabase {
     'task_activities_occurred_at_idx',
     'CREATE INDEX task_activities_occurred_at_idx ON task_activities (occurred_at)',
   );
-  late final Index taskActivitiesSourceOperationIdIdx = Index(
-    'task_activities_source_operation_id_idx',
-    'CREATE UNIQUE INDEX task_activities_source_operation_id_idx ON task_activities (source_operation_id)',
+  late final Index taskActivitiesSourceOperationIdActiveIdx = Index(
+    'task_activities_source_operation_id_active_idx',
+    'CREATE UNIQUE INDEX task_activities_source_operation_id_active_idx ON task_activities (source_operation_id) WHERE deleted_at IS NULL',
   );
   late final Index taskProjectsDeletedAtOrderRankIdIdx = Index(
     'task_projects_deleted_at_order_rank_id_idx',
@@ -2921,12 +2921,12 @@ class DatabaseAtV1 extends GeneratedDatabase {
     tasksProjectIdArchivedAtDeletedAtIdIdx,
     taskActivitiesSubjectIdOccurredAtIdx,
     taskActivitiesOccurredAtIdx,
-    taskActivitiesSourceOperationIdIdx,
+    taskActivitiesSourceOperationIdActiveIdx,
     taskProjectsDeletedAtOrderRankIdIdx,
     taskProjectsDeletedAtTitleIdIdx,
     localEntityPushPatchIdx,
     localEntitySyncReadyIdx,
   ];
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 }

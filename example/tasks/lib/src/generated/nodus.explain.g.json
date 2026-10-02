@@ -1,7 +1,7 @@
 {
   "graph": "TasksExample",
   "package": "tasks_example",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "targets": [
     "supabase"
   ],
@@ -234,7 +234,6 @@
           "unique": false,
           "scope": "field",
           "keyset": true,
-          "activeOnly": false,
           "exactLookup": false
         },
         {
@@ -246,7 +245,6 @@
           "unique": false,
           "scope": "field",
           "keyset": true,
-          "activeOnly": false,
           "exactLookup": false
         }
       ],
@@ -487,7 +485,6 @@
           "unique": false,
           "scope": "field",
           "keyset": false,
-          "activeOnly": false,
           "exactLookup": false
         },
         {
@@ -497,7 +494,6 @@
           "unique": false,
           "scope": "field",
           "keyset": false,
-          "activeOnly": false,
           "exactLookup": false
         },
         {
@@ -507,7 +503,6 @@
           "unique": true,
           "scope": "field",
           "keyset": false,
-          "activeOnly": false,
           "exactLookup": false
         }
       ],
@@ -634,7 +629,6 @@
           "unique": false,
           "scope": "field",
           "keyset": true,
-          "activeOnly": false,
           "exactLookup": false
         }
       ],

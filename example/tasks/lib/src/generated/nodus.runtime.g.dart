@@ -1,6 +1,6 @@
 // GENERATED FILE. DO NOT EDIT.
 // Source: package:tasks_example/nodus.lock
-// Schema fingerprint: 7334f12ec59899f4b251b9f440b7f3c19e93e49767c73eb47cf4936620984f32
+// Schema fingerprint: 16eaa794b9ba2e8127b8a94a02125cfc6f309a8a31beab6a78e644b780759d27
 // ignore_for_file: unused_field, type=lint
 
 import 'dart:async';
@@ -59,7 +59,7 @@ final class TasksExampleDatabase extends _$TasksExampleDatabase {
     : _migrationOverride = migrationOverride;
   final MigrationStrategy? _migrationOverride;
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
   @override
   MigrationStrategy get migration {
     final configured =
@@ -99,7 +99,7 @@ abstract final class TasksExampleMetadata {
     wireName: 'supabase',
   );
   static final definition = EntityGraphDefinition(
-    schemaVersion: 1,
+    schemaVersion: 2,
     descriptors: [
       taskDescriptor,
       taskActivityDescriptor,
@@ -649,17 +649,14 @@ final class TaskProjectList extends EntityList<TaskProject> {
 final class TaskActivityLookup extends EntityLookup<TaskActivity> {
   TaskActivityLookup.bySourceOperation(
     TasksExampleEntityGraph entityGraph,
-    String sourceOperationId, {
-    TombstoneVisibility tombstones = TombstoneVisibility.exclude,
-  }) : super(
-         entityGraph.taskActivities.query(
-           where: TaskActivityFields.sourceOperationId.equals(
-             sourceOperationId,
-           ),
-           tombstones: tombstones,
-           pageSize: 1,
-         ),
-       );
+    String sourceOperationId,
+  ) : super(
+        entityGraph.taskActivities.query(
+          where: TaskActivityFields.sourceOperationId.equals(sourceOperationId),
+          tombstones: TombstoneVisibility.exclude,
+          pageSize: 1,
+        ),
+      );
 }
 
 final class TaskProjectTasks extends EntityList<Task> {
