@@ -820,6 +820,14 @@ Capability visibility conventions are:
   explicitly. A custom `where` predicate only narrows the lifecycle selection
   and MUST NOT bypass it. A direct identity-map lookup MAY return a known
   tombstone so an explicit lifecycle operation can restore or inspect it;
+- a tombstone never holds an unconditional unique key. Generation derives
+  every such index with the canonical `deleted_at is null` predicate in Dart,
+  Drift, and PostgreSQL, so a live entity can take a deleted entity's name or
+  pair. Generated unique lookups, `createOrGetBy...`, and `beginUpsertBy...`
+  never return a tombstone; restoring a tombstone whose key a live entity now
+  holds fails as a duplicate. A conditional unique index's declared condition
+  is its complete membership predicate, so a tombstone matching it still holds
+  the key;
 - `Archivable` entities are excluded from ordinary active lists and have
   generated active and archived list constructors;
 - `Activatable` relationships expose active links by default. Every generated
@@ -1777,10 +1785,11 @@ lookup until their semantics are declared safely. If durable storage ever
 returns more than one row for a generated lookup, the runtime fails as a schema
 or descriptor inconsistency rather than choosing one arbitrarily.
 
-A partial unique index generates a singular API only when the declaration opts
-into an exact lookup and its complete predicate is representable in Dart,
-Drift, and PostgreSQL. `activeOnly` is the canonical soft-deletion predicate;
-an enum-backed `IndexCondition.oneOf` is the canonical finite condition. The
+A conditional unique index generates a singular API only when the declaration
+opts into an exact lookup and its complete predicate is representable in Dart,
+Drift, and PostgreSQL. The derived live-entity predicate of an unconditional
+unique index is canonical and needs no opt-in; an enum-backed
+`IndexCondition.oneOf` is the canonical finite condition. The
 same predicate MUST constrain the in-memory computed index, acquired lookup,
 local unique validation, schema index, remote validation, and synchronization.
 Unsupported predicate combinations fail compilation rather than weakening a

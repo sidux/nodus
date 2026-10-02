@@ -283,8 +283,8 @@ void main() {
     expect(
       first,
       contains(
-        'CREATE UNIQUE INDEX work_items_owner_id_statement_idx '
-        'ON work_items (owner_id, statement)',
+        'CREATE UNIQUE INDEX work_items_owner_id_statement_active_idx '
+        'ON work_items (owner_id, statement) WHERE deleted_at IS NULL',
       ),
     );
     expect(
@@ -297,8 +297,8 @@ void main() {
     expect(
       first,
       contains(
-        'CREATE UNIQUE INDEX work_items_sort_order_statement_idx '
-        'ON work_items (sort_order, statement)',
+        'CREATE UNIQUE INDEX work_items_sort_order_statement_active_idx '
+        'ON work_items (sort_order, statement) WHERE deleted_at IS NULL',
       ),
     );
     expect(first, contains('WorkItem get generatedDomain => this;'));
@@ -1126,8 +1126,8 @@ void main() {
       sql,
       contains(
         'create unique index if not exists '
-        'work_items_owner_id_statement_idx '
-        'on public.work_items (owner_id, statement);',
+        'work_items_owner_id_statement_active_idx '
+        'on public.work_items (owner_id, statement) where deleted_at is null;',
       ),
     );
     expect(sql, contains("check (statement in ('Rule A', 'Rule B'))"));
@@ -1143,8 +1143,9 @@ void main() {
       sql,
       contains(
         'create unique index if not exists '
-        'work_items_sort_order_statement_idx '
-        'on public.work_items (sort_order, statement);',
+        'work_items_sort_order_statement_active_idx '
+        'on public.work_items (sort_order, statement) '
+        'where deleted_at is null;',
       ),
     );
     expect(

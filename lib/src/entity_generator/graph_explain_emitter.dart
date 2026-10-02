@@ -38,7 +38,7 @@ String emitEntityGraphExplanation(EntityGraphSpec graph) {
             for (final field in entity.fields) {'name': field.name, 'type': field.dartType, 'column': field.columnName, 'nullable': field.nullable, 'default': field.defaultValue?.toString(), 'generated': field.generatedOnly, 'mutable': entity.isPatchable(field), 'normalization': field.normalization.name, 'reference': field.reference?.targetClassName, 'inverseCardinality': field.reference == null ? null : entity.inverseCardinalityFor(field).name, 'hierarchy': field.reference?.hierarchy ?? false, 'source': field.generatedOnly ? 'generated convention or capability' : 'entity declaration'},
           ],
           'indexes': [
-            for (final index in entity.compoundIndexes) {'fields': index.fields, 'unique': index.unique, 'scope': index.scope.name, 'keyset': index.keyset, 'activeOnly': index.activeOnly, 'exactLookup': index.exactLookup},
+            for (final index in entity.compoundIndexes) {'fields': index.fields, 'unique': index.unique, 'scope': index.scope.name, 'keyset': index.keyset, 'exactLookup': index.exactLookup},
           ],
           'actions': [
             for (final action in entity.actions) {

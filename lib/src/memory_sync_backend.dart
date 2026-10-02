@@ -1160,7 +1160,7 @@ final class InMemorySyncBackend
           'Unordered unique constraints require exactly two fields.',
         );
       }
-      if (!(constraint.condition?.matches(candidate) ?? true)) continue;
+      if (!constraint.covers(candidate)) continue;
       final values = [
         for (final fieldName in constraint.fieldNames) candidate[fieldName],
       ];
@@ -1175,7 +1175,7 @@ final class InMemorySyncBackend
       var conflicts = false;
       for (final entry in records.entries) {
         if (entry.key == entityId) continue;
-        if (!(constraint.condition?.matches(entry.value) ?? true)) continue;
+        if (!constraint.covers(entry.value)) continue;
         final matches = constraint.unordered
             ? (entityValuesEqual(
                         entry.value[constraint.fieldNames[0]],

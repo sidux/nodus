@@ -1776,6 +1776,23 @@ void main() {
     },
   );
 
+  test('a live-only unique constraint never covers a tombstone', () {
+    const constraint = EntityUniqueConstraint(
+      name: 'tags_name_active_idx',
+      fieldNames: ['name'],
+      liveOnly: true,
+    );
+
+    expect(constraint.covers({'name': 'Garden', 'deletedAt': null}), isTrue);
+    expect(
+      constraint.covers({
+        'name': 'Garden',
+        'deletedAt': '2026-10-02T12:00:00.000Z',
+      }),
+      isFalse,
+    );
+  });
+
   test('in-memory transport scopes conditional unique constraints', () async {
     final descriptor = TestDescriptor<_Item>(
       fields: const [

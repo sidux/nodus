@@ -528,13 +528,7 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
         buffer.writeln('      unordered: true,');
       }
       if (index.activeOnly) {
-        buffer
-          ..writeln('      condition: EntityUniqueConstraintCondition(')
-          ..writeln(
-            "        fieldName: '${EntityConventions.deletedAtFieldName}',",
-          )
-          ..writeln('        values: [null],')
-          ..writeln('      ),');
+        buffer.writeln('      liveOnly: true,');
       } else if (condition != null) {
         buffer
           ..writeln('      condition: EntityUniqueConstraintCondition(')
@@ -3650,7 +3644,6 @@ void _emitCreateOrGetMethods(
     (candidate) =>
         candidate.unique &&
         candidate.condition == null &&
-        !candidate.activeOnly &&
         candidate.fieldNames.every(
           (name) =>
               !spec.fields.singleWhere((field) => field.name == name).nullable,
@@ -3734,24 +3727,8 @@ void _emitCreateOrGetMethods(
     }
     buffer
       ..writeln('    );')
-      ..writeln('    if (existing != null) {')
-      ..writeln('      if (existing.${spec.deletedAtField!.name} != null) {');
-    if (spec.hasSoftDeletableCapability) {
-      buffer.writeln('        await existing.restore();');
-    } else {
-      buffer
-        ..writeln('        throw const EntityValidationException(')
-        ..writeln("          entityType: '${spec.className}',")
-        ..writeln("          field: '${EntityConventions.deletedAtFieldName}',")
-        ..writeln(
-          "          message: 'A remotely deleted entity cannot be upserted.',",
-        )
-        ..writeln('        );');
-    }
-    buffer
-      ..writeln('      }')
-      ..writeln('      return existing.beginEdit();')
-      ..writeln('    }')
+      // The unique lookup skips tombstones, which never hold the key.
+      ..writeln('    if (existing != null) return existing.beginEdit();')
       ..writeln('    final draft = beginCreate(id: id);');
     for (final fieldName in lookupFields) {
       buffer.writeln('    draft.$fieldName = $fieldName;');
@@ -4185,7 +4162,6 @@ void _emitUniqueLookups(StringBuffer buffer, EntitySpec spec) {
         candidate.unique &&
         (candidate.exactLookup ||
             (candidate.condition == null &&
-                !candidate.activeOnly &&
                 candidate.fieldNames.every(
                   (name) => !spec.fields
                       .singleWhere((field) => field.name == name)

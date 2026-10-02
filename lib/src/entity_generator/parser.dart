@@ -2171,31 +2171,15 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
     final reader = ConstantReader(indexValue);
     final keyset = reader.read('keyset').boolValue;
     final unordered = reader.read('unordered').boolValue;
-    final activeOnly = reader.read('activeOnly').boolValue;
     final exactLookup = reader.read('exactLookup').boolValue;
     final unique = reader.read('unique').boolValue;
-    if ((activeOnly || exactLookup) && !unique) {
+    if (exactLookup && !unique) {
       throw InvalidGenerationSourceError(
-        'CompoundIndex activeOnly and exactLookup require unique: true.',
-        element: element,
-      );
-    }
-    if (activeOnly &&
-        !persistedByName.containsKey(EntityConventions.deletedAtFieldName)) {
-      throw InvalidGenerationSourceError(
-        'CompoundIndex activeOnly requires the SoftDeletable capability.',
+        'CompoundIndex exactLookup requires unique: true.',
         element: element,
       );
     }
     final conditionReader = reader.peek('condition');
-    if (activeOnly && conditionReader != null && !conditionReader.isNull) {
-      throw InvalidGenerationSourceError(
-        'CompoundIndex cannot combine activeOnly with condition until the '
-        'same conjunctive predicate is generated for every storage target '
-        'and exact lookup.',
-        element: element,
-      );
-    }
     IndexConditionSpec? condition;
     if (conditionReader != null && !conditionReader.isNull) {
       if (keyset) {
@@ -2257,7 +2241,9 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
         element: element,
       );
     }
-    final minimumFields = keyset || condition != null || unordered || activeOnly
+    // A single-field key keeps its own index when the field also carries a
+    // differently scoped `@Indexed` query index.
+    final minimumFields = keyset || condition != null || unordered || unique
         ? 1
         : 2;
     if (names.length < minimumFields) {
@@ -2345,7 +2331,6 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
         condition.field,
         ...condition.values.map((value) => value.toString()),
       ],
-      if (activeOnly) 'activeOnly',
       if (exactLookup) 'exactLookup',
     ].join('|');
     if (!identities.add(identity)) {
@@ -2362,7 +2347,6 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
         keyset: keyset,
         condition: condition,
         unordered: unordered,
-        activeOnly: activeOnly,
         exactLookup: exactLookup,
       ),
     );

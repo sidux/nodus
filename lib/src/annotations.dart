@@ -425,13 +425,16 @@ final class PersistedVariant {
 /// Indexes are physical query policy, so they remain explicit. Table names,
 /// column names, owner fields, and backend metadata are inferred. Use
 /// [IndexScope.owner] to prefix the conventional owner without repeating it.
+///
+/// An unconditional unique key belongs to live entities only: a deleted
+/// entity's tombstone never holds it. A [condition] is the complete membership
+/// predicate of a conditional unique index.
 final class CompoundIndex {
   const CompoundIndex(
     this.fields, {
     this.unique = false,
     this.scope = IndexScope.field,
     this.condition,
-    this.activeOnly = false,
     this.exactLookup = false,
   }) : keyset = false,
        unordered = false,
@@ -445,7 +448,6 @@ final class CompoundIndex {
   const CompoundIndex.query(this.fields, {this.scope = IndexScope.field})
     : unique = false,
       condition = null,
-      activeOnly = false,
       exactLookup = false,
       keyset = true,
       unordered = false,
@@ -461,7 +463,6 @@ final class CompoundIndex {
       unique = true,
       scope = IndexScope.owner,
       condition = null,
-      activeOnly = true,
       exactLookup = true,
       keyset = false,
       unordered = true;
@@ -471,11 +472,8 @@ final class CompoundIndex {
   final IndexScope scope;
   final IndexCondition? condition;
 
-  /// Restricts this unique index to entities that have not been soft deleted.
-  final bool activeOnly;
-
-  /// Declares a conditional, active-only, or nullable key as an exact public
-  /// lookup contract. Unconditional non-null unique keys are exact by default.
+  /// Declares a conditional or nullable key as an exact public lookup
+  /// contract. Unconditional non-null unique keys are exact by default.
   final bool exactLookup;
   final bool keyset;
   final bool unordered;

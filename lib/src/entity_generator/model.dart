@@ -322,44 +322,46 @@ final class EntitySpec {
     ];
   }
 
-  List<IndexSpec> _declaredIndexes({required bool includeAccountOwnerScope}) =>
-      [
-        for (final field in fields)
-          if (field.indexed)
-            IndexSpec(
-              fieldNames: [
-                if (field.indexScope == IndexScope.owner) ownerField.name,
-                field.name,
-              ],
-              unique: field.unique,
-              ownerScoped: field.indexScope == IndexScope.owner,
-              unordered: false,
-              activeOnly: false,
-              exactLookup: field.unique && !field.nullable,
-            ),
-        for (final index in compoundIndexes)
-          IndexSpec(
-            fieldNames: [
-              if (index.scope == IndexScope.owner &&
-                  (!hasOrderedCapability ||
-                      !index.keyset ||
-                      includeAccountOwnerScope))
-                ownerField.name,
-              ..._orderedCompoundScope(
-                index,
-                includeAccountOwnerScope: includeAccountOwnerScope,
-              ),
-              ...index.fields,
-              if (index.keyset) idField.name,
-            ],
-            unique: index.unique,
-            ownerScoped: index.scope == IndexScope.owner,
-            unordered: index.unordered,
-            activeOnly: index.activeOnly || (index.unordered && canDelete),
-            exactLookup: index.exactLookup,
-            condition: index.condition,
+  List<IndexSpec> _declaredIndexes({
+    required bool includeAccountOwnerScope,
+  }) => [
+    for (final field in fields)
+      if (field.indexed)
+        IndexSpec(
+          fieldNames: [
+            if (field.indexScope == IndexScope.owner) ownerField.name,
+            field.name,
+          ],
+          unique: field.unique,
+          ownerScoped: field.indexScope == IndexScope.owner,
+          unordered: false,
+          activeOnly: field.unique && deletedAtField != null,
+          exactLookup: field.unique && !field.nullable,
+        ),
+    for (final index in compoundIndexes)
+      IndexSpec(
+        fieldNames: [
+          if (index.scope == IndexScope.owner &&
+              (!hasOrderedCapability ||
+                  !index.keyset ||
+                  includeAccountOwnerScope))
+            ownerField.name,
+          ..._orderedCompoundScope(
+            index,
+            includeAccountOwnerScope: includeAccountOwnerScope,
           ),
-      ];
+          ...index.fields,
+          if (index.keyset) idField.name,
+        ],
+        unique: index.unique,
+        ownerScoped: index.scope == IndexScope.owner,
+        unordered: index.unordered,
+        activeOnly:
+            index.unique && index.condition == null && deletedAtField != null,
+        exactLookup: index.exactLookup,
+        condition: index.condition,
+      ),
+  ];
 
   IndexSpec? _orderIndex({required bool includeAccountOwnerScope}) {
     final rank = orderRankField;
@@ -794,7 +796,6 @@ final class CompoundIndexSpec {
     this.keyset = false,
     this.condition,
     this.unordered = false,
-    this.activeOnly = false,
     this.exactLookup = false,
   });
 
@@ -804,7 +805,6 @@ final class CompoundIndexSpec {
   final bool keyset;
   final IndexConditionSpec? condition;
   final bool unordered;
-  final bool activeOnly;
   final bool exactLookup;
 }
 

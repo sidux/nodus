@@ -804,7 +804,6 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
           !candidate.unordered &&
           (candidate.exactLookup ||
               (candidate.condition == null &&
-                  !candidate.activeOnly &&
                   candidate.fieldNames.every(
                     (name) => !entity.fields
                         .singleWhere((field) => field.name == name)

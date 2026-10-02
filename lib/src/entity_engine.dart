@@ -646,12 +646,20 @@ final class EntityUniqueConstraint {
     required this.fieldNames,
     this.condition,
     this.unordered = false,
+    this.liveOnly = false,
   });
 
   final String name;
   final List<String> fieldNames;
   final EntityUniqueConstraintCondition? condition;
   final bool unordered;
+
+  /// Whether only live records hold the key; a tombstone never does.
+  final bool liveOnly;
+
+  bool covers(JsonMap record) =>
+      !(liveOnly && record[EntityConventions.deletedAtFieldName] != null) &&
+      (condition?.matches(record) ?? true);
 }
 
 final class EntityUniqueConstraintCondition {

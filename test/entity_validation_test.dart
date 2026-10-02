@@ -3021,8 +3021,8 @@ abstract class Document implements OwnedBy<Document, Account>, Component {
               contains('composition: true'),
               contains('ReferenceDeleteAction.restrict'),
               contains(
-                'CREATE UNIQUE INDEX tasks_document_id_idx ON tasks '
-                '(document_id)',
+                'CREATE UNIQUE INDEX tasks_document_id_active_idx ON tasks '
+                '(document_id) WHERE deleted_at IS NULL',
               ),
             ]),
           ),
@@ -3076,7 +3076,8 @@ abstract class Document implements OwnedBy<Document, Account>, Component {
                 'on delete restrict',
               ),
               contains(
-                'create unique index if not exists tasks_document_id_idx',
+                'create unique index if not exists '
+                'tasks_document_id_active_idx',
               ),
               contains(
                 "public.is_documents_owner((current_operation -> 'patch' "
@@ -5479,8 +5480,7 @@ final class Account {}
               'max(owner_id, friend_id)) WHERE deleted_at IS NULL',
             ),
             contains('unordered: true'),
-            contains("fieldName: 'deletedAt'"),
-            contains('values: [null]'),
+            contains('liveOnly: true'),
             contains("'CHECK (owner_id <> friend_id)'"),
             contains("message: 'Must differ from the owner.'"),
             contains('if ((hasOwnerId ? remoteOwnerId : ownerId) =='),
@@ -5623,23 +5623,15 @@ final class Account {}
     );
   });
 
-  test('generates an active-only exact lookup contract', () async {
+  test('a tombstone never holds an unconditional unique key', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
 
-@Entity(
-  indexes: [
-    CompoundIndex(
-      [#parentId],
-      unique: true,
-      activeOnly: true,
-      exactLookup: true,
-    ),
-  ],
-)
+@Entity(indexes: [CompoundIndex([#parentId, #kind], unique: true)])
 abstract class Selection
     implements OwnedBy<Selection, Account>, SoftDeletable {
   abstract final String parentId;
+  abstract final String kind;
 }
 
 final class Account {}
@@ -5668,17 +5660,15 @@ final class Account {}
         'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
           allOf([
             contains('final class SelectionLookup'),
-            contains('SelectionLookup.byParent('),
+            contains('SelectionLookup.byParentAndKind('),
             contains('tombstones: TombstoneVisibility.exclude'),
             isNot(
-              contains(
-                'SelectionLookup.byParent(\n    NodusEntityGraph entityGraph,\n    String parentId, {\n    TombstoneVisibility tombstones',
-              ),
+              contains('String kind, {\n    TombstoneVisibility tombstones'),
             ),
           ]),
         ),
         'nodus|supabase/nodus/schema.sql': decodedMatches(
-          contains('where deleted_at is null'),
+          contains('(parent_id, kind) where deleted_at is null'),
         ),
       },
     );
@@ -5731,8 +5721,10 @@ final class Account {}
     }
   });
 
-  test('rejects a conditional active-only index contract', () async {
-    const source = r'''
+  test(
+    'a conditional unique index keeps exactly its declared predicate',
+    () async {
+      const source = r'''
 import 'package:nodus/nodus.dart';
 
 @Entity(
@@ -5740,7 +5732,6 @@ import 'package:nodus/nodus.dart';
     CompoundIndex(
       [#taskKey],
       unique: true,
-      activeOnly: true,
       condition: IndexCondition.oneOf(#status, [AssignmentStatus.pending]),
     ),
   ],
@@ -5755,17 +5746,29 @@ enum AssignmentStatus { pending, accepted }
 final class Account {}
 ''';
 
-    final result = await testBuilder(
-      localEntityBuilder(BuilderOptions.empty),
-      _sources(source),
-      rootPackage: 'nodus',
-    );
-    expect(result.succeeded, isFalse);
-    expect(
-      result.errors.join('\n'),
-      contains('cannot combine activeOnly with condition'),
-    );
-  });
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        _sources(source),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(
+            allOf([
+              contains("(task_key) where status in ('pending');"),
+              isNot(contains('(task_key) where deleted_at is null')),
+            ]),
+          ),
+        },
+      );
+    },
+  );
 
   test('rejects invalid compound index declarations', () async {
     final cases = <(String, String)>[
@@ -6618,7 +6621,7 @@ abstract class NoteTagLink
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
-              contains('note_tag_links_note_id_task_tag_id_idx'),
+              contains('note_tag_links_note_id_task_tag_id_active_idx'),
               contains('(note_id, deleted_at, active, order_rank, id)'),
               contains('select note_id::text into order_scope_key'),
               contains('candidate.note_id::text = order_scope_key'),
@@ -7765,8 +7768,9 @@ abstract class GoalRequirement
               ),
               contains(
                 'create unique index if not exists '
-                'goal_members_goal_id_member_id_idx '
-                'on public.goal_members (goal_id, member_id)',
+                'goal_members_goal_id_member_id_active_idx '
+                'on public.goal_members (goal_id, member_id) '
+                'where deleted_at is null',
               ),
               contains(
                 'member.goal_id = p_id\n'
