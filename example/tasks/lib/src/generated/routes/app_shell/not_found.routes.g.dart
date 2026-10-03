@@ -423,7 +423,10 @@ GoRouter createFileRouter({
     ),
     routes: [
       ShellRoute(
-        builder: _buildFileRouteLayout0,
+        pageBuilder: (context, state, child) => NoTransitionPage<void>(
+          key: state.pageKey,
+          child: _buildFileRouteLayout0(context, state, child),
+        ),
         routes: [
           GoRoute(
             path: '/',
@@ -496,7 +499,10 @@ GoRouter createFileRouter({
                   ),
           ),
           ShellRoute(
-            builder: _buildFileRouteLayout1,
+            pageBuilder: (context, state, child) => NoTransitionPage<void>(
+              key: state.pageKey,
+              child: _buildFileRouteLayout1(context, state, child),
+            ),
             routes: [
               GoRoute(
                 path: '/tasks',
