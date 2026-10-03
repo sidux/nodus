@@ -292,6 +292,72 @@ void main() {
     expect(draft.isConsumed, isTrue);
   });
 
+  testWidgets('a list hook whose selection changes keeps showing the previous '
+      'results as refreshing until the new ones load, then releases them', (
+    tester,
+  ) async {
+    final invalidations =
+        StreamController<EntityProjectionChange<int>>.broadcast(sync: true);
+    addTearDown(invalidations.close);
+    final evens = Completer<void>();
+    final cache = LocalEntityQueryCache<int>.database(
+      loader: (spec, {required after, required limit}) async {
+        // The page size stands in for a filter: 10 selects odd values and 20
+        // even ones, which load only once released.
+        if (spec.pageSize == 20) await evens.future;
+        return EntityQueryPage(
+          items: spec.pageSize == 20 ? const [2, 4] : const [1, 3],
+          hasMore: false,
+          nextCursor: null,
+        );
+      },
+      invalidations: invalidations.stream,
+    );
+    addTearDown(cache.dispose);
+    final filter = ValueNotifier(10);
+    addTearDown(filter.dispose);
+    final lists = <_IntList>[];
+    late ObservedEntityQuery<int> observed;
+
+    await tester.pumpWidget(
+      ValueListenableBuilder<int>(
+        valueListenable: filter,
+        builder: (_, pageSize, _) => HookBuilder(
+          builder: (_) {
+            observed = useObservedEntityList(() {
+              final list = _IntList(
+                cache.acquire(EntityQuerySpec<int>(pageSize: pageSize)),
+              );
+              lists.add(list);
+              return list;
+            }, keys: [pageSize]);
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(observed.state.items, [1, 3]);
+
+    filter.value = 20;
+    await tester.pump();
+    await tester.pump();
+
+    expect(observed.state, isA<EntityQueryStaleData<int>>());
+    expect(observed.state.items, [1, 3]);
+    expect(lists.first.state.value, isNot(isA<EntityQueryDisposed<int>>()));
+
+    evens.complete();
+    await tester.pumpAndSettle();
+
+    expect(observed.state, isA<EntityQueryData<int>>());
+    expect(observed.state.items, [2, 4]);
+    expect(lists.first.state.value, isA<EntityQueryDisposed<int>>());
+
+    await tester.pumpWidget(const SizedBox());
+    expect(lists.last.state.value, isA<EntityQueryDisposed<int>>());
+  });
+
   testWidgets('complete query hooks exhaust every cached page', (tester) async {
     final invalidations =
         StreamController<EntityProjectionChange<int>>.broadcast(sync: true);

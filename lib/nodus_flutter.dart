@@ -511,18 +511,59 @@ ObservedEntityQuery<E> useObservedEntityQuery<E>(
   return _useObservedEntityQuery(query);
 }
 
+/// Acquires and observes a generated list for the widget lifetime.
+///
+/// When [keys] change, such as for a new filter, the previous list stays
+/// leased and is presented as refreshing data until its replacement settles,
+/// so the screen never falls back to its first-load placeholder in between.
 ObservedEntityQuery<E> useObservedEntityList<E>(
   EntityList<E> Function() acquire, {
   List<Object?> keys = const [],
   bool loadAllPages = false,
 }) {
-  final list = useEntityList<E, EntityList<E>>(
-    acquire,
-    keys: keys,
-    loadAllPages: loadAllPages,
+  final list = useMemoized(acquire, keys);
+  final shown = useRef<EntityList<E>?>(null);
+  final replaced = useRef<EntityList<E>?>(null);
+  if (!identical(shown.value, list)) {
+    final previous = shown.value;
+    shown.value = list;
+    if (previous != null) {
+      if (previous.query.state.value is EntityQueryInitialLoading<E>) {
+        _releaseAfterFrame(previous);
+      } else {
+        if (replaced.value case final older?) _releaseAfterFrame(older);
+        replaced.value = previous;
+      }
+    }
+  }
+  useEffect(
+    () => () {
+      replaced.value?.dispose();
+      shown.value?.dispose();
+    },
+    const [],
   );
-  return _useObservedEntityQuery(list.query);
+  _useCompleteEntityQuery(list.query, loadAllPages: loadAllPages);
+  final observed = _useObservedEntityQuery(list.query);
+  final previous = replaced.value;
+  if (previous == null) return observed;
+  if (observed.state is! EntityQueryInitialLoading<E>) {
+    replaced.value = null;
+    _releaseAfterFrame(previous);
+    return observed;
+  }
+  return ObservedEntityQuery(
+    list.query,
+    EntityQueryStaleData(
+      items: previous.query.state.value.items,
+      hasMore: false,
+    ),
+  );
 }
+
+/// Releases [list] once the frame that stopped showing it is built.
+void _releaseAfterFrame(EntityList<dynamic> list) =>
+    WidgetsBinding.instance.addPostFrameCallback((_) => list.dispose());
 
 /// A lease-owning exact lookup and its current state observed by a Flutter Hook.
 ///

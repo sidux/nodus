@@ -2740,6 +2740,41 @@ void main() {
     await replacement.cancel();
   });
 
+  test('an empty result stays empty while it reloads, instead of returning to '
+      'its first-load state', () async {
+    final invalidations =
+        StreamController<EntityProjectionChange<_Item>>.broadcast(sync: true);
+    addTearDown(invalidations.close);
+    var records = <_Item>[];
+    Completer<void>? reload;
+    final cache = LocalEntityQueryCache<_Item>.database(
+      invalidations: invalidations.stream,
+      loader: (spec, {required after, required limit}) async {
+        await reload?.future;
+        return EntityQueryPage(
+          items: records,
+          hasMore: false,
+          nextCursor: null,
+        );
+      },
+    );
+    addTearDown(cache.dispose);
+    final query = cache.acquire(EntityQuerySpec<_Item>());
+    addTearDown(query.dispose);
+    await Future<void>.delayed(Duration.zero);
+    expect(query.state.value, isA<EntityQueryEmpty<_Item>>());
+
+    reload = Completer<void>();
+    records = [_Item('A')];
+    invalidations.add(const EntityProjectionChange<_Item>.unknown());
+    await Future<void>.delayed(Duration.zero);
+    expect(query.state.value, isA<EntityQueryEmpty<_Item>>());
+
+    reload.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(query.state.value, isA<EntityQueryData<_Item>>());
+  });
+
   test(
     'database query cache exposes loading, paging, and stale refresh states',
     () async {

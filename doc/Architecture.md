@@ -1937,6 +1937,10 @@ with or without retained data, pagination, and disposal. UI code MUST use that
 typed fold instead of repeating state switches or converting it into provider
 state. A bounded synchronous exact lookup uses a narrow MobX observation hook
 over the generated computed index and retains no query lease.
+When an observed list's selection changes, such as a new filter, the hook keeps
+the previous list leased and presents it as stale/refreshing data until the
+replacement settles, so a screen never returns to its first-load placeholder
+after showing content.
 
 Observed list/query data installs an automatic paging boundary by default.
 Vertical scroll and scroll-metrics notifications load the next page before the

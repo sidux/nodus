@@ -3493,9 +3493,13 @@ final class _LocalEntityQueryController<E> {
     final desiredCount = math.max(spec.pageSize, _databaseItems.length);
     runInAction(() {
       _databaseError.value = null;
-      _databasePhase.value = _databaseItems.isEmpty
-          ? _DatabaseQueryPhase.initialLoading
-          : _DatabaseQueryPhase.stale;
+      // A settled empty result stays empty while it reloads; only a query
+      // that has not loaded yet, or failed, shows its first-load state.
+      _databasePhase.value = _databaseItems.isNotEmpty
+          ? _DatabaseQueryPhase.stale
+          : _databasePhase.value == _DatabaseQueryPhase.ready
+          ? _DatabaseQueryPhase.ready
+          : _DatabaseQueryPhase.initialLoading;
     });
     final operation = _loadDatabasePage(
       generation: generation,
