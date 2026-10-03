@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Nodus is currently pre-1.0. Security fixes are applied to the latest release
-and the `main` branch.
+Nodus is pre-1.0 and has no tagged release yet. Security fixes are applied to
+the `main` branch; once releases exist, they will also go to the latest one.
 
 ## Reporting a vulnerability
 

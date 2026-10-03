@@ -265,10 +265,10 @@ TargetRegistry --> Imported : explicit only
 TargetRegistry --> Exported : explicit only
 
 package "SYNC TARGET ADAPTERS\ntransport is replaceable; domain is unchanged" as Targets #FFF3E0 {
-  component "SupabaseSyncAdapter\nSQL schema + RLS + RPC + log" as Supabase #FFE0B2
-  component "ConvexSyncAdapter\nnon-SQL protocol/provisioning" as Convex #FFE0B2
-  component "NamedExternalApiSyncAdapter\nonly if it satisfies declared mode capabilities" as External #FFE0B2
-  component "MultiMasterProtocolAdapter\none deterministic merge/recovery authority contract" as MultiMaster #FFE0B2
+  component "SupabaseSyncBackend (built in)\nSQL schema + RLS + RPC + log" as Supabase #FFE0B2
+  component "Custom non-SQL adapter, e.g. Convex\nnon-SQL protocol/provisioning" as Convex #FFE0B2
+  component "Custom external API adapter\nonly if it satisfies declared mode capabilities" as External #FFE0B2
+  component "Custom multi-master adapter\none deterministic merge/recovery authority contract" as MultiMaster #FFE0B2
 }
 
 Scheduler --> Supabase : generated target lane

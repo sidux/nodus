@@ -1,5 +1,14 @@
 /// Core Nodus declarations, generated-runtime contracts, typed queries, and
 /// deterministic synchronization primitives.
+///
+/// Entity declarations import this library for `@Entity`, `@Persisted`, the
+/// capability interfaces, and `LocalId`. Application code imports its
+/// generated `nodus.g.dart` instead, which re-exports everything it needs.
+///
+/// Start with the
+/// [getting started guide](https://github.com/sidux/nodus/blob/main/doc/getting-started.md)
+/// and the
+/// [capability reference](https://github.com/sidux/nodus/blob/main/doc/capabilities.md).
 library;
 
 export 'src/annotations.dart';

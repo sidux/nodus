@@ -1,5 +1,10 @@
 # Entity-First Local-First Architecture
 
+> This is the precise contract for contributors and reviewers. To learn Nodus,
+> start with [Core concepts](concepts.md) and
+> [Getting started](getting-started.md); the
+> [capability reference](capabilities.md) describes the current API.
+
 ## 1. Scope and authority
 
 This document defines the reusable architecture contract. It is intentionally
@@ -2161,7 +2166,7 @@ This metadata is the sole input to generated adapter groups and durable lane
 routing.
 
 An entity declaration records only its generated target identifier; it MUST NOT
-import or instantiate `SupabaseSyncAdapter`, `ConvexSyncAdapter`, or another
+import or instantiate `SupabaseSyncBackend`, a custom adapter, or another
 transport implementation. A built-in target factory accepts its client:
 
 ```dart

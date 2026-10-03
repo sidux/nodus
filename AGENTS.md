@@ -25,7 +25,7 @@ Run the smallest relevant tests while iterating, then the affected portion of:
 
 ```sh
 dart format --output=none --set-exit-if-changed .
-flutter analyze
+flutter analyze lib test bin
 dart test --exclude-tags flutter
 flutter test --tags flutter
 dart doc --validate-links
@@ -33,6 +33,11 @@ dart pub publish --dry-run
 
 cd example/tasks
 dart run nodus check
+dart format --output=none --set-exit-if-changed .
 flutter analyze
 flutter test
 ```
+
+Tag tests that import Flutter with `@Tags(['flutter'])`. User-facing
+documentation lives in `README.md` and `doc/` (indexed by `doc/README.md`);
+update it when user-visible behavior changes.

@@ -1,5 +1,8 @@
 /// Flutter lifecycle, Hook bindings, local storage, and typed file routing for
 /// generated Nodus entity graphs.
+///
+/// See the
+/// [Flutter integration guide](https://github.com/sidux/nodus/blob/main/doc/capabilities.md#flutter-integration).
 library;
 
 export 'nodus.dart';

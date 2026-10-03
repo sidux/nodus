@@ -105,13 +105,41 @@ A suitable feature layout is:
 features/tasks/
   domain/task.dart
   application/task_summarization.dart
-  infrastructure/http_task_summary_client.dart
+  infrastructure/supabase_task_summary_client.dart
   presentation/...
 ```
 
-The `application/` layer is present because an external request must be
-coordinated. Ordinary entity operations do not need it. The HTTP adapter must
-not load, cache, serialize, or synchronize `Task` itself.
+The folder names are only a suggestion; Nodus requires `domain/` for entities
+and `presentation/pages/` for routes, nothing else. The `application/` layer
+is present because an external request must be coordinated. Ordinary entity
+operations do not need it. The adapter must not load, cache, serialize, or
+synchronize `Task` itself.
+
+When the service is a Supabase Edge Function or RPC, the client can be a thin
+wrapper around a typed `ExternalCapabilityContract` and the shared
+`SupabaseExternalCapabilityAdapter`, which owns the transport and maps failures
+to a typed `ExternalCapabilityException`:
+
+```dart
+final _summarize = ExternalCapabilityContract<String, String>.jsonObject(
+  name: 'summarize-task',
+  encodeRequest: (text) => {'text': text},
+  decodeResponse: (json) => json['summary']! as String,
+);
+
+final class SupabaseTaskSummaryClient implements TaskSummaryClient {
+  const SupabaseTaskSummaryClient(this._adapter);
+
+  final SupabaseExternalCapabilityAdapter _adapter;
+
+  @override
+  Future<String> summarize(String text) =>
+      _adapter.invokeFunction(_summarize, text);
+}
+```
+
+`SupabaseExternalCapabilityAdapter.forTesting(...)` replaces the transport in
+tests.
 
 If progress, retry, cancellation, audit, or offline execution is real product
 state, model the work as an entity-owned process or projection instead of

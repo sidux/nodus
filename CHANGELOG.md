@@ -54,3 +54,25 @@
   sync connector starts, and `AccountEntityGraphSession` publishes
   `AccountEntityGraphStoreInUse` and reopens automatically once the store is
   released.
+- Splits the local schema fingerprint from the remote one in `nodus.lock`, so a
+  change confined to the remote schema no longer bumps the device database
+  version.
+- Lets tombstones release unconditional unique keys, so a live entity may
+  reuse a deleted entity's key.
+- Raises synchronization conflicts with a dedicated error code that PostgREST
+  does not retry, rebases a conflicting push before retrying it, and bounds
+  Supabase sync requests with a retryable timeout.
+- Adds `CollaborationAccess.workflow(editPermissionField:)` so workflow
+  collaborations can separate editors from read-only members.
+- Routes realtime revocations and access changes to their addressed
+  recipients and catches up with a pull after realtime reconnects. Existing
+  Supabase deployments must apply the generated migration that adds the
+  change-recipient table.
+- Persists the web local store through Drift's WebAssembly build; web apps
+  serve `sqlite3.wasm` and `drift_worker.js` from their web root.
+- Generates `eraseLocalStore` so an application can delete a deleted
+  account's local database.
+- Holds an account's synchronization work while it is not signed in instead
+  of failing it.
+- Keeps an observed list's previous results on screen while a changed query
+  reloads.

@@ -15,5 +15,8 @@ flutter run --dart-define=ALLOW_IN_MEMORY_DEMO=true
 ```
 
 The demo creates its seed workspace through the generated production APIs and
-shows durable pending synchronization work. See the
-[Tasks guide](tasks/README.md) for its architecture and verification commands.
+shows durable pending synchronization work. Only the `macos/` platform folder
+is checked in; run `flutter create .` inside `tasks/` to add another platform.
+
+See the [Tasks guide](tasks/README.md) for what each part demonstrates, how to
+run it against a local Supabase, and its verification commands.

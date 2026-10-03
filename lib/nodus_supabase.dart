@@ -1,4 +1,5 @@
-/// Descriptor-driven Supabase synchronization for generated Nodus graphs.
+/// Descriptor-driven Supabase synchronization for generated Nodus graphs, and
+/// the typed Edge Function and RPC adapter for online-only operations.
 library;
 
 export 'nodus.dart';

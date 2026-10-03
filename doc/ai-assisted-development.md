@@ -86,11 +86,12 @@ Open-Source Developer Productivity*](https://arxiv.org/abs/2507.09089).
 An earlier empirical study generated 1,689 programs with GitHub Copilot across
 89 security-relevant scenarios and found roughly 40% were vulnerable. Models and
 products have advanced since that experiment, and it does not measure Nodus or
-GPT-5.6. It nevertheless supports a durable engineering lesson: code generation
+current models. It nevertheless supports a durable engineering lesson: code generation
 does not remove the need for security policy and tests.
 
-Nodus derives Supabase RLS, grants, ownership predicates, constraint checks, and
-protocol tests from the same graph as the application API. Security remains a
+Nodus derives Supabase RLS, grants, ownership predicates, and constraint checks
+from the same graph as the application API, and its generated test harness runs
+the production graph against the same descriptors. Security remains a
 review responsibility, but the policy is less likely to become an unrelated
 copy of domain intent.
 
