@@ -77,9 +77,12 @@ canonical schema in a temporary shadow database. The local Supabase stack
 itself does not need to be running. Review all generated migrations together
 before committing; the CLI's diff can include unrelated drift.
 
-`migrate` also runs `dart format lib`, like every full generation (`init` and
-the [advanced options](#advanced-generation-options)), so handwritten files in
-`lib/` are formatted too.
+`migrate` also runs `dart format`, like every full generation (`init` and the
+[advanced options](#advanced-generation-options)), but only on generated
+outputs: `lib/nodus.g.dart`, `lib/src/generated/`,
+`test/nodus_test_harness.g.dart`, and the Drift steps library and versioned
+migration-test schemas. Handwritten files, including the Drift
+`migration_test.dart` you extend, are never reformatted.
 
 ### `check`
 
