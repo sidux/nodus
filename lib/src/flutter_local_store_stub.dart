@@ -8,6 +8,14 @@ Future<QueryExecutor> openApplicationSupportNodusStore({
   'Provide a platform-specific NodusLocalStore.',
 );
 
+Future<void> deleteApplicationSupportNodusStore({
+  required String packageName,
+  required String accountId,
+}) => throw UnsupportedError(
+  'The default Nodus local store is not available on this platform. '
+  'Provide a platform-specific NodusLocalStore.',
+);
+
 QueryExecutor openNodusInMemoryExecutor() => throw UnsupportedError(
   'The default in-memory Nodus executor is not available on this platform.',
 );

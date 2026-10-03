@@ -2829,6 +2829,22 @@ void _emitManagedConnectorFactories(
   String accountType,
 ) {
   buffer
+    ..writeln()
+    ..writeln(
+      "  /// Permanently deletes the account's local database, such as after the",
+    )
+    ..writeln('  /// account itself is deleted. Close its graph first.')
+    ..writeln('  static Future<void> eraseLocalStore({')
+    ..writeln('    required LocalId<$accountType> accountId,')
+    ..writeln(
+      '    NodusLocalStore localStore = '
+      'const ApplicationSupportNodusLocalStore(),',
+    )
+    ..writeln('  }) => localStore.delete(')
+    ..writeln("    packageName: '${graph.packageName}',")
+    ..writeln('    accountId: accountId.value,')
+    ..writeln('  );')
+    ..writeln()
     ..writeln('  static Future<$entityGraphName> openWithConnectors({')
     ..writeln('    required LocalId<$accountType> accountId,');
   for (final target in graph.syncTargets) {

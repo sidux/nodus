@@ -256,6 +256,16 @@ final class TasksExampleEntityGraph {
     );
   }
 
+  /// Permanently deletes the account's local database, such as after the
+  /// account itself is deleted. Close its graph first.
+  static Future<void> eraseLocalStore({
+    required LocalId<Account> accountId,
+    NodusLocalStore localStore = const ApplicationSupportNodusLocalStore(),
+  }) => localStore.delete(
+    packageName: 'tasks_example',
+    accountId: accountId.value,
+  );
+
   static Future<TasksExampleEntityGraph> openWithConnectors({
     required LocalId<Account> accountId,
     required SyncConnector<PushPullSyncAdapter> supabase,

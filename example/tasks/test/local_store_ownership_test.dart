@@ -102,6 +102,12 @@ final class _OwnedElsewhereStore implements NodusLocalStore {
     }
     return NativeDatabase.memory();
   }
+
+  @override
+  Future<void> delete({
+    required String packageName,
+    required String accountId,
+  }) async {}
 }
 
 final class _RecordingStore implements NodusLocalStore {
@@ -112,6 +118,12 @@ final class _RecordingStore implements NodusLocalStore {
     required String packageName,
     required String accountId,
   }) async => NativeDatabase.memory().interceptWith(_OnClose(this));
+
+  @override
+  Future<void> delete({
+    required String packageName,
+    required String accountId,
+  }) async {}
 }
 
 final class _OnClose extends QueryInterceptor {

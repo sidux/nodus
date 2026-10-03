@@ -26,6 +26,10 @@ abstract interface class NodusLocalStore {
     required String packageName,
     required String accountId,
   });
+
+  /// Permanently deletes the account's database, such as after the account
+  /// itself is deleted. Its graph must be closed first.
+  Future<void> delete({required String packageName, required String accountId});
 }
 
 /// Default Flutter storage: one background SQLite database per account, or a
@@ -38,6 +42,15 @@ final class ApplicationSupportNodusLocalStore implements NodusLocalStore {
     required String packageName,
     required String accountId,
   }) => local_store.openApplicationSupportNodusStore(
+    packageName: packageName,
+    accountId: accountId,
+  );
+
+  @override
+  Future<void> delete({
+    required String packageName,
+    required String accountId,
+  }) => local_store.deleteApplicationSupportNodusStore(
     packageName: packageName,
     accountId: accountId,
   );

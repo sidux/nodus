@@ -21,14 +21,13 @@ Future<QueryExecutor> openApplicationSupportNodusStore({
   required String packageName,
   required String accountId,
 }) async {
-  final safeAccountId = accountId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-  final databaseName = '${packageName}_nodus_$safeAccountId';
+  final databaseName = _databaseName(packageName, accountId);
   final release = await _claimStore(databaseName);
   try {
     final result = await WasmDatabase.open(
       databaseName: databaseName,
-      sqlite3Uri: Uri.parse('sqlite3.wasm'),
-      driftWorkerUri: Uri.parse('drift_worker.js'),
+      sqlite3Uri: _sqlite3Uri,
+      driftWorkerUri: _driftWorkerUri,
     );
     return result.resolvedExecutor.interceptWith(_ReleaseOnClose(release));
   } catch (_) {
@@ -36,6 +35,28 @@ Future<QueryExecutor> openApplicationSupportNodusStore({
     rethrow;
   }
 }
+
+/// Deletes the account's database from whichever browser storage holds it.
+Future<void> deleteApplicationSupportNodusStore({
+  required String packageName,
+  required String accountId,
+}) async {
+  final databaseName = _databaseName(packageName, accountId);
+  final probe = await WasmDatabase.probe(
+    sqlite3Uri: _sqlite3Uri,
+    driftWorkerUri: _driftWorkerUri,
+    databaseName: databaseName,
+  );
+  for (final existing in probe.existingDatabases) {
+    if (existing.$2 == databaseName) await probe.deleteDatabase(existing);
+  }
+}
+
+final _sqlite3Uri = Uri.parse('sqlite3.wasm');
+final _driftWorkerUri = Uri.parse('drift_worker.js');
+
+String _databaseName(String packageName, String accountId) =>
+    '${packageName}_nodus_${accountId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')}';
 
 QueryExecutor openNodusInMemoryExecutor() => throw UnsupportedError(
   'The default in-memory Nodus executor is not available on the web.',

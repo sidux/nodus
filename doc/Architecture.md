@@ -309,6 +309,10 @@ cancels target signals and claimable background work, waits for in-flight local
 commits, checkpoints durable remote work, and closes the previous graph before
 publishing the next. It MUST NOT wait indefinitely for a network request:
 idempotent durable work remains recoverable by the next compatible session.
+Deleting an account also deletes its local store: once its graph has closed,
+the application calls the generated `eraseLocalStore`, which removes that
+account's database and journals through the same `NodusLocalStore` that opened
+it, so a shared device keeps nothing of a deleted account.
 
 Foreground operations acquire bounded session leases. A lease keeps the graph
 alive only until its local operation or query acquisition completes; it cannot

@@ -9,14 +9,28 @@ Future<QueryExecutor> openApplicationSupportNodusStore({
   required String packageName,
   required String accountId,
 }) async {
+  final file = await _storeFile(packageName, accountId);
+  await file.parent.create(recursive: true);
+  return NativeDatabase.createInBackground(file);
+}
+
+Future<void> deleteApplicationSupportNodusStore({
+  required String packageName,
+  required String accountId,
+}) async {
+  final file = await _storeFile(packageName, accountId);
+  // SQLite keeps uncheckpointed writes beside the database file.
+  for (final suffix in const ['', '-wal', '-shm', '-journal']) {
+    final part = File('${file.path}$suffix');
+    if (await part.exists()) await part.delete();
+  }
+}
+
+Future<File> _storeFile(String packageName, String accountId) async {
   final directory = await getApplicationSupportDirectory();
-  final databaseDirectory = Directory(
-    path.join(directory.path, packageName, 'nodus'),
-  );
-  await databaseDirectory.create(recursive: true);
   final safeAccountId = accountId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-  return NativeDatabase.createInBackground(
-    File(path.join(databaseDirectory.path, '$safeAccountId.sqlite')),
+  return File(
+    path.join(directory.path, packageName, 'nodus', '$safeAccountId.sqlite'),
   );
 }
 
