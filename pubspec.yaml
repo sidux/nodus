@@ -42,6 +42,7 @@ dependencies:
   path: ^1.9.1
   path_provider: ^2.1.6
   source_gen: ^4.2.3
+  sqlite3: ^3.4.0
   supabase: ^2.14.0
   uuid: ^4.6.0
   web: ^1.1.1

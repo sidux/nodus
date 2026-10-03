@@ -1341,7 +1341,7 @@ final class _TextEntityPredicate<E, V> extends EntityPredicate<E> {
     final value = field.read(entity);
     if (value is! String) return false;
     if (caseSensitive) return value.contains(expected);
-    return _sqliteCaseFold(value).contains(_sqliteCaseFold(expected));
+    return foldTextForMatching(value).contains(foldTextForMatching(expected));
   }
 
   @override
@@ -1367,11 +1367,62 @@ final class _TextEntityPredicate<E, V> extends EntityPredicate<E> {
   int get hashCode => Object.hash(field, expected, caseSensitive);
 }
 
-String _sqliteCaseFold(String value) => String.fromCharCodes(
-  value.codeUnits.map(
-    (codeUnit) => codeUnit >= 65 && codeUnit <= 90 ? codeUnit + 32 : codeUnit,
-  ),
-);
+/// Name of the SQLite function that applies [foldTextForMatching] in queries.
+///
+/// Nodus registers it on the databases it opens (see `nodus_sqlite.dart`). A
+/// database opened elsewhere without it still matches text ignoring the case
+/// of ASCII letters only.
+const nodusTextFoldFunctionName = 'nodus_fold';
+
+/// Folds [text] so that case-insensitive matching also ignores letter case
+/// outside ASCII and common accents: "École" and "ecole" fold alike.
+String foldTextForMatching(String text) {
+  final lowered = text.toLowerCase();
+  final buffer = StringBuffer();
+  for (final rune in lowered.runes) {
+    final character = String.fromCharCode(rune);
+    buffer.write(_unaccented[character] ?? character);
+  }
+  return buffer.toString();
+}
+
+final Map<String, String> _unaccented = {
+  for (final (base, accented) in const [
+    ('a', 'àáâãäåāăąǎ'),
+    ('ae', 'æ'),
+    ('c', 'çćĉċč'),
+    ('d', 'ďđð'),
+    ('e', 'èéêëēĕėęě'),
+    ('g', 'ĝğġģ'),
+    ('h', 'ĥħ'),
+    ('i', 'ìíîïĩīĭįıǐ'),
+    ('j', 'ĵ'),
+    ('k', 'ķ'),
+    ('l', 'ĺļľŀł'),
+    ('n', 'ñńņňŉ'),
+    ('o', 'òóôõöøōŏőǒ'),
+    ('oe', 'œ'),
+    ('r', 'ŕŗř'),
+    ('s', 'śŝşšș'),
+    ('ss', 'ß'),
+    ('t', 'ţťŧț'),
+    ('th', 'þ'),
+    ('u', 'ùúûüũūŭůűųǔ'),
+    ('w', 'ŵ'),
+    ('y', 'ýÿŷ'),
+    ('z', 'źżž'),
+    ('α', 'ά'),
+    ('ε', 'έ'),
+    ('η', 'ή'),
+    ('ι', 'ίϊΐ'),
+    ('ο', 'ό'),
+    ('υ', 'ύϋΰ'),
+    ('ω', 'ώ'),
+    ('σ', 'ς'),
+    ('е', 'ё'),
+  ])
+    for (final rune in accented.runes) String.fromCharCode(rune): base,
+};
 
 final class _MembershipEntityPredicate<E, V> extends EntityPredicate<E> {
   _MembershipEntityPredicate(this.field, Iterable<V> expected)

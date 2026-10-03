@@ -7,11 +7,14 @@ import 'package:drift/wasm.dart';
 import 'package:nodus/nodus.dart';
 import 'package:web/web.dart' as web;
 
+import '../nodus_sqlite.dart';
+
 /// Opens one browser-persisted SQLite database per account.
 ///
 /// The application serves drift's `sqlite3.wasm` and compiled `drift_worker.js`
 /// from its web root; drift selects the strongest available storage (OPFS,
-/// shared worker, or IndexedDB) for the current browser.
+/// shared worker, or IndexedDB) for the current browser. The worker installs
+/// [installNodusSqlFunctions] on the databases it opens.
 ///
 /// Every tab and worker of the origin reaches the same database, so the store
 /// is claimed through an exclusive Web Lock before it opens and released when
@@ -28,6 +31,7 @@ Future<QueryExecutor> openApplicationSupportNodusStore({
       databaseName: databaseName,
       sqlite3Uri: _sqlite3Uri,
       driftWorkerUri: _driftWorkerUri,
+      localSetup: installNodusSqlFunctions,
     );
     return result.resolvedExecutor.interceptWith(_ReleaseOnClose(release));
   } catch (_) {

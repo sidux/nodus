@@ -2091,7 +2091,14 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       throw RangeError.value(limit, 'limit', 'Must be greater than zero.');
     }
     final variables = <Variable>[];
-    final predicate = _predicateSql(spec.where, variables);
+    final foldsText =
+        graphCoordinator._foldsText ??
+        await graphCoordinator.detectTextFolding();
+    final predicate = _predicateSql(
+      spec.where,
+      variables,
+      foldsText: foldsText,
+    );
     final continuation = _continuationSql(spec.orderBy, after, variables);
     final ordering = _orderSql(spec.orderBy);
     variables.add(Variable.withInt(limit + 1));
@@ -2278,8 +2285,11 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
 
   String _predicateSql(
     EntityPredicate<E> predicate,
-    List<Variable> variables,
-  ) => predicate._accept(_EntityPredicateSqlWriter(this, variables));
+    List<Variable> variables, {
+    required bool foldsText,
+  }) => predicate._accept(
+    _EntityPredicateSqlWriter(this, variables, foldsText: foldsText),
+  );
 
   String _comparisonSql(
     String fieldName,
@@ -2330,12 +2340,18 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     String expected,
     List<Variable> variables, {
     required bool caseSensitive,
+    required bool foldsText,
   }) {
     final field = _field(fieldName);
-    variables.add(Variable.withString(expected));
     if (caseSensitive) {
+      variables.add(Variable.withString(expected));
       return 'instr(${field.columnName}, ?) > 0';
     }
+    if (foldsText) {
+      variables.add(Variable.withString(foldTextForMatching(expected)));
+      return 'instr($nodusTextFoldFunctionName(${field.columnName}), ?) > 0';
+    }
+    variables.add(Variable.withString(expected));
     return 'instr(lower(${field.columnName}), lower(?)) > 0';
   }
 
@@ -3884,6 +3900,20 @@ final class LocalEntityGraphCoordinator
   final GeneratedDatabase database;
   final SyncAdapterRegistry adapters;
   final EntityGraphDefinition definition;
+
+  /// Whether [database] has the [nodusTextFoldFunctionName] function; without
+  /// it text matching folds ASCII letters only. Known after the first query
+  /// that asks, so later queries need no extra round trip.
+  bool? _foldsText;
+
+  Future<bool> detectTextFolding() async {
+    final folds = await database
+        .customSelect("select $nodusTextFoldFunctionName('A') as folded")
+        .getSingle()
+        .then((_) => true, onError: (Object _) => false);
+    return _foldsText ??= folds;
+  }
+
   final String authenticatedPrincipalId;
   final Clock clock;
   final EntityIdGenerator idGenerator;
@@ -6152,10 +6182,15 @@ final class _EntityPredicateSqlWriter<
   T extends TypedGeneratedEntityRecord<E>
 >
     implements _EntityPredicateVisitor<E, String> {
-  const _EntityPredicateSqlWriter(this.engine, this.variables);
+  const _EntityPredicateSqlWriter(
+    this.engine,
+    this.variables, {
+    required this.foldsText,
+  });
 
   final LocalEntityEngine<E, T> engine;
   final List<Variable> variables;
+  final bool foldsText;
 
   @override
   String visitAll() => '1';
@@ -6195,6 +6230,7 @@ final class _EntityPredicateSqlWriter<
     expected,
     variables,
     caseSensitive: caseSensitive,
+    foldsText: foldsText,
   );
 
   @override

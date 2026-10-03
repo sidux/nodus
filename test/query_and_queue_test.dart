@@ -155,6 +155,14 @@ void main() {
     );
     expect(summary.containsText('focus').test(item), isFalse);
     expect(title.containsText('  '), EntityPredicate<_TextItem>.all());
+
+    const accented = _TextItem(title: 'École d’été', summary: null);
+    expect(title.containsText('école').test(accented), isTrue);
+    expect(title.containsText('ECOLE D’ETE').test(accented), isTrue);
+    expect(
+      title.containsText('école', caseSensitive: true).test(accented),
+      isFalse,
+    );
   });
 
   test(

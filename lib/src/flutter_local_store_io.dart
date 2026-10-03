@@ -5,13 +5,18 @@ import 'package:drift/native.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 
+import '../nodus_sqlite.dart';
+
 Future<QueryExecutor> openApplicationSupportNodusStore({
   required String packageName,
   required String accountId,
 }) async {
   final file = await _storeFile(packageName, accountId);
   await file.parent.create(recursive: true);
-  return NativeDatabase.createInBackground(file);
+  return NativeDatabase.createInBackground(
+    file,
+    setup: installNodusSqlFunctions,
+  );
 }
 
 Future<void> deleteApplicationSupportNodusStore({
@@ -34,4 +39,5 @@ Future<File> _storeFile(String packageName, String accountId) async {
   );
 }
 
-QueryExecutor openNodusInMemoryExecutor() => NativeDatabase.memory();
+QueryExecutor openNodusInMemoryExecutor() =>
+    NativeDatabase.memory(setup: installNodusSqlFunctions);

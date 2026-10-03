@@ -820,6 +820,13 @@ under that scope's serialization lock. The remote authority MUST NOT trust a
 stale client rank as the meaning of first or last. Retry uses the same operation
 ID and receipt, and any rank rebalance returns every changed canonical member.
 
+Case-insensitive text predicates (`containsText`) fold letter case and common
+accents alike in memory and in SQLite: `foldTextForMatching` and its SQL
+counterpart `nodus_fold`, which Nodus installs on the databases it opens. An
+application that opens its own database or compiles its own web worker MUST
+call `installNodusSqlFunctions` there; without it, SQL matching folds ASCII
+letters only.
+
 Capability visibility conventions are:
 
 - `SoftDeletable` entities are excluded from ordinary relationship, list, and
