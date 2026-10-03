@@ -2475,6 +2475,13 @@ capabilities within each target. A relationship must not grant broader access
 than its declared source and target policies and must not assume RLS or foreign
 keys can span independent services.
 
+Local mutation checks mirror the generated policies and never deny what the
+remote policy grants. Owner grants are checked locally. Collaborator,
+reference, and relationship grants, including operations that an access
+target elsewhere in the graph grants on an entity, are revocable projections:
+the remote policy authorizes them, and a local link that may be stale MUST NOT
+reject an offline mutation.
+
 Direct table writes that bypass optimistic concurrency, idempotency, capture,
 or authorization are forbidden for ordinary clients.
 

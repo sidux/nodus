@@ -4074,7 +4074,12 @@ abstract class NoteEvent implements OwnedBy<NoteEvent, Account> {
           ),
           'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
           'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
-            anything,
+            matches(
+              RegExp(
+                r"backendForEntity\('Note'\),[^;]*"
+                r'relationshipAccessOperations: const \{RlsOperation\.update\}',
+              ),
+            ),
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([

@@ -903,6 +903,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     required this.clock,
     required this.idGenerator,
     required this.graphCoordinator,
+    required this.relationshipAccessOperations,
   }) : _backend = backend;
 
   @override
@@ -1213,6 +1214,10 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     required RlsOperation operation,
     required List<RlsPrincipal> principals,
   }) {
+    // A relationship elsewhere in the graph grants this operation, as the
+    // generated remote policy does; like other revocable projections it is
+    // authorized remotely rather than from possibly stale local links.
+    if (relationshipAccessOperations.contains(operation)) return;
     final accountId = authenticatedPrincipalId;
     for (final principal in principals) {
       switch (principal) {
@@ -1243,6 +1248,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
   final EntityDescriptor<E, T> descriptor;
   final GeneratedDatabase database;
   final Clock clock;
+
+  /// Operations that relationships in the graph also grant on this entity.
+  final Set<RlsOperation> relationshipAccessOperations;
   final EntityIdGenerator idGenerator;
   final LocalEntityGraphCoordinator graphCoordinator;
   final Map<String, OrderScopeVersion> _orderScopeVersions = {};
@@ -1917,6 +1925,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     required LocalEntityGraphCoordinator graphCoordinator,
     Clock clock = const SystemClock(),
     EntityIdGenerator idGenerator = const UuidV7EntityIdGenerator(),
+    Set<RlsOperation> relationshipAccessOperations = const {},
   }) => _open(
     descriptor: descriptor,
     database: database,
@@ -1924,6 +1933,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     clock: clock,
     idGenerator: idGenerator,
     graphCoordinator: graphCoordinator,
+    relationshipAccessOperations: relationshipAccessOperations,
   );
 
   static Future<LocalEntityEngine<E, T>>
@@ -1934,6 +1944,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     required Clock clock,
     required EntityIdGenerator idGenerator,
     required LocalEntityGraphCoordinator graphCoordinator,
+    required Set<RlsOperation> relationshipAccessOperations,
   }) async {
     final engine = LocalEntityEngine<E, T>._(
       descriptor: descriptor,
@@ -1942,6 +1953,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       clock: clock,
       idGenerator: idGenerator,
       graphCoordinator: graphCoordinator,
+      relationshipAccessOperations: relationshipAccessOperations,
     );
     graphCoordinator._register(engine);
     try {

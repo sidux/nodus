@@ -2635,8 +2635,18 @@ void _emitEntityGraphRuntime(
       )
       ..writeln('        clock: clock,')
       ..writeln('        idGenerator: idGenerator,')
-      ..writeln('        graphCoordinator: coordinator,')
-      ..writeln('      );');
+      ..writeln('        graphCoordinator: coordinator,');
+    final relationshipMutations = entity.relationshipAccessOperations
+        .where((operation) => operation != RlsOperation.select)
+        .toList(growable: false);
+    if (relationshipMutations.isNotEmpty) {
+      buffer.writeln(
+        '        relationshipAccessOperations: const {'
+        '${relationshipMutations.map((operation) => 'RlsOperation.${operation.name}').join(', ')}'
+        '},',
+      );
+    }
+    buffer.writeln('      );');
   }
   buffer
     ..writeln('      await coordinator.start();')
