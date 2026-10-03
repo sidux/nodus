@@ -3900,6 +3900,50 @@ final class LocalEntityGraphCoordinator
         definition.compositions,
         (composition) => composition.componentEntityType,
       );
+
+  /// How many composition levels an entity type sits above its components.
+  ///
+  /// A pulled page may hold an aggregate before its component, for instance
+  /// when gaining access makes an older aggregate change visible while the
+  /// component arrives as a newer copy for the new audience. Components are
+  /// applied first so the local composition constraint holds.
+  late final Map<String, int> _compositionDepth = () {
+    final depths = <String, int>{};
+    int depthOf(String entityType, Set<String> visiting) {
+      final known = depths[entityType];
+      if (known != null) return known;
+      if (!visiting.add(entityType)) return 0;
+      var depth = 0;
+      for (final composition
+          in _compositionsByAggregate[entityType] ?? const []) {
+        final below = depthOf(composition.componentEntityType, visiting) + 1;
+        if (below > depth) depth = below;
+      }
+      visiting.remove(entityType);
+      return depths[entityType] = depth;
+    }
+
+    for (final composition in definition.compositions) {
+      depthOf(composition.aggregateEntityType, <String>{});
+    }
+    return Map<String, int>.unmodifiable(depths);
+  }();
+
+  List<RemoteEntityChange> _inCompositionOrder(
+    List<RemoteEntityChange> changes,
+  ) {
+    if (_compositionDepth.isEmpty) return changes;
+    int depthOf(RemoteEntityChange change) => change.isRevocation
+        ? 0
+        : _compositionDepth[change.identity.entityType] ?? 0;
+    final indexed = changes.indexed.toList()
+      ..sort((left, right) {
+        final byDepth = depthOf(left.$2).compareTo(depthOf(right.$2));
+        return byDepth != 0 ? byDepth : left.$1.compareTo(right.$1);
+      });
+    return [for (final (_, change) in indexed) change];
+  }
+
   late final Map<String, ActivityTrackingDefinition> _activityTrackingBySource =
       Map.unmodifiable({
         for (final tracking in definition.activityTrackings)
@@ -5195,7 +5239,7 @@ final class LocalEntityGraphCoordinator
           )
         >[];
     await database.transaction(() async {
-      for (final change in result.changes) {
+      for (final change in _inCompositionOrder(result.changes)) {
         final engine = _engineForRemoteChange(
           change,
           target: item.target,

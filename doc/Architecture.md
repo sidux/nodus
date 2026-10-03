@@ -2558,6 +2558,11 @@ The architecture MUST make common costs explicit and bounded:
   earlier work waiting out a retry holds later work for that target, so an
   operation never reaches the server before an entity it references. Only
   terminally rejected or conflicted work leaves the line;
+- a pulled page is applied with composition components before the
+  aggregates that hold them, keeping each entity type's order. Gaining
+  access can make an older aggregate change visible ahead of the component
+  copy published for the new audience, and that order must not abort the
+  page on every retry;
 - the conflict retry budget counts consecutive version conflicts only;
   transport failures while offline do not spend it, so the first conflict
   after reconnecting still rebases and retries. A conflict, an explicit pull
