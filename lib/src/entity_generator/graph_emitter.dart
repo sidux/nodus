@@ -360,11 +360,13 @@ void _emitCoIdentityConversions(StringBuffer buffer, EntityGraphSpec graph) {
 String emitEntityGraphFacade(
   EntityGraphSpec graph, {
   required String schemaFingerprint,
+  required String localSchemaFingerprint,
   Iterable<String> routeExports = const [],
 }) {
   final buffer = StringBuffer('''// GENERATED FILE. DO NOT EDIT.
 // Source: ${graph.inputImport}
 // Schema fingerprint: $schemaFingerprint
+// Local schema fingerprint: $localSchemaFingerprint
 
 export 'package:nodus/nodus_flutter.dart';
 export 'src/generated/nodus.runtime.g.dart';

@@ -49,6 +49,7 @@ final class InferredEntityGraphBuilder implements Builder {
       emitEntityGraphFacade(
         graph,
         schemaFingerprint: fingerprint,
+        localSchemaFingerprint: entityGraphLocalSchemaFingerprint(graph),
         routeExports: routeExports,
       ),
     );

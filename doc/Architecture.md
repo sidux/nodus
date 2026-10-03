@@ -2033,8 +2033,12 @@ session epoch are distinct typed values and MUST NOT share one ambiguous
 
 The previous reviewed descriptor manifest is checked in. Generation proposes
 deterministic monotonic local and per-target protocol version changes from that
-manifest; entity annotations and package setup do not repeat those numbers. A reviewer
-accepts the generated migration and new manifest together. Runtime session
+manifest; entity annotations and package setup do not repeat those numbers. The
+manifest fingerprints the local declarations separately from each target's
+generated schema: only a local change advances the local schema version, while a
+change confined to a target's schema needs that target's named migration alone,
+so devices never migrate an unchanged database. A reviewer accepts the generated
+migration and new manifest together. Runtime session
 epochs are allocated at open time and never enter schema or protocol metadata.
 
 Migration output is reviewed before application, especially for destructive or

@@ -12,6 +12,7 @@ final class NodusLock {
     required this.targets,
     required this.defaultTarget,
     this.schemaFingerprint,
+    this.localSchemaFingerprint,
     this.sourceBoundaries = const [],
   });
 
@@ -23,6 +24,9 @@ final class NodusLock {
   final List<String> targets;
   final String? defaultTarget;
   final String? schemaFingerprint;
+
+  /// Fingerprint of the declarations [schemaVersion] describes locally.
+  final String? localSchemaFingerprint;
   final List<NodusSourceBoundary> sourceBoundaries;
 
   factory NodusLock.decode(String source) {
@@ -71,14 +75,11 @@ final class NodusLock {
         'nodus.lock defaultTarget must name one configured target.',
       );
     }
-    final schemaFingerprint = json['schemaFingerprint'];
-    if (schemaFingerprint != null &&
-        (schemaFingerprint is! String ||
-            !RegExp(r'^[a-f0-9]{64}$').hasMatch(schemaFingerprint))) {
-      throw const FormatException(
-        'nodus.lock schemaFingerprint must be null or one SHA-256 digest.',
-      );
-    }
+    final schemaFingerprint = _optionalDigest(json, 'schemaFingerprint');
+    final localSchemaFingerprint = _optionalDigest(
+      json,
+      'localSchemaFingerprint',
+    );
     final sourceBoundaries = _decodeSourceBoundaries(json['sourceBoundaries']);
     return NodusLock(
       packageName: packageName,
@@ -86,21 +87,27 @@ final class NodusLock {
       schemaVersion: schemaVersion,
       targets: List.unmodifiable(targets),
       defaultTarget: defaultTarget,
-      schemaFingerprint: schemaFingerprint as String?,
+      schemaFingerprint: schemaFingerprint,
+      localSchemaFingerprint: localSchemaFingerprint,
       sourceBoundaries: sourceBoundaries,
     );
   }
 
-  NodusLock copyWith({int? schemaVersion, String? schemaFingerprint}) =>
-      NodusLock(
-        packageName: packageName,
-        graphName: graphName,
-        schemaVersion: schemaVersion ?? this.schemaVersion,
-        targets: targets,
-        defaultTarget: defaultTarget,
-        schemaFingerprint: schemaFingerprint ?? this.schemaFingerprint,
-        sourceBoundaries: sourceBoundaries,
-      );
+  NodusLock copyWith({
+    int? schemaVersion,
+    String? schemaFingerprint,
+    String? localSchemaFingerprint,
+  }) => NodusLock(
+    packageName: packageName,
+    graphName: graphName,
+    schemaVersion: schemaVersion ?? this.schemaVersion,
+    targets: targets,
+    defaultTarget: defaultTarget,
+    schemaFingerprint: schemaFingerprint ?? this.schemaFingerprint,
+    localSchemaFingerprint:
+        localSchemaFingerprint ?? this.localSchemaFingerprint,
+    sourceBoundaries: sourceBoundaries,
+  );
 
   String encode() {
     final encoder = const JsonEncoder.withIndent('  ');
@@ -110,6 +117,8 @@ final class NodusLock {
       'graphName': graphName,
       'schemaVersion': schemaVersion,
       'schemaFingerprint': schemaFingerprint,
+      if (localSchemaFingerprint != null)
+        'localSchemaFingerprint': localSchemaFingerprint,
       'targets': targets,
       'defaultTarget': defaultTarget,
       if (sourceBoundaries.isNotEmpty)
@@ -324,6 +333,17 @@ bool isValidNodusTargetName(String value) =>
     !_generatedFactoryTargetNames.contains(value);
 
 const _generatedFactoryTargetNames = {'in_memory', 'with_connectors'};
+
+String? _optionalDigest(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) return null;
+  if (value is! String || !RegExp(r'^[a-f0-9]{64}$').hasMatch(value)) {
+    throw FormatException(
+      'nodus.lock $key must be null or one SHA-256 digest.',
+    );
+  }
+  return value;
+}
 
 String _requiredIdentifier(Map<String, Object?> json, String key) {
   final value = json[key];

@@ -521,17 +521,29 @@ final class NodusGenerator {
         'the tool-owned Nodus Drift configuration.',
       );
     }
-    final match = RegExp(
-      r'^// Schema fingerprint: ([a-f0-9]{64})$',
+    final source = generated.readAsStringSync();
+    String? digest(String label) => RegExp(
+      '^// $label: ([a-f0-9]{64})\$',
       multiLine: true,
-    ).firstMatch(generated.readAsStringSync());
-    if (match == null) {
+    ).firstMatch(source)?.group(1);
+    final fingerprint = digest('Schema fingerprint');
+    final localFingerprint = digest('Local schema fingerprint');
+    if (fingerprint == null || localFingerprint == null) {
       throw const NodusToolUsageException(
         'Generated lib/nodus.g.dart has no schema fingerprint.',
       );
     }
-    final fingerprint = match.group(1)!;
-    if (lock.schemaFingerprint == fingerprint) return;
+    if (lock.schemaFingerprint == fingerprint) {
+      // Locks written before the local fingerprint existed learn it the next
+      // time the schema is known to be unchanged.
+      if (!checkOnly && lock.localSchemaFingerprint != localFingerprint) {
+        writeIfChanged(
+          lockFile,
+          lock.copyWith(localSchemaFingerprint: localFingerprint).encode(),
+        );
+      }
+      return;
+    }
 
     if (lock.schemaFingerprint == null) {
       if (checkOnly) {
@@ -541,7 +553,12 @@ final class NodusGenerator {
       }
       writeIfChanged(
         lockFile,
-        lock.copyWith(schemaFingerprint: fingerprint).encode(),
+        lock
+            .copyWith(
+              schemaFingerprint: fingerprint,
+              localSchemaFingerprint: localFingerprint,
+            )
+            .encode(),
       );
       _report('Recorded initial Nodus schema fingerprint.');
       return;
@@ -558,11 +575,19 @@ final class NodusGenerator {
       );
     }
 
+    // Only a changed local schema advances the local version; a change
+    // confined to a remote target is that target's migration alone.
+    final localChanged = lock.localSchemaFingerprint != localFingerprint;
     final next = lock.copyWith(
-      schemaVersion: lock.schemaVersion + 1,
+      schemaVersion: localChanged ? lock.schemaVersion + 1 : null,
       schemaFingerprint: fingerprint,
+      localSchemaFingerprint: localFingerprint,
     );
     writeIfChanged(lockFile, next.encode());
+    if (!localChanged) {
+      _report('Recorded the remote schema change for $migrationName.');
+      return;
+    }
     try {
       await _run('dart', ['run', 'build_runner', 'build']);
     } catch (_) {

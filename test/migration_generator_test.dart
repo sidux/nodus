@@ -608,6 +608,112 @@ void main() {
     ]);
   });
 
+  group('schema versions', () {
+    const recorded =
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const local =
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const changed =
+        'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+
+    ({_Fixture fixture, List<String> commands, NodusGenerator generator})
+    lockedFixture({
+      required String generatedSchema,
+      required String generatedLocal,
+      String? lockedLocal = local,
+    }) {
+      final fixture = _Fixture(createPackage: true);
+      fixture.writeSchema(4, [_column('id')]);
+      fixture.file('supabase/nodus/schema.sql')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('create table public.example(id uuid);\n');
+      fixture
+          .file('nodus.lock')
+          .writeAsStringSync(
+            NodusLock(
+              packageName: 'fixture',
+              graphName: 'Fixture',
+              schemaVersion: 4,
+              schemaFingerprint: recorded,
+              localSchemaFingerprint: lockedLocal,
+              targets: const ['supabase'],
+              defaultTarget: 'supabase',
+            ).encode(),
+          );
+      fixture
+          .file('lib/nodus.g.dart')
+          .writeAsStringSync(
+            '// GENERATED FILE. DO NOT EDIT.\n'
+            '// Schema fingerprint: $generatedSchema\n'
+            '// Local schema fingerprint: $generatedLocal\n',
+          );
+      final commands = <String>[];
+      final generator = fixture.generator(
+        runCommand: (executable, arguments, {required workingDirectory}) async {
+          commands.add('$executable ${arguments.join(' ')}');
+        },
+      );
+      return (fixture: fixture, commands: commands, generator: generator);
+    }
+
+    NodusLock lockOf(_Fixture fixture) =>
+        NodusLock.decode(fixture.file('nodus.lock').readAsStringSync());
+
+    test('a change confined to the remote schema keeps the local version, so '
+        'devices never migrate an unchanged database', () async {
+      final setup = lockedFixture(
+        generatedSchema: changed,
+        generatedLocal: local,
+      );
+      addTearDown(setup.fixture.dispose);
+
+      await setup.generator.generate(
+        const NodusGenerationOptions(migration: 'remote_only'),
+      );
+
+      final lock = lockOf(setup.fixture);
+      expect(lock.schemaVersion, 4);
+      expect(lock.schemaFingerprint, changed);
+      expect(
+        setup.commands.where((command) => command.contains('build_runner')),
+        hasLength(1),
+        reason: 'no rebuild for a new local version',
+      );
+    });
+
+    test('a changed local schema advances the local version', () async {
+      final setup = lockedFixture(
+        generatedSchema: changed,
+        generatedLocal: changed,
+      );
+      addTearDown(setup.fixture.dispose);
+
+      await setup.generator.generate(
+        const NodusGenerationOptions(migration: 'local_column'),
+      );
+
+      final lock = lockOf(setup.fixture);
+      expect(lock.schemaVersion, 5);
+      expect(lock.localSchemaFingerprint, changed);
+    });
+
+    test('a lock from before local fingerprints learns it while the schema '
+        'is unchanged', () async {
+      final setup = lockedFixture(
+        generatedSchema: recorded,
+        generatedLocal: local,
+        lockedLocal: null,
+      );
+      addTearDown(setup.fixture.dispose);
+
+      await setup.generator.generate(const NodusGenerationOptions());
+
+      final lock = lockOf(setup.fixture);
+      expect(lock.schemaVersion, 4);
+      expect(lock.localSchemaFingerprint, local);
+    });
+  });
+
   test(
     'fast generation runs only compile-complete application outputs',
     () async {

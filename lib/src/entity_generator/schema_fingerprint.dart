@@ -13,16 +13,7 @@ import 'model.dart';
 /// relationship, security rule, protocol, or target change does.
 String entityGraphSchemaFingerprint(EntityGraphSpec graph) {
   final material = <String, Object?>{
-    'graph': graph.className,
-    'entities': [for (final entity in graph.entities) _entitySchema(entity)],
-    'bindings': [
-      for (final binding in graph.syncBindings)
-        {
-          'entity': binding.entity.className,
-          'mode': binding.mode.name,
-          'target': binding.target?.wireName,
-        },
-    ],
+    ..._localSchemaMaterial(graph),
     'remoteSchemas': {
       for (final target in graph.syncTargets)
         target.wireName: target.wireName == 'supabase'
@@ -34,6 +25,28 @@ String entityGraphSchemaFingerprint(EntityGraphSpec graph) {
   };
   return sha256.convert(utf8.encode(jsonEncode(material))).toString();
 }
+
+/// Fingerprints the declarations the local database is derived from.
+///
+/// Only a change here advances the local schema version. A change confined to
+/// a remote target's generated schema still needs a named remote migration,
+/// but never makes devices migrate an unchanged local database.
+String entityGraphLocalSchemaFingerprint(EntityGraphSpec graph) => sha256
+    .convert(utf8.encode(jsonEncode(_localSchemaMaterial(graph))))
+    .toString();
+
+Map<String, Object?> _localSchemaMaterial(EntityGraphSpec graph) => {
+  'graph': graph.className,
+  'entities': [for (final entity in graph.entities) _entitySchema(entity)],
+  'bindings': [
+    for (final binding in graph.syncBindings)
+      {
+        'entity': binding.entity.className,
+        'mode': binding.mode.name,
+        'target': binding.target?.wireName,
+      },
+  ],
+};
 
 Map<String, Object?> _entitySchema(EntitySpec entity) => {
   'type': entity.className,
