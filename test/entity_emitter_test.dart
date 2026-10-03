@@ -871,6 +871,22 @@ void main() {
         'revoke all on public.local_entity_changes from anon, authenticated;',
       ),
     );
+    expect(
+      sql,
+      contains(
+        'create policy local_entity_changes_select_audience on '
+        'public.local_entity_changes for select to authenticated using '
+        '(audience_user_id = (select auth.uid()));',
+      ),
+      reason: 'a user reads only changes addressed to them',
+    );
+    expect(
+      sql,
+      contains(
+        'alter publication supabase_realtime add table '
+        'public.local_entity_changes;',
+      ),
+    );
     expect(sql, contains('changes.audience_user_id is null'));
     expect(sql, contains('or changes.audience_user_id = auth.uid()'));
     expect(
@@ -1214,6 +1230,22 @@ void main() {
       reason: 'Entity and audience histories each retain one latest snapshot.',
     );
     expect(sql, contains('local_entity_changes_identity_idx'));
+    expect(
+      sql,
+      contains(
+        'create policy local_entity_changes_select_audience on '
+        'public.local_entity_changes for select to authenticated using '
+        '(audience_user_id = (select auth.uid()));',
+      ),
+      reason: 'a user reads only changes addressed to them',
+    );
+    expect(
+      sql,
+      contains(
+        'alter publication supabase_realtime add table '
+        'public.local_entity_changes;',
+      ),
+    );
     expect(sql, contains('changes.audience_user_id is null'));
     expect(sql, contains('or changes.audience_user_id = auth.uid()'));
     expect(sql, contains("'nextSequence', next_cursor"));

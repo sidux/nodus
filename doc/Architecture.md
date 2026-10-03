@@ -2558,6 +2558,10 @@ The architecture MUST make common costs explicit and bounded:
   earlier work waiting out a retry holds later work for that target, so an
   operation never reaches the server before an entity it references. Only
   terminally rejected or conflicted work leaves the line;
+- a remote signal also covers changes addressed to one user, such as a
+  revoked access: that user can no longer read the affected rows, so each
+  user may read the change-log rows addressed to them and the adapter
+  listens to those as well as to the entity tables;
 - a pulled page is applied with composition components before the
   aggregates that hold them, keeping each entity type's order. Gaining
   access can make an older aggregate change visible ahead of the component

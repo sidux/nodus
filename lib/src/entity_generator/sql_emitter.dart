@@ -2616,7 +2616,38 @@ void _emitSyncInfrastructure(
       )
       ..writeln(
         'revoke all on public.local_entity_changes from anon, authenticated;',
-      );
+      )
+      // Changes published for one user, such as a revoked access, concern
+      // rows that user can no longer read, so realtime on the entity tables
+      // never reports them. The user reads their own addressed changes,
+      // which a pull returns anyway, and realtime signals each one.
+      ..writeln(
+        'grant select on public.local_entity_changes to authenticated;',
+      )
+      ..writeln(
+        'drop policy if exists local_entity_changes_select_audience '
+        'on public.local_entity_changes;',
+      )
+      ..writeln(
+        'create policy local_entity_changes_select_audience on '
+        'public.local_entity_changes for select to authenticated using '
+        '(audience_user_id = (select auth.uid()));',
+      )
+      ..writeln('do \$\$')
+      ..writeln('begin')
+      ..writeln(
+        "  if exists (select 1 from pg_publication where pubname = "
+        "'supabase_realtime') and not exists (select 1 from "
+        "pg_publication_tables where pubname = 'supabase_realtime' and "
+        "schemaname = 'public' and tablename = 'local_entity_changes') then",
+      )
+      ..writeln(
+        '    alter publication supabase_realtime add table '
+        'public.local_entity_changes;',
+      )
+      ..writeln('  end if;')
+      ..writeln('end;')
+      ..writeln('\$\$;');
   }
   buffer
     ..writeln()

@@ -303,6 +303,9 @@ final class SupabaseSyncBackend
       for (final descriptor in definition.descriptors) descriptor.tableName,
       for (final descriptor in definition.descriptors)
         ?descriptor.collaborationTableName,
+      // Changes addressed to this user, such as a revoked access, which the
+      // entity tables no longer show them.
+      'local_entity_changes',
     }.toList(growable: false)..sort();
     _channel = _subscribeGraph(tables);
   }
