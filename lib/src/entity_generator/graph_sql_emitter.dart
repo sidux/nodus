@@ -13,62 +13,44 @@ String emitEntityGraphSupabaseSql(EntityGraphSpec graph) {
           binding.mode == SyncMode.imported)
         binding.entity.className,
   };
-  final visibilityCases = graph.entities
+  final inboundEntities = graph.entities
       .where((entity) => inboundEntityTypes.contains(entity.className))
-      .map((entity) {
-        if (entity.isActivityEntry) {
-          final source = graph.activityTrackings
-              .singleWhere(
-                (tracking) => tracking.entry.className == entity.className,
-              )
-              .source;
-          final sourceAccess = _activitySourceSelectExpression(
-            source,
-            'activity.subject_id',
-          );
-          return "      when '${entity.className}' then (exists (select 1 "
-              'from public.${entity.tableName} activity where '
-              'activity.${entity.idField.columnName} = changes.entity_id '
-              'and ($sourceAccess)))';
-        }
-        final selectPrincipals = entity.security.grants
-            .where((grant) => grant.operation == RlsOperation.select)
-            .map((grant) => grant.principal)
-            .toSet();
-        if (selectPrincipals.contains(RlsPrincipal.authenticated) &&
-            entity.syncAuthenticatedReads) {
-          return "      when '${entity.className}' then (true)";
-        }
-        final expressions = <String>['changes.owner_id = auth.uid()'];
-        if (selectPrincipals.contains(RlsPrincipal.participant)) {
-          expressions.add(
-            'public.is_${entity.tableName}_participant(changes.entity_id)',
-          );
-        }
-        if (selectPrincipals.contains(RlsPrincipal.collaborator)) {
-          final collaboration = entity.security.collaboration;
-          final function = collaboration?.hasAdditionalReadableStates ?? false
-              ? 'viewer'
-              : 'collaborator';
-          expressions.add(
-            'public.is_${entity.tableName}_$function(changes.entity_id)',
-          );
-        }
-        if (selectPrincipals.contains(RlsPrincipal.reference)) {
-          expressions.add(
-            'public.is_${entity.tableName}_reference(changes.entity_id)',
-          );
-        }
-        if (entity.relationshipAccessOperations.contains(RlsOperation.select)) {
-          expressions.add(
-            'public.is_${entity.tableName}_relationship_select('
-            'changes.entity_id)',
-          );
-        }
-        final visibility = expressions.join(' or ');
-        return "      when '${entity.className}' then ($visibility)";
-      })
+      .toList(growable: false);
+  // Every account may read these, so their changes are not addressed to
+  // anyone in particular.
+  final broadcastTypes = inboundEntities
+      .where(
+        (entity) =>
+            !entity.isActivityEntry &&
+            entity.syncAuthenticatedReads &&
+            entity.security.grants.any(
+              (grant) =>
+                  grant.operation == RlsOperation.select &&
+                  grant.principal == RlsPrincipal.authenticated,
+            ),
+      )
+      .map((entity) => _sqlLiteral(entity.className))
+      .toList(growable: false);
+  final recipientCases = inboundEntities
+      .where(
+        (entity) => !broadcastTypes.contains(_sqlLiteral(entity.className)),
+      )
+      .map((entity) => _changeRecipientsCase(graph, entity))
       .join('\n');
+  final recipientsFunction = '${graphName}_change_recipients';
+  final addressedChanges = broadcastTypes.isEmpty
+      ? 'select recipient.sequence from public.local_entity_change_recipients '
+            'recipient where recipient.user_id = auth.uid() '
+            'and recipient.sequence > p_after_sequence'
+      : 'select recipient.sequence from public.local_entity_change_recipients '
+            'recipient where recipient.user_id = auth.uid() '
+            'and recipient.sequence > p_after_sequence\n'
+            '      union\n'
+            '      select broadcast.sequence from public.local_entity_changes '
+            'broadcast where broadcast.entity_type in '
+            '(${broadcastTypes.join(', ')}) '
+            'and broadcast.audience_user_id is null '
+            'and broadcast.sequence > p_after_sequence';
 
   final entitiesSql = <String>[];
   final hasOrderedEntity = graph.entities.any(
@@ -104,7 +86,69 @@ String emitEntityGraphSupabaseSql(EntityGraphSpec graph) {
 
 ${entitiesSql.join('\n\n')}${compositionSql.isEmpty ? '' : '\n\n$compositionSql'}${relationshipAccessSql.isEmpty ? '' : '\n\n$relationshipAccessSql'}${referenceAccessSql.isEmpty ? '' : '\n\n$referenceAccessSql'}${workflowCollaborationSql.isEmpty ? '' : '\n\n$workflowCollaborationSql'}
 
--- One globally ordered pull contract for this synchronization target.
+-- Who may pull each change, decided once when it is recorded. Access granted
+-- later arrives as its own addressed snapshot, so a change's recipients are
+-- exactly the accounts that may read the entity at that moment.
+
+create or replace function public.$recipientsFunction(
+  p_entity_type text,
+  p_entity_id uuid,
+  p_owner_id uuid
+) returns table (user_id uuid)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as \$\$
+begin
+  case p_entity_type
+$recipientCases
+    else
+      return;
+  end case;
+end;
+\$\$;
+
+revoke all on function public.$recipientsFunction(text, uuid, uuid) from $supabaseApiRoles;
+
+create or replace function public.address_${graphName}_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as \$\$
+begin
+  -- Accounts removed in the same transaction have nothing left to pull, and
+  -- must not make the change itself fail.
+  if new.audience_user_id is not null then
+    insert into public.local_entity_change_recipients (user_id, sequence)
+    select account.id, new.sequence
+    from auth.users account
+    where account.id = new.audience_user_id
+    on conflict do nothing;
+  else
+    insert into public.local_entity_change_recipients (user_id, sequence)
+    select distinct account.id, new.sequence
+    from public.$recipientsFunction(
+      new.entity_type,
+      new.entity_id,
+      new.owner_id
+    ) recipient
+    join auth.users account on account.id = recipient.user_id
+    on conflict do nothing;
+  end if;
+  return null;
+end;
+\$\$;
+
+revoke all on function public.address_${graphName}_change() from $supabaseApiRoles;
+drop trigger if exists local_entity_changes_address_$graphName on public.local_entity_changes;
+create trigger local_entity_changes_address_$graphName
+after insert on public.local_entity_changes
+for each row execute function public.address_${graphName}_change();
+
+-- One globally ordered pull contract for this synchronization target. It reads
+-- only the changes addressed to the caller, by index, in sequence order.
 
 create or replace function public.$functionName(p_after_sequence bigint)
 returns jsonb
@@ -139,20 +183,13 @@ begin
       changes.operation_id,
       (changes.is_revocation and changes.audience_user_id = auth.uid())
         as is_revocation
-    from public.local_entity_changes changes
-    where changes.sequence > p_after_sequence
-      and (
-        (
-          changes.audience_user_id is null
-          and case changes.entity_type
-$visibilityCases
-            else false
-          end
-        )
-        or changes.audience_user_id = auth.uid()
-      )
-    order by changes.sequence
-    limit 500
+    from (
+      $addressedChanges
+      order by 1
+      limit 500
+    ) addressed
+    join public.local_entity_changes changes
+      on changes.sequence = addressed.sequence
   ) visible;
   page_count := jsonb_array_length(page);
   if page_count = 500 then
@@ -175,31 +212,82 @@ grant execute on function public.$functionName(bigint) to authenticated;
 ''';
 }
 
-String _activitySourceSelectExpression(EntitySpec source, String idExpression) {
-  final expressions = source.security.grants
-      .where((grant) => grant.operation == RlsOperation.select)
-      .map(
-        (grant) => switch (grant.principal) {
-          RlsPrincipal.owner =>
-            'public.is_${source.tableName}_owner($idExpression)',
-          RlsPrincipal.participant =>
-            'public.is_${source.tableName}_participant($idExpression)',
-          RlsPrincipal.collaborator =>
-            'public.is_${source.tableName}_${source.security.collaboration?.hasAdditionalReadableStates ?? false ? 'viewer' : 'collaborator'}($idExpression)',
-          RlsPrincipal.reference =>
-            'public.is_${source.tableName}_reference($idExpression)',
-          RlsPrincipal.relationship =>
-            'public.is_${source.tableName}_relationship_select($idExpression)',
-          RlsPrincipal.authenticated => 'auth.uid() is not null',
-        },
-      )
-      .toSet();
-  if (source.relationshipAccessOperations.contains(RlsOperation.select)) {
-    expressions.add(
-      'public.is_${source.tableName}_relationship_select($idExpression)',
+/// The `case` branch listing who may pull a change to [entity]: its owner and
+/// every enumerable account that may read it now.
+String _changeRecipientsCase(EntityGraphSpec graph, EntitySpec entity) {
+  final when = "    when '${entity.className}' then";
+  if (entity.isActivityEntry) {
+    final source = graph.activityTrackings
+        .singleWhere((tracking) => tracking.entry.className == entity.className)
+        .source;
+    final subject =
+        '(select activity.subject_id from public.${entity.tableName} activity '
+        'where activity.${entity.idField.columnName} = p_entity_id)';
+    return _recipientsQuery(
+      graph,
+      source,
+      when: when,
+      entityId: subject,
+      aliasPrefix: _sqlAlias('recipient_${entity.tableName}'),
     );
   }
-  return expressions.isEmpty ? 'false' : expressions.join(' or ');
+  final selectPrincipals = entity.security.grants
+      .where((grant) => grant.operation == RlsOperation.select)
+      .map((grant) => grant.principal)
+      .toSet();
+  // Authenticated reads reaching here are not synchronized, so only the owner
+  // and enumerable audiences pull the entity.
+  if (selectPrincipals.difference({
+        RlsPrincipal.owner,
+        RlsPrincipal.authenticated,
+      }).isEmpty &&
+      !entity.relationshipAccessOperations.contains(RlsOperation.select)) {
+    return '$when\n      return query select p_owner_id;';
+  }
+  return _recipientsQuery(
+    graph,
+    entity,
+    when: when,
+    entityId: 'p_entity_id',
+    aliasPrefix: _sqlAlias('recipient_${entity.tableName}'),
+  );
+}
+
+String _recipientsQuery(
+  EntityGraphSpec graph,
+  EntitySpec entity, {
+  required String when,
+  required String entityId,
+  required String aliasPrefix,
+}) {
+  final candidates = [
+    'select p_owner_id as user_id',
+    ..._entityAudienceCandidates(
+      graph,
+      entity,
+      entityId: entityId,
+      aliasPrefix: aliasPrefix,
+      includeReadableStates: true,
+      followReferences: true,
+    ),
+  ];
+  final readable = _readableByUserExpression(
+    graph,
+    entity,
+    rowAlias: 'target_row',
+    userExpression: 'candidate.user_id',
+    includeReadableStates: true,
+  );
+  return '''$when
+      return query
+      select distinct candidate.user_id
+      from (${candidates.join('\n        union ')}) candidate
+      where candidate.user_id = p_owner_id
+        or exists (
+          select 1 from public.${entity.tableName} target_row
+          where target_row.${entity.idField.columnName} = $entityId
+            and ($readable)
+        );''';
 }
 
 String _emitCompositionSql(EntityGraphSpec graph) {
@@ -659,6 +747,7 @@ List<String> _entityAudienceCandidates(
   required String entityId,
   required String aliasPrefix,
   bool includeReadableStates = false,
+  bool followReferences = false,
 }) {
   final candidates = <String>[];
   final targetAlias = _sqlAlias('${aliasPrefix}_${target.tableName}');
@@ -706,12 +795,35 @@ List<String> _entityAudienceCandidates(
       );
     }
   }
-  if (principals.contains(RlsPrincipal.authenticated) ||
-      principals.contains(RlsPrincipal.reference)) {
+  if (!followReferences &&
+      (principals.contains(RlsPrincipal.authenticated) ||
+          principals.contains(RlsPrincipal.reference))) {
     throw StateError(
       '${target.className} does not have a finite directly enumerable '
       'relationship-access audience.',
     );
+  }
+  // Reference access is the referenced targets' audience. Authenticated
+  // reads are left out: those not synchronized are never pulled at all.
+  if (followReferences && principals.contains(RlsPrincipal.reference)) {
+    for (final (index, field) in target.accessReferenceFields.indexed) {
+      final referenced = graph.entities.singleWhere(
+        (entity) => entity.className == field.reference!.targetClassName,
+      );
+      final referenceAlias = _sqlAlias('${aliasPrefix}_reference_${index + 1}');
+      candidates.addAll(
+        _entityAudienceCandidates(
+          graph,
+          referenced,
+          entityId:
+              '(select $referenceAlias.${field.columnName} from '
+              'public.${target.tableName} $referenceAlias where '
+              '$referenceAlias.${target.idField.columnName} = $entityId)',
+          aliasPrefix: referenceAlias,
+          followReferences: true,
+        ),
+      );
+    }
   }
 
   var pathIndex = 0;
@@ -754,6 +866,7 @@ List<String> _entityAudienceCandidates(
             relationship,
             entityId: '$relationshipAlias.${relationship.idField.columnName}',
             aliasPrefix: _sqlAlias('${relationshipAlias}_composition'),
+            followReferences: followReferences,
           );
           for (final upstream in upstreamCandidates) {
             candidates.add(
@@ -777,6 +890,7 @@ List<String> _entityAudienceCandidates(
             aliasPrefix: _sqlAlias(
               '${relationshipAlias}_source_${sourceIndex + 1}',
             ),
+            followReferences: followReferences,
           );
           for (final upstream in upstreamCandidates) {
             candidates.add(

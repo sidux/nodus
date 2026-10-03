@@ -2573,6 +2573,15 @@ The architecture MUST make common costs explicit and bounded:
   revoked access: that user can no longer read the affected rows, so each
   user may read the change-log rows addressed to them and the adapter
   listens to those as well as to the entity tables;
+- a target's adapter signals a catch-up pull whenever its realtime
+  subscription becomes live, after joining or rejoining, because changes
+  committed while it connected never arrive as events;
+- a change's recipients are decided once, when it is recorded: its owner and
+  every enumerable account that may read the entity at that moment. A pull
+  reads only the changes addressed to its caller, by index, so a first sync
+  or an incremental pull costs what the caller may see, never the size of
+  other accounts' history. Access gained later arrives as its own addressed
+  snapshot, and entities every account may read are pulled by type instead;
 - a pulled page is applied with composition components before the
   aggregates that hold them, keeping each entity type's order. Gaining
   access can make an older aggregate change visible ahead of the component

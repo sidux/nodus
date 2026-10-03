@@ -2715,7 +2715,28 @@ void _emitSyncInfrastructure(
       )
       ..writeln('  end if;')
       ..writeln('end;')
-      ..writeln('\$\$;');
+      ..writeln('\$\$;')
+      ..writeln()
+      // Who may pull each change is decided once, when it is recorded, so a
+      // pull reads only the rows addressed to its caller instead of judging
+      // every account's history.
+      ..writeln(
+        'create table if not exists public.local_entity_change_recipients (',
+      )
+      ..writeln(
+        '  user_id uuid not null references auth.users (id) on delete cascade,',
+      )
+      ..writeln('  sequence bigint not null,')
+      ..writeln('  primary key (user_id, sequence)')
+      ..writeln(');')
+      ..writeln(
+        'alter table public.local_entity_change_recipients '
+        'enable row level security;',
+      )
+      ..writeln(
+        'revoke all on public.local_entity_change_recipients '
+        'from anon, authenticated;',
+      );
   }
   buffer
     ..writeln()

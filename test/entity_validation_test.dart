@@ -5,6 +5,7 @@ import 'package:build_test/build_test.dart';
 import 'package:nodus/builder.dart';
 import 'package:test/test.dart';
 
+import 'support/change_recipients.dart';
 import 'support/test_package_config.dart';
 
 void main() {
@@ -1565,7 +1566,13 @@ final class Account {}
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains('create table if not exists public.progresses'),
-              contains("when 'Progress' then (changes.owner_id = auth.uid())"),
+              predicate<String>(
+                (sql) => changeRecipientsCase(
+                  sql,
+                  'Progress',
+                ).contains('return query select p_owner_id;'),
+                'addresses progress to its owner',
+              ),
               isNot(contains('push_progresses_operations')),
               isNot(contains('upcast_progresses_operation')),
             ]),
@@ -3397,8 +3404,16 @@ abstract class Project implements OwnedBy<Project, Account> {}
               'public.projects target where target.id = entity.project_id)',
             ),
             contains('project_dependencies_select_reference'),
-            contains(
-              'public.is_project_dependencies_reference(changes.entity_id)',
+            predicate<String>(
+              (sql) =>
+                  changeRecipientsCase(sql, 'ProjectDependency').contains(
+                    'user_id as user_id from public.project_members',
+                  ) &&
+                  changeRecipientsCase(
+                    sql,
+                    'ProjectDependency',
+                  ).contains('exists (select 1 from public.projects'),
+              'addresses dependencies to the referenced projects’ members',
             ),
             contains(
               "(current_operation -> 'patch' ->> 'ownerId')::uuid = "
@@ -3826,7 +3841,13 @@ abstract class TaskEvent implements OwnedBy<TaskEvent, Account> {
             contains('tasks_select_relationship'),
             contains('tasks_update_relationship'),
             contains('tasks_delete_relationship'),
-            contains('public.is_tasks_relationship_select(changes.entity_id)'),
+            predicate<String>(
+              (sql) => changeRecipientsCase(
+                sql,
+                'Task',
+              ).contains('target_row.id = p_entity_id'),
+              'addresses tasks to relationship audiences',
+            ),
             contains(
               'public.is_tasks_relationship_select(task_events.task_id)',
             ),
@@ -4435,9 +4456,17 @@ abstract class Habit implements OwnedBy<Habit, Account> {}
                 '(public.is_goals_owner(entity.goal_id)) or '
                 '(public.is_habits_owner(entity.habit_id))',
               ),
-              contains(
-                "when 'Review' then (changes.owner_id = auth.uid() or "
-                'public.is_reviews_reference(changes.entity_id))',
+              predicate<String>(
+                (sql) =>
+                    changeRecipientsCase(
+                      sql,
+                      'Review',
+                    ).contains('owner_id as user_id from public.goals') &&
+                    changeRecipientsCase(
+                      sql,
+                      'Review',
+                    ).contains('owner_id as user_id from public.habits'),
+                'addresses reviews to either referenced owner',
               ),
             ]),
           ),
@@ -6903,8 +6932,12 @@ abstract class TaskActivity
             contains(
               "source_receipt.operation_id = (current_operation -> 'patch' ->> 'sourceOperationId')::uuid",
             ),
-            contains(
-              "when 'TaskActivity' then (exists (select 1 from public.task_activities activity",
+            predicate<String>(
+              (sql) => changeRecipientsCase(sql, 'TaskActivity').contains(
+                'where target_row.id = (select activity.subject_id from '
+                'public.task_activities activity',
+              ),
+              'addresses activity to whoever may read its task',
             ),
           ]),
         ),
@@ -7924,9 +7957,12 @@ abstract class TaskAttachment
                 'tasks_update_collaborator on public.tasks for update to '
                 'authenticated using (public.is_tasks_collaborator(tasks.id))',
               ),
-              contains(
-                "when 'Task' then (changes.owner_id = auth.uid() or "
-                'public.is_tasks_viewer(changes.entity_id))',
+              predicate<String>(
+                (sql) => changeRecipientsCase(
+                  sql,
+                  'Task',
+                ).contains("member.status in ('accepted', 'pending')"),
+                'addresses task changes to pending invitees too',
               ),
               contains("was_visible := old.status in ('accepted', 'pending')"),
               contains(

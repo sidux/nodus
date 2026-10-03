@@ -92,6 +92,24 @@ create index if not exists local_entity_changes_type_sequence_idx on public.loca
 create index if not exists local_entity_changes_identity_idx on public.local_entity_changes (entity_type, entity_id, audience_user_id, sequence);
 alter table public.local_entity_changes enable row level security;
 revoke all on public.local_entity_changes from anon, authenticated;
+grant select on public.local_entity_changes to authenticated;
+drop policy if exists local_entity_changes_select_audience on public.local_entity_changes;
+create policy local_entity_changes_select_audience on public.local_entity_changes for select to authenticated using (audience_user_id = (select auth.uid()));
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') and not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'local_entity_changes') then
+    alter publication supabase_realtime add table public.local_entity_changes;
+  end if;
+end;
+$$;
+
+create table if not exists public.local_entity_change_recipients (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  sequence bigint not null,
+  primary key (user_id, sequence)
+);
+alter table public.local_entity_change_recipients enable row level security;
+revoke all on public.local_entity_change_recipients from anon, authenticated;
 
 create or replace function public.capture_task_projects_change()
 returns trigger
@@ -2135,7 +2153,94 @@ revoke all on function public.upcast_task_activities_operation(jsonb) from publi
 revoke all on function public.push_task_activities_operations(jsonb) from public, anon, authenticated, service_role;
 grant execute on function public.push_task_activities_operations(jsonb) to authenticated;
 
--- One globally ordered pull contract for this synchronization target.
+-- Who may pull each change, decided once when it is recorded. Access granted
+-- later arrives as its own addressed snapshot, so a change's recipients are
+-- exactly the accounts that may read the entity at that moment.
+
+create or replace function public.tasks_example_change_recipients(
+  p_entity_type text,
+  p_entity_id uuid,
+  p_owner_id uuid
+) returns table (user_id uuid)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  case p_entity_type
+    when 'Task' then
+      return query
+      select distinct candidate.user_id
+      from (select p_owner_id as user_id
+        union select recipient_tasks_tasks.owner_id as user_id from public.tasks recipient_tasks_tasks where recipient_tasks_tasks.id = p_entity_id
+        union select recipient_tasks_member.user_id as user_id from public.task_members recipient_tasks_member where recipient_tasks_member.task_id = p_entity_id and recipient_tasks_member.active) candidate
+      where candidate.user_id = p_owner_id
+        or exists (
+          select 1 from public.tasks target_row
+          where target_row.id = p_entity_id
+            and (target_row.owner_id = candidate.user_id or exists (select 1 from public.task_members member where member.task_id = target_row.id and member.user_id = candidate.user_id and member.active))
+        );
+    when 'TaskActivity' then
+      return query
+      select distinct candidate.user_id
+      from (select p_owner_id as user_id
+        union select recipient_task_activities_tasks.owner_id as user_id from public.tasks recipient_task_activities_tasks where recipient_task_activities_tasks.id = (select activity.subject_id from public.task_activities activity where activity.id = p_entity_id)
+        union select recipient_task_activities_member.user_id as user_id from public.task_members recipient_task_activities_member where recipient_task_activities_member.task_id = (select activity.subject_id from public.task_activities activity where activity.id = p_entity_id) and recipient_task_activities_member.active) candidate
+      where candidate.user_id = p_owner_id
+        or exists (
+          select 1 from public.tasks target_row
+          where target_row.id = (select activity.subject_id from public.task_activities activity where activity.id = p_entity_id)
+            and (target_row.owner_id = candidate.user_id or exists (select 1 from public.task_members member where member.task_id = target_row.id and member.user_id = candidate.user_id and member.active))
+        );
+    when 'TaskProject' then
+      return query select p_owner_id;
+    else
+      return;
+  end case;
+end;
+$$;
+
+revoke all on function public.tasks_example_change_recipients(text, uuid, uuid) from public, anon, authenticated, service_role;
+
+create or replace function public.address_tasks_example_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  -- Accounts removed in the same transaction have nothing left to pull, and
+  -- must not make the change itself fail.
+  if new.audience_user_id is not null then
+    insert into public.local_entity_change_recipients (user_id, sequence)
+    select account.id, new.sequence
+    from auth.users account
+    where account.id = new.audience_user_id
+    on conflict do nothing;
+  else
+    insert into public.local_entity_change_recipients (user_id, sequence)
+    select distinct account.id, new.sequence
+    from public.tasks_example_change_recipients(
+      new.entity_type,
+      new.entity_id,
+      new.owner_id
+    ) recipient
+    join auth.users account on account.id = recipient.user_id
+    on conflict do nothing;
+  end if;
+  return null;
+end;
+$$;
+
+revoke all on function public.address_tasks_example_change() from public, anon, authenticated, service_role;
+drop trigger if exists local_entity_changes_address_tasks_example on public.local_entity_changes;
+create trigger local_entity_changes_address_tasks_example
+after insert on public.local_entity_changes
+for each row execute function public.address_tasks_example_change();
+
+-- One globally ordered pull contract for this synchronization target. It reads
+-- only the changes addressed to the caller, by index, in sequence order.
 
 create or replace function public.pull_tasks_example_graph_changes(p_after_sequence bigint)
 returns jsonb
@@ -2170,22 +2275,13 @@ begin
       changes.operation_id,
       (changes.is_revocation and changes.audience_user_id = auth.uid())
         as is_revocation
-    from public.local_entity_changes changes
-    where changes.sequence > p_after_sequence
-      and (
-        (
-          changes.audience_user_id is null
-          and case changes.entity_type
-      when 'Task' then (changes.owner_id = auth.uid() or public.is_tasks_collaborator(changes.entity_id))
-      when 'TaskActivity' then (exists (select 1 from public.task_activities activity where activity.id = changes.entity_id and (public.is_tasks_owner(activity.subject_id) or public.is_tasks_collaborator(activity.subject_id))))
-      when 'TaskProject' then (changes.owner_id = auth.uid())
-            else false
-          end
-        )
-        or changes.audience_user_id = auth.uid()
-      )
-    order by changes.sequence
-    limit 500
+    from (
+      select recipient.sequence from public.local_entity_change_recipients recipient where recipient.user_id = auth.uid() and recipient.sequence > p_after_sequence
+      order by 1
+      limit 500
+    ) addressed
+    join public.local_entity_changes changes
+      on changes.sequence = addressed.sequence
   ) visible;
   page_count := jsonb_array_length(page);
   if page_count = 500 then

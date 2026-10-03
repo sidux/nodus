@@ -1,7 +1,7 @@
 {
   "graph": "TasksExample",
   "package": "tasks_example",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "targets": [
     "supabase"
   ],

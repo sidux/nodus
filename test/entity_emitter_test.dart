@@ -6,6 +6,7 @@ import 'package:nodus/src/entity_generator/graph_emitter.dart';
 import 'package:nodus/src/entity_generator/graph_sql_emitter.dart';
 import 'package:nodus/src/entity_generator/model.dart';
 import 'package:nodus/src/entity_generator/sql_emitter.dart';
+import 'support/change_recipients.dart';
 
 void main() {
   test('unordered generated lookup keys have symmetric value identity', () {
@@ -887,8 +888,16 @@ void main() {
         'public.local_entity_changes;',
       ),
     );
-    expect(sql, contains('changes.audience_user_id is null'));
-    expect(sql, contains('or changes.audience_user_id = auth.uid()'));
+    expect(
+      sql,
+      contains(
+        'from public.local_entity_change_recipients recipient where '
+        'recipient.user_id = auth.uid() and recipient.sequence > '
+        'p_after_sequence',
+      ),
+      reason: 'a pull reads only changes addressed to its caller',
+    );
+    expect(sql, contains('where account.id = new.audience_user_id'));
     expect(
       sql,
       contains(
@@ -1112,27 +1121,36 @@ void main() {
         '((select auth.uid()) is not null);',
       ),
     );
-    expect(
-      graphSql(cardinality: Cardinality.unbounded),
-      contains("when 'WorkItem' then (changes.owner_id = auth.uid())"),
+    Matcher addressedToOwner() => predicate<String>(
+      (sql) =>
+          changeRecipientsCase(
+            sql,
+            'WorkItem',
+          ).contains('return query select p_owner_id;') &&
+          !sql.contains("broadcast.entity_type in ('WorkItem')"),
+      'addresses changes to their owner only',
     );
-    expect(
-      graphSql(cardinality: Cardinality.bounded),
-      contains("when 'WorkItem' then (true)"),
+    Matcher broadcast() => predicate<String>(
+      (sql) =>
+          changeRecipientsCase(sql, 'WorkItem').isEmpty &&
+          sql.contains("broadcast.entity_type in ('WorkItem')"),
+      'pulls changes for every account',
     );
+    expect(graphSql(cardinality: Cardinality.unbounded), addressedToOwner());
+    expect(graphSql(cardinality: Cardinality.bounded), broadcast());
     expect(
       graphSql(
         cardinality: Cardinality.unbounded,
         sync: AuthenticatedReadSync.graph,
       ),
-      contains("when 'WorkItem' then (true)"),
+      broadcast(),
     );
     expect(
       graphSql(
         cardinality: Cardinality.bounded,
         sync: AuthenticatedReadSync.onDemand,
       ),
-      contains("when 'WorkItem' then (changes.owner_id = auth.uid())"),
+      addressedToOwner(),
     );
   });
 
@@ -1446,11 +1464,13 @@ void main() {
         'public.is_invitations_participant(p_id))',
       ),
     );
+    final recipients = changeRecipientsCase(graphSql, 'Invitation');
+    expect(recipients, contains('invitee_id as user_id'));
     expect(
-      graphSql,
+      recipients,
       contains(
-        "when 'Invitation' then (changes.owner_id = auth.uid() or "
-        'public.is_invitations_participant(changes.entity_id))',
+        'target_row.owner_id = candidate.user_id or '
+        'target_row.invitee_id = candidate.user_id',
       ),
     );
   });
