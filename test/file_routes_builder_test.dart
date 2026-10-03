@@ -105,10 +105,6 @@ final class RuleDetailsPage extends Widget {
                 contains("state.uri.queryParameters['include-archived']"),
                 contains('FileRouteScope.read<Dependencies>(context)'),
                 contains('_buildFileRouteLayout0'),
-                contains(
-                  'pageBuilder: (context, state, child) => '
-                  'NoTransitionPage<void>(',
-                ),
                 contains('_buildFileRouteLayout1'),
                 contains('_buildFileRouteGuard0'),
                 contains('_matchFileRoute(state)'),
@@ -408,9 +404,7 @@ Widget notFoundPage(Object error) => Widget();
                 allOf([
                   contains('return route1.homePage(key: state.pageKey);'),
                   contains('configuration.defaultPageBuilder == null'),
-                  contains(
-                    'NoTransitionPage<void>(key: state.pageKey, child: child)',
-                  ),
+                  contains('builder: (context, state, child) => child,'),
                   contains('FileRouteMatch.page(route1.homePage)'),
                   contains('identical(redirect.target, route1.homePage)'),
                   isNot(contains('route1.homePage.new')),

@@ -463,25 +463,12 @@ void _emitScopeShell(
   required String indent,
 }) {
   buffer.writeln('${indent}ShellRoute(');
-  // A shell is a persistent frame: its pages animate, the frame does not.
-  // An animated frame page would still be leaving while a quick return to
-  // the shell built its replacement, and both would hold the shell
-  // navigator's global key at once.
   if (node.layout case final layout?) {
     buffer.writeln(
-      '$indent  pageBuilder: (context, state, child) => NoTransitionPage<void>(',
+      '$indent  builder: _buildFileRouteLayout${router.layouts.indexOf(layout)},',
     );
-    buffer.writeln('$indent    key: state.pageKey,');
-    buffer.writeln(
-      '$indent    child: _buildFileRouteLayout${router.layouts.indexOf(layout)}('
-      'context, state, child),',
-    );
-    buffer.writeln('$indent  ),');
   } else {
-    buffer.writeln('$indent  pageBuilder: (context, state, child) =>');
-    buffer.writeln(
-      '$indent      NoTransitionPage<void>(key: state.pageKey, child: child),',
-    );
+    buffer.writeln('$indent  builder: (context, state, child) => child,');
   }
   if (node.guard case final guard?) {
     buffer.writeln(
