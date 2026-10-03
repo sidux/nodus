@@ -4953,6 +4953,7 @@ final class LocalEntityGraphCoordinator
       }
     });
     await refreshSyncWork();
+    if (autoSync) _requestSync();
   }
 
   Future<void> _schedulePullTarget(SyncTargetId target) async {
@@ -4970,7 +4971,17 @@ final class LocalEntityGraphCoordinator
           variables: [Variable.withString(target.wireName)],
         )
         .getSingleOrNull();
-    if (existing != null) return;
+    if (existing != null) {
+      // A requested pull is due now even while an earlier one backs off from
+      // transport failures: a conflict or remote signal shows the server
+      // answers, and a conflicting push must rebase before it retries.
+      await database.customStatement(
+        "update local_entity_sync_work set next_attempt_at = null "
+        "where id = ? and status = 'retryableFailure'",
+        [existing.read<int>('id')],
+      );
+      return;
+    }
     await database.customStatement(
       'insert into local_entity_sync_work '
       '(sync_target, direction, kind, status, entity_type, entity_id, operation_id, '

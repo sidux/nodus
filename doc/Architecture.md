@@ -2553,7 +2553,10 @@ The architecture MUST make common costs explicit and bounded:
   terminally rejected or conflicted work leaves the line;
 - the conflict retry budget counts consecutive version conflicts only;
   transport failures while offline do not spend it, so the first conflict
-  after reconnecting still rebases and retries;
+  after reconnecting still rebases and retries. A conflict, an explicit pull
+  request, or a remote signal makes pending pull work due at once, even
+  while it backs off from earlier transport failures, so the conflicting
+  push rebases before it retries;
 - generated SQL raises deterministic conflicts (stale versions, changed
   memberships or scopes) with the PostgREST status code `PT409`, never the
   `40001` serialization failure that PostgREST retries without bound;
