@@ -2577,6 +2577,10 @@ The architecture MUST make common costs explicit and bounded:
   revoked access: that user can no longer read the affected rows, so each
   user may read the change-log rows addressed to them and the adapter
   listens to those as well as to the entity tables;
+- a target's adapter sends requests only while its own account is signed in
+  on the transport; otherwise they fail as retryable, so an account's pending
+  work is never judged, and finally rejected, under another identity or none
+  during sign-out or an account switch;
 - a target's adapter signals a catch-up pull whenever its realtime
   subscription becomes live, after joining or rejoining, because changes
   committed while it connected never arrive as events;

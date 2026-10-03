@@ -162,6 +162,66 @@ void main() {
     }
   });
 
+  test('work for an account that is not signed in waits instead of being '
+      'judged under another identity', () async {
+    var requests = 0;
+    final client = SupabaseClient(
+      'https://example.invalid',
+      'test-anon-key',
+      httpClient: MockClient((request) async {
+        requests++;
+        return http.Response('{}', 500, request: request);
+      }),
+    );
+    final backend = SupabaseSyncBackend.graph(
+      client: client,
+      definition: _testGraphDefinition(),
+      accountId: 'a0000000-0000-7000-8000-0000000000aa',
+    );
+    addTearDown(() async {
+      await backend.disposeRemoteChangeSignals();
+      await client.dispose();
+    });
+    final waits = isA<RetryableSyncException>().having(
+      (error) => error.code,
+      'code',
+      'account_not_signed_in',
+    );
+
+    await expectLater(backend.push(_createWork()), throwsA(waits));
+    await expectLater(
+      backend.pull(afterSequence: ServerSequence.zero),
+      throwsA(waits),
+    );
+    expect(requests, 0, reason: 'nothing is sent without the account');
+  });
+
+  test('a session that ends mid-request leaves the work to retry, while a '
+      'refusal of the work itself stays final', () async {
+    final signedOut = _errorFixture(
+      '42501',
+      message: 'permission denied for function push_test_operations',
+    );
+    addTearDown(signedOut.dispose);
+    await expectLater(
+      signedOut.backend.push(_createWork()),
+      throwsA(isA<RetryableSyncException>()),
+    );
+
+    final refused = _errorFixture('42501', message: 'Entity access denied');
+    addTearDown(refused.dispose);
+    await expectLater(
+      refused.backend.push(_createWork()),
+      throwsA(
+        isA<RejectedSyncException>().having(
+          (error) => error.category,
+          'category',
+          SyncRejectionCategory.authorization,
+        ),
+      ),
+    );
+  });
+
   test('a version conflict arrives as a PostgREST status code, never as a '
       'serialization failure PostgREST would retry', () async {
     final fixture = _errorFixture('PT409');
@@ -396,12 +456,15 @@ _SupabaseFixture _pushFixture({
   },
 ]);
 
-_SupabaseFixture _errorFixture(String code) {
+_SupabaseFixture _errorFixture(
+  String code, {
+  String message = 'constraint rejected',
+}) {
   final httpClient = MockClient(
     (request) async => http.Response(
       jsonEncode({
         'code': code,
-        'message': 'constraint rejected',
+        'message': message,
         'details': null,
         'hint': null,
       }),

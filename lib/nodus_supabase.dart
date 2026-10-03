@@ -279,13 +279,19 @@ final class SupabaseSyncBackend
          requestTimeout: requestTimeout,
        );
 
+  /// [accountId] names the account whose graph this backend serves. While
+  /// another account, or nobody, is signed in on [client], requests are not
+  /// sent and fail as retryable, so the server never judges that account's
+  /// pending work under someone else's identity and rejects it for good.
   SupabaseSyncBackend.graph({
     required SupabaseClient client,
     required EntityGraphDefinition definition,
+    String? accountId,
     Duration requestTimeout = defaultRequestTimeout,
   }) : this._definition(
          client: client,
          definition: definition,
+         accountId: accountId,
          requestTimeout: requestTimeout,
        );
 
@@ -293,7 +299,9 @@ final class SupabaseSyncBackend
     required SupabaseClient client,
     required this.definition,
     required this.requestTimeout,
+    String? accountId,
   }) : _client = client,
+       _accountId = accountId,
        _descriptors = Map.unmodifiable({
          for (final descriptor in definition.descriptors)
            descriptor.entityType: descriptor,
@@ -316,6 +324,7 @@ final class SupabaseSyncBackend
   static const defaultRequestTimeout = Duration(seconds: 30);
 
   final SupabaseClient _client;
+  final String? _accountId;
   @override
   final EntityGraphDefinition definition;
   final Duration requestTimeout;
@@ -330,6 +339,7 @@ final class SupabaseSyncBackend
 
   @override
   Future<PushResult> push(PushSyncWorkItem item) async {
+    _requireAccountSession();
     try {
       final descriptor = _descriptorFor(item.operation.identity.entityType);
       item = item.upcast(descriptor);
@@ -427,6 +437,7 @@ final class SupabaseSyncBackend
 
   @override
   Future<PullResult> pull({required ServerSequence afterSequence}) async {
+    _requireAccountSession();
     try {
       final response = await _bounded(
         _client.rpc(
@@ -496,6 +507,7 @@ final class SupabaseSyncBackend
   Future<RemoteEntitySnapshot?> fetchSnapshot(
     EntityIdentity<dynamic> identity,
   ) async {
+    _requireAccountSession();
     try {
       final descriptor = _descriptorFor(identity.entityType);
       final response = await _bounded(
@@ -531,6 +543,19 @@ final class SupabaseSyncBackend
         message: error.message?.toString() ?? error.toString(),
       );
     }
+  }
+
+  void _requireAccountSession() {
+    final accountId = _accountId;
+    if (accountId == null) return;
+    final signedIn = _client.auth.currentUser?.id;
+    if (signedIn == accountId) return;
+    throw RetryableSyncException(
+      code: 'account_not_signed_in',
+      message: signedIn == null
+          ? 'The account is signed out; its work waits for it to sign in.'
+          : 'Another account is signed in; this account\'s work waits.',
+    );
   }
 
   Future<T> _bounded<T>(Future<T> request) => request.timeout(
@@ -654,6 +679,13 @@ final class SupabaseSyncBackend
       // A deterministic conflict uses a PostgREST status code: PostgREST
       // retries `40001` serialization failures itself, indefinitely.
       'PT409' => VersionConflictException(error.message),
+      // Missing EXECUTE means the request went out without the account's
+      // session, which ended mid-request; that is not a verdict on the work.
+      '42501' when error.message.startsWith('permission denied for function') =>
+        RetryableSyncException(
+          code: 'account_not_signed_in',
+          message: error.message,
+        ),
       '42501' => RejectedSyncException.authorization(
         code: 'authorization_denied',
         message: error.message,

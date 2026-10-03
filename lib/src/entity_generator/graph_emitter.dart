@@ -2745,6 +2745,7 @@ void _emitEntityGraphRuntime(
       ..writeln('      supabase: (context) => SupabaseSyncBackend.graph(')
       ..writeln('        client: client,')
       ..writeln('        definition: context.definition,')
+      ..writeln('        accountId: context.accountId,')
       ..writeln('      ),')
       ..writeln('      localStore: localStore,')
       ..writeln('      migrationOverride: migrationOverride,')

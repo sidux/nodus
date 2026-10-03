@@ -322,6 +322,7 @@ final class TasksExampleEntityGraph {
       supabase: (context) => SupabaseSyncBackend.graph(
         client: client,
         definition: context.definition,
+        accountId: context.accountId,
       ),
       localStore: localStore,
       migrationOverride: migrationOverride,
