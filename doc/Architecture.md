@@ -2547,6 +2547,13 @@ The architecture MUST make common costs explicit and bounded:
 - every remote request a sync adapter issues is bounded by a transport
   timeout that surfaces as a retryable failure, so an unanswered request
   cannot hold its lane; idempotent operation IDs make the retry safe;
+- a target's push work is delivered in enqueue order, which is causal order:
+  earlier work waiting out a retry holds later work for that target, so an
+  operation never reaches the server before an entity it references. Only
+  terminally rejected or conflicted work leaves the line;
+- the conflict retry budget counts consecutive version conflicts only;
+  transport failures while offline do not spend it, so the first conflict
+  after reconnecting still rebases and retries;
 - generated SQL raises deterministic conflicts (stale versions, changed
   memberships or scopes) with the PostgREST status code `PT409`, never the
   `40001` serialization failure that PostgREST retries without bound;

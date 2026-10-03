@@ -3322,7 +3322,8 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         return const SyncFailureOutcome(continueDraining: true);
       }
       if (typed.kind == SyncFailureKind.conflict) {
-        if (nextAttemptCount >= 3) {
+        final conflictAttempt = _syncConflictAttempt(item, typed);
+        if (conflictAttempt >= _maxSyncConflictAttempts) {
           await _storeTerminalFailure(
             item,
             status: SyncWorkStatus.conflict,
@@ -3334,7 +3335,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           "update local_entity_sync_work set status = 'retryableFailure', "
           "attempt_count = ?, lease_until = null, next_attempt_at = null, "
           "last_error_code = ?, last_error_detail = ? where id = ?",
-          [nextAttemptCount, typed.code, typed.message, item.id],
+          [conflictAttempt, typed.code, typed.message, item.id],
         );
         if (item.direction == SyncDirection.push) {
           await graphCoordinator._schedulePullInCurrentTransaction(item.target);
@@ -4372,24 +4373,50 @@ final class LocalEntityGraphCoordinator
 
   @override
   Future<SyncWorkItem?> claimNext(SyncTargetId target) async {
+    DateTime? headDueAt;
     final item = await database.transaction(() async {
       final now = clock.nowUtc();
-      final row = await database
-          .customSelect(
-            "select * from local_entity_sync_work where "
-            "sync_target = ? and "
-            "((status in ('pending', 'retryableFailure') "
-            "and (next_attempt_at is null or next_attempt_at <= ?)) "
-            "or (status = 'processing' "
-            "and (lease_until is null or lease_until <= ?))) "
-            "order by case when direction = 'pull' then 0 else 1 end, id limit 1",
-            variables: [
-              Variable.withString(target.wireName),
-              Variable.withInt(now.millisecondsSinceEpoch),
-              Variable.withInt(now.millisecondsSinceEpoch),
-            ],
-          )
-          .getSingleOrNull();
+      final row =
+          await database
+              .customSelect(
+                "select * from local_entity_sync_work where "
+                "sync_target = ? and direction = 'pull' and "
+                "((status in ('pending', 'retryableFailure') "
+                "and (next_attempt_at is null or next_attempt_at <= ?)) "
+                "or (status = 'processing' "
+                "and (lease_until is null or lease_until <= ?))) "
+                "order by id limit 1",
+                variables: [
+                  Variable.withString(target.wireName),
+                  Variable.withInt(now.millisecondsSinceEpoch),
+                  Variable.withInt(now.millisecondsSinceEpoch),
+                ],
+              )
+              .getSingleOrNull() ??
+          // Pushes leave in enqueue order, which is causal order: a later
+          // operation can reference an entity an earlier one creates, so
+          // earlier work waiting out a retry holds the rest of its target.
+          await database
+              .customSelect(
+                "select * from local_entity_sync_work where "
+                "sync_target = ? and direction = 'push' and "
+                "status in ('pending', 'retryableFailure', 'processing') "
+                "order by id limit 1",
+                variables: [Variable.withString(target.wireName)],
+              )
+              .getSingleOrNull()
+              .then((head) {
+                if (head == null) return null;
+                final waitUntil = head.read<String>('status') == 'processing'
+                    ? head.readNullable<int>('lease_until')
+                    : head.readNullable<int>('next_attempt_at');
+                if (_expired(waitUntil, now)) return head;
+                headDueAt = DateTime.fromMillisecondsSinceEpoch(
+                  waitUntil!,
+                  isUtc: true,
+                );
+                return null;
+              });
       if (row == null) return null;
       var item = _syncWorkItemFromRow(
         row,
@@ -4426,6 +4453,9 @@ final class LocalEntityGraphCoordinator
       );
       return item;
     });
+    // Wake when the waiting head is due; this also covers a restarted graph,
+    // whose retry timers are gone. Timers start outside the transaction zone.
+    if (headDueAt case final dueAt?) _scheduleSyncWake(target, dueAt);
     await refreshSyncWork();
     return item;
   }
@@ -5251,7 +5281,9 @@ final class LocalEntityGraphCoordinator
     final attemptCount = item.attemptCount + 1;
     final resultingStatus = switch (failure.kind) {
       SyncFailureKind.rejected => SyncWorkStatus.rejected,
-      SyncFailureKind.conflict when attemptCount >= 3 =>
+      SyncFailureKind.conflict
+          when _syncConflictAttempt(item, failure) >=
+              _maxSyncConflictAttempts =>
         SyncWorkStatus.conflict,
       SyncFailureKind.retryable ||
       SyncFailureKind.conflict => SyncWorkStatus.retryableFailure,
@@ -5289,9 +5321,12 @@ final class LocalEntityGraphCoordinator
             code: 'unexpected_error',
             message: error.toString(),
           );
-    final attemptCount = item.attemptCount + 1;
+    final attemptCount = failure.kind == SyncFailureKind.conflict
+        ? _syncConflictAttempt(item, failure)
+        : item.attemptCount + 1;
     if (failure.kind == SyncFailureKind.rejected ||
-        (failure.kind == SyncFailureKind.conflict && attemptCount >= 3)) {
+        (failure.kind == SyncFailureKind.conflict &&
+            attemptCount >= _maxSyncConflictAttempts)) {
       final status = failure.kind == SyncFailureKind.conflict
           ? SyncWorkStatus.conflict
           : SyncWorkStatus.rejected;
@@ -6017,6 +6052,18 @@ String _requiredWorkText(QueryRow row, String column) {
   }
   return value;
 }
+
+const _maxSyncConflictAttempts = 3;
+
+bool _expired(int? epochMilliseconds, DateTime now) =>
+    epochMilliseconds == null ||
+    epochMilliseconds <= now.millisecondsSinceEpoch;
+
+/// The attempt number within the current run of conflicts. Transport failures
+/// while offline do not spend the conflict budget: the first conflict after
+/// reconnecting still gets a rebase and retry.
+int _syncConflictAttempt(SyncWorkItem item, SyncBackendException failure) =>
+    item.lastFailure?.code == failure.code ? item.attemptCount + 1 : 1;
 
 Duration _syncRetryDelay(int workId, int attemptCount) {
   final exponent = math.min(attemptCount - 1, 8);
