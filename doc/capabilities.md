@@ -252,6 +252,7 @@ generated accessors resolve that missing target to `null`.
 | `@AccessTarget()` | Extend a finite relationship audience to an existing target |
 | `CollaborationAccess()` | Direct owner-controlled collaborator membership |
 | `CollaborationAccess.workflow()` | Invitation/acceptance workflow modeled as a normal membership entity |
+| `CollaborationAccess.workflow(editPermissionField:)` | Same workflow where a membership bool separates editors from read-only members |
 
 Nodus derives the supporting indexes, RLS predicates, push authorization, pull
 visibility, audience snapshots, and revocations. Invalid nullable access paths,

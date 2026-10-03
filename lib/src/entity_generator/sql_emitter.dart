@@ -320,6 +320,19 @@ void _emitCollaborationTable(StringBuffer buffer, EntitySpec spec) {
           'from $supabaseApiRoles;',
         );
     }
+    if (collaboration?.separatesEditors ?? false) {
+      buffer
+        ..writeln(
+          'create or replace function public.is_${spec.tableName}_editor('
+          'p_id uuid)',
+        )
+        ..writeln('returns boolean language sql immutable security definer')
+        ..writeln("set search_path = '' as \$\$ select false; \$\$;")
+        ..writeln(
+          'revoke all on function public.is_${spec.tableName}_editor(uuid) '
+          'from $supabaseApiRoles;',
+        );
+    }
     _emitParticipantFunction(buffer, spec);
     return;
   }
@@ -476,9 +489,40 @@ void _emitParticipantFunction(StringBuffer buffer, EntitySpec spec) {
 
 void _emitAccessReferenceFunction(StringBuffer buffer, EntitySpec spec) {
   if (spec.accessReferenceFields.isEmpty) return;
+  _emitAccessReferenceFunctionNamed(
+    buffer,
+    spec,
+    name: 'is_${spec.tableName}_reference',
+    write: false,
+  );
+  if (_separatesReferenceWrites(spec)) {
+    _emitAccessReferenceFunctionNamed(
+      buffer,
+      spec,
+      name: 'is_${spec.tableName}_reference_write',
+      write: true,
+    );
+  }
+}
+
+/// Whether a referenced target grants writes to fewer collaborators than it
+/// grants reads, so reference-derived writes need their own predicate.
+bool _separatesReferenceWrites(EntitySpec spec) =>
+    spec.accessReferenceFields.any(
+      (field) =>
+          field.reference!.targetCollaboration?.separatesEditors ?? false,
+    );
+
+void _emitAccessReferenceFunctionNamed(
+  StringBuffer buffer,
+  EntitySpec spec, {
+  required String name,
+  required bool write,
+}) {
   final access = _accessReferenceExpression(
     spec,
     idFor: (field) => 'entity.${field.columnName}',
+    write: write,
   );
   final ownership = _ownershipReferenceExpression(
     spec,
@@ -488,10 +532,7 @@ void _emitAccessReferenceFunction(StringBuffer buffer, EntitySpec spec) {
   final predicate = ownership == null ? access : '($access) and ($ownership)';
   buffer
     ..writeln()
-    ..writeln(
-      'create or replace function public.is_${spec.tableName}_reference('
-      'p_id uuid)',
-    )
+    ..writeln('create or replace function public.$name(p_id uuid)')
     ..writeln('returns boolean language sql stable security definer')
     ..writeln("set search_path = '' as \$\$")
     ..writeln(
@@ -500,13 +541,9 @@ void _emitAccessReferenceFunction(StringBuffer buffer, EntitySpec spec) {
     )
     ..writeln('\$\$;')
     ..writeln(
-      'revoke all on function public.is_${spec.tableName}_reference(uuid) '
-      'from $supabaseApiRoles;',
+      'revoke all on function public.$name(uuid) from $supabaseApiRoles;',
     )
-    ..writeln(
-      'grant execute on function public.is_${spec.tableName}_reference(uuid) '
-      'to authenticated;',
-    );
+    ..writeln('grant execute on function public.$name(uuid) to authenticated;');
 }
 
 void _emitRls(
@@ -701,7 +738,10 @@ String _principalExpression(
               (spec.security.collaboration?.hasAdditionalReadableStates ??
                   false)
           ? _collaborationViewerExpression(spec)
-          : _collaborationExpression(spec),
+          : _collaborationExpression(
+              spec,
+              write: operation != RlsOperation.select,
+            ),
     RlsPrincipal.reference =>
       operation == RlsOperation.insert
           ? _referenceInsertExpression(
@@ -711,6 +751,7 @@ String _principalExpression(
           : _accessReferenceExpression(
               spec,
               idFor: (field) => '${spec.tableName}.${field.columnName}',
+              write: operation != RlsOperation.select,
             ),
     RlsPrincipal.relationship =>
       'public.is_${spec.tableName}_relationship_${operation.name}('
@@ -723,8 +764,8 @@ String _referenceInsertExpression(
   required String Function(FieldSpec field) idFor,
 }) {
   final access = spec.accessReferenceFields.isEmpty
-      ? _ownershipReferenceAccessExpression(spec, idFor: idFor)
-      : _accessReferenceExpression(spec, idFor: idFor);
+      ? _ownershipReferenceAccessExpression(spec, idFor: idFor, write: true)
+      : _accessReferenceExpression(spec, idFor: idFor, write: true);
   if (spec.participantFields.isEmpty) return access;
   final self = spec.participantFields
       .map((field) => 'auth.uid() = ${idFor(field)}')
@@ -732,9 +773,12 @@ String _referenceInsertExpression(
   return '($access) and (${spec.participantFields.length == 1 ? self : '($self)'})';
 }
 
+/// Access derived from referenced targets. A [write] requires edit rights
+/// wherever a target separates editors from read-only collaborators.
 String _accessReferenceExpression(
   EntitySpec spec, {
   required String Function(FieldSpec field) idFor,
+  bool write = false,
 }) {
   return spec.accessReferenceGroups
       .map((group) {
@@ -742,7 +786,11 @@ String _accessReferenceExpression(
             .map((field) {
               final reference = field.reference!;
               final id = idFor(field);
-              final allowed = _targetReadableByIdExpression(reference, id);
+              final allowed = _targetReadableByIdExpression(
+                reference,
+                id,
+                write: write,
+              );
               return '($allowed)';
             })
             .join(' or ');
@@ -754,13 +802,18 @@ String _accessReferenceExpression(
 String _ownershipReferenceAccessExpression(
   EntitySpec spec, {
   required String Function(FieldSpec field) idFor,
+  bool write = false,
 }) {
   final references = spec.ownershipReferenceFields;
   if (references.isEmpty) return 'false';
   final expression = references
       .map((field) {
         final id = idFor(field);
-        final readable = _targetReadableByIdExpression(field.reference!, id);
+        final readable = _targetReadableByIdExpression(
+          field.reference!,
+          id,
+          write: write,
+        );
         return field.nullable
             ? '($id is not null and ($readable))'
             : '($readable)';
@@ -771,12 +824,17 @@ String _ownershipReferenceAccessExpression(
 
 String _targetReadableByIdExpression(
   ReferenceSpec reference,
-  String idExpression,
-) {
+  String idExpression, {
+  bool write = false,
+}) {
   final expressions = reference.targetSelectPrincipals
       .map(
-        (principal) =>
-            _targetPrincipalByIdExpression(reference, principal, idExpression),
+        (principal) => _targetPrincipalByIdExpression(
+          reference,
+          principal,
+          idExpression,
+          write: write,
+        ),
       )
       .toSet();
   if (reference.targetReadableByRelationship) {
@@ -817,13 +875,15 @@ String _targetPrincipalByIdExpression(
   RlsPrincipal principal,
   String idExpression, {
   RlsOperation operation = RlsOperation.select,
+  bool write = false,
 }) => switch (principal) {
   RlsPrincipal.owner =>
     'public.is_${reference.targetTableName}_owner($idExpression)',
   RlsPrincipal.participant =>
     'public.is_${reference.targetTableName}_participant($idExpression)',
   RlsPrincipal.collaborator =>
-    'public.is_${reference.targetTableName}_collaborator($idExpression)',
+    '${_collaboratorFunction(reference.targetTableName, reference.targetCollaboration, write: write)}'
+        '($idExpression)',
   RlsPrincipal.reference =>
     'public.is_${reference.targetTableName}_reference($idExpression)',
   RlsPrincipal.relationship =>
@@ -834,14 +894,24 @@ String _targetPrincipalByIdExpression(
         'where target.${EntityConventions.idColumnName} = $idExpression)',
 };
 
-String _collaborationExpression(EntitySpec spec) {
+String _collaborationExpression(EntitySpec spec, {required bool write}) {
   final collaboration = spec.security.collaboration;
   if (collaboration == null) {
     throw StateError('A collaborator grant requires CollaborationAccess.');
   }
-  return 'public.is_${spec.tableName}_collaborator('
+  return '${_collaboratorFunction(spec.tableName, collaboration, write: write)}('
       '${spec.tableName}.${spec.idField.columnName})';
 }
+
+/// Collaborators read through membership; they write only as editors when
+/// the collaboration separates editors from read-only members.
+String _collaboratorFunction(
+  String tableName,
+  CollaborationSpec? collaboration, {
+  required bool write,
+}) => write && (collaboration?.separatesEditors ?? false)
+    ? 'public.is_${tableName}_editor'
+    : 'public.is_${tableName}_collaborator';
 
 String _collaborationViewerExpression(EntitySpec spec) {
   final collaboration = spec.security.collaboration;
@@ -2621,9 +2691,7 @@ void _emitSyncInfrastructure(
       // rows that user can no longer read, so realtime on the entity tables
       // never reports them. The user reads their own addressed changes,
       // which a pull returns anyway, and realtime signals each one.
-      ..writeln(
-        'grant select on public.local_entity_changes to authenticated;',
-      )
+      ..writeln('grant select on public.local_entity_changes to authenticated;')
       ..writeln(
         'drop policy if exists local_entity_changes_select_audience '
         'on public.local_entity_changes;',
@@ -3328,9 +3396,12 @@ String _principalByIdExpression(
   RlsPrincipal.participant =>
     'public.is_${spec.tableName}_participant($idExpression)',
   RlsPrincipal.collaborator =>
-    'public.is_${spec.tableName}_collaborator($idExpression)',
+    '${_collaboratorFunction(spec.tableName, spec.security.collaboration, write: operation != RlsOperation.select)}'
+        '($idExpression)',
   RlsPrincipal.reference =>
-    'public.is_${spec.tableName}_reference($idExpression)',
+    operation != RlsOperation.select && _separatesReferenceWrites(spec)
+        ? 'public.is_${spec.tableName}_reference_write($idExpression)'
+        : 'public.is_${spec.tableName}_reference($idExpression)',
   RlsPrincipal.relationship =>
     'public.is_${spec.tableName}_relationship_${operation.name}('
         '$idExpression)',

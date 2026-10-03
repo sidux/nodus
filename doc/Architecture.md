@@ -843,7 +843,14 @@ Capability visibility conventions are:
   participant reference, the four-state status contract, transition actions,
   self-membership inequality, unique-pair reuse, and `inviteOrReuse`. `Status`
   remains a domain enum but MUST define exactly `pending`, `accepted`,
-  `declined`, and `revoked`;
+  `declined`, and `revoked`. A target that distinguishes read-only members
+  names a non-null, defaulted membership bool through
+  `CollaborationAccess.workflow(editPermissionField: ...)`; only the owner may
+  update it. Every accepted member then keeps read access to the target and its
+  reference-derived graph, while collaborator mutations, reference-derived
+  writes through the target, and relationship-derived update or delete access
+  require the permission. Guards that only prove a row's target is visible,
+  such as a member's own check-in, stay read-based;
 - `Collaborative<Principal>` generates the collaboration relationship,
   authorization metadata, durable semantic operation, and the direct
   `entity.setCollaborator(principalId, active: ...)` API. A separate

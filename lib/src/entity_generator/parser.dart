@@ -1476,6 +1476,26 @@ void _validateAndInferWorkflowMembership(
       .where((grant) => grant.operation == RlsOperation.update)
       .map((grant) => grant.principal)
       .toSet();
+  if (collaboration.editPermissionField case final column?) {
+    final permissions = fields
+        .where((field) => field.columnName == column)
+        .toList(growable: false);
+    final permission = permissions.length == 1 ? permissions.single : null;
+    final editors = permission == null || permission.updatePrincipals.isEmpty
+        ? updatePrincipals
+        : permission.updatePrincipals.toSet();
+    if (permission == null ||
+        permission.dartType != 'bool' ||
+        permission.nullable ||
+        permission.defaultValue == null ||
+        editors.contains(RlsPrincipal.participant)) {
+      throw InvalidGenerationSourceError(
+        'Workflow membership `$tableName` requires a non-null bool `$column` '
+        'with a default that its participant cannot update.',
+        element: element,
+      );
+    }
+  }
   Set<RlsPrincipal> actors(ValueTransitionSpec transition) =>
       transition.principals.isEmpty
       ? updatePrincipals
@@ -5079,6 +5099,18 @@ SecuritySpec _parseSecurity(
     if (statusField != null) {
       _validateSqlIdentifier(statusField, element, label: 'status field');
     }
+    final editPermissionField =
+        lifecycle == CollaborationLifecycle.workflow &&
+            !(collaborationReader!.peek('editPermissionField')?.isNull ?? true)
+        ? collaborationReader.read('editPermissionField').stringValue
+        : null;
+    if (editPermissionField != null) {
+      _validateSqlIdentifier(
+        editPermissionField,
+        element,
+        label: 'edit permission field',
+      );
+    }
     collaboration = CollaborationSpec(
       lifecycle: lifecycle,
       membershipTable: membershipTable,
@@ -5092,6 +5124,7 @@ SecuritySpec _parseSecurity(
       additionalReadableValues: additionalReadableValues,
       readableEnumType: readableEnumType,
       readableEnumImport: readableEnumImport,
+      editPermissionField: editPermissionField,
     );
   }
 

@@ -276,7 +276,8 @@ final class CollaborationAccess {
   }) : lifecycle = CollaborationLifecycle.direct,
        statusField = null,
        acceptedState = null,
-       additionalReadableStates = const [];
+       additionalReadableStates = const [],
+       editPermissionField = null;
 
   /// Uses a normal synchronized entity as the collaboration membership.
   ///
@@ -290,6 +291,7 @@ final class CollaborationAccess {
     this.statusField,
     this.acceptedState,
     this.additionalReadableStates = const [],
+    this.editPermissionField,
   }) : lifecycle = CollaborationLifecycle.workflow,
        activeField = null;
 
@@ -309,6 +311,15 @@ final class CollaborationAccess {
   /// Additional states expose only the target row; collaborator mutations and
   /// reference-derived graph access still require [acceptedState].
   final List<Object> additionalReadableStates;
+
+  /// Membership boolean column that separates editors from read-only members.
+  ///
+  /// When declared, every accepted member keeps read access to the target and
+  /// its reference-derived graph, but only members whose column is true gain
+  /// collaborator mutations, reference writes through the target, and
+  /// relationship-derived update or delete access. When omitted, every
+  /// accepted member is an editor.
+  final String? editPermissionField;
 }
 
 final class Entity {

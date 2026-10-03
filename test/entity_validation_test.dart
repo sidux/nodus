@@ -7951,6 +7951,105 @@ abstract class TaskAttachment
     },
   );
 
+  test('read-only workflow members read the target graph while only editors '
+      'write it', () async {
+    final sources = _editPermissionSources(
+      canEdit: '@Persisted(defaultValue: true, updateBy: [RlsPrincipal.owner])',
+    );
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            predicate<String>(
+              (sql) => _sqlFunctionBody(
+                sql,
+                'public.is_tasks_editor(p_id uuid)',
+              ).contains('and member.can_edit'),
+              'grants edits only to members allowed to edit',
+            ),
+            predicate<String>(
+              (sql) => !_sqlFunctionBody(
+                sql,
+                'public.is_tasks_collaborator(p_id uuid)',
+              ).contains('can_edit'),
+              'keeps every accepted member a reader',
+            ),
+            contains(
+              'tasks_select_collaborator on public.tasks for select to '
+              'authenticated using (public.is_tasks_viewer(tasks.id))',
+            ),
+            contains(
+              'tasks_update_collaborator on public.tasks for update to '
+              'authenticated using (public.is_tasks_editor(tasks.id))',
+            ),
+            predicate<String>(
+              (sql) =>
+                  _sqlPolicy(
+                    sql,
+                    'task_attachments_select_reference',
+                  ).contains('public.is_tasks_collaborator(') &&
+                  !_sqlPolicy(
+                    sql,
+                    'task_attachments_select_reference',
+                  ).contains('is_tasks_editor'),
+              'lets read-only members read attachments',
+            ),
+            predicate<String>(
+              (sql) =>
+                  _sqlPolicy(
+                    sql,
+                    'task_attachments_insert_reference',
+                  ).contains('public.is_tasks_editor(') &&
+                  !_sqlPolicy(
+                    sql,
+                    'task_attachments_insert_reference',
+                  ).contains('is_tasks_collaborator'),
+              'lets only editors attach to the task',
+            ),
+            predicate<String>(
+              (sql) => _sqlFunctionBody(
+                sql,
+                'public.is_task_attachments_reference_write(p_id uuid)',
+              ).contains('public.is_tasks_editor('),
+              'authorizes pushed attachment writes for editors only',
+            ),
+          ]),
+        ),
+      },
+    );
+  });
+
+  test(
+    'rejects an edit permission its member could grant themselves',
+    () async {
+      final result = await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        _editPermissionSources(canEdit: '@Persisted(defaultValue: true)'),
+        rootPackage: 'nodus',
+      );
+      expect(result.succeeded, isFalse);
+      expect(
+        result.errors.join('\n'),
+        contains(
+          'requires a non-null bool `can_edit` with a default that its '
+          'participant cannot update',
+        ),
+      );
+    },
+  );
+
   test('composed components follow workflow preview access and precede their '
       'aggregate in pulls', () async {
     final sources =
@@ -8245,6 +8344,103 @@ final class Account {}
       ),
     );
   });
+}
+
+Map<String, String> _editPermissionSources({required String canEdit}) =>
+    _sources(r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/membership_status.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  collaboration: CollaborationAccess.workflow(
+    additionalReadableStates: [MembershipStatus.pending],
+    editPermissionField: 'can_edit',
+  ),
+)
+abstract class Task implements OwnedBy<Task, Account> {
+  abstract final String title;
+}
+''', fileName: 'task.dart')
+      ..['nodus|lib/account.dart'] = 'final class Account {}'
+      ..['nodus|lib/membership_status.dart'] =
+          'enum MembershipStatus { pending, accepted, revoked }'
+      ..['nodus|lib/task_member.dart'] =
+          '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/membership_status.dart';
+import 'package:nodus/task.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.select, RlsPrincipal.participant),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.participant),
+  ],
+)
+abstract class TaskMember implements OwnedBy<TaskMember, Account> {
+  @OwnerReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+
+  @AccessParticipant()
+  abstract final LocalId<Account> memberId;
+
+  @Persisted(defaultValue: MembershipStatus.pending, transitions: [
+    AllowedTransition(
+      MembershipStatus.pending,
+      MembershipStatus.accepted,
+      by: [RlsPrincipal.participant],
+    ),
+    AllowedTransition(
+      MembershipStatus.accepted,
+      MembershipStatus.revoked,
+      by: [RlsPrincipal.owner],
+    ),
+  ])
+  abstract final MembershipStatus status;
+
+  $canEdit
+  abstract final bool canEdit;
+
+  @Action(values: [ActionValue(#status, MembershipStatus.accepted)])
+  Future<void> accept();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.revoked)])
+  Future<void> revoke();
+}
+'''
+      ..['nodus|lib/task_attachment.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/task.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class TaskAttachment
+    implements OwnedBy<TaskAttachment, Account> {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+}
+''';
+
+/// The last definition of [signature], which wins over earlier placeholders.
+String _sqlFunctionBody(String sql, String signature) {
+  final start = sql.lastIndexOf('function $signature');
+  if (start < 0) return '';
+  return sql.substring(start, sql.indexOf(r'$$;', start));
+}
+
+String _sqlPolicy(String sql, String name) {
+  final start = sql.indexOf('create policy $name ');
+  if (start < 0) return '';
+  return sql.substring(start, sql.indexOf('\n', start));
 }
 
 Map<String, String> _sources(

@@ -1713,6 +1713,7 @@ final class CollaborationSpec {
     this.additionalReadableValues = const [],
     this.readableEnumType,
     this.readableEnumImport,
+    this.editPermissionField,
   });
 
   final CollaborationLifecycle lifecycle;
@@ -1728,9 +1729,13 @@ final class CollaborationSpec {
   final String? readableEnumType;
   final String? readableEnumImport;
 
+  /// Membership column granting edit rights; null when every member edits.
+  final String? editPermissionField;
+
   bool get isDirect => lifecycle == CollaborationLifecycle.direct;
   bool get isWorkflow => lifecycle == CollaborationLifecycle.workflow;
   bool get hasAdditionalReadableStates => additionalReadableValues.isNotEmpty;
+  bool get separatesEditors => editPermissionField != null;
   List<String> get readableValues {
     final value = acceptedValue;
     return value == null

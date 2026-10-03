@@ -598,6 +598,7 @@ String _relationshipAudienceByUserExpression(
   EntitySpec relationship, {
   required String rowAlias,
   required String userExpression,
+  bool write = false,
 }) {
   final expressions = <String>{
     for (final participant in relationship.participantFields)
@@ -612,7 +613,8 @@ String _relationshipAudienceByUserExpression(
         relationship,
         rowAlias: rowAlias,
         userExpression: userExpression,
-        includeReadableStates: true,
+        includeReadableStates: !write,
+        write: write,
       ),
     );
   }
@@ -623,6 +625,7 @@ String _relationshipAudienceByUserExpression(
         relationship,
         rowAlias: rowAlias,
         userExpression: userExpression,
+        write: write,
       ),
     );
   }
@@ -810,6 +813,9 @@ String _sqlAlias(String value) {
   return '${value.substring(0, prefixLength)}_$suffix';
 }
 
+/// Users reaching [target] through relationships. Update and delete paths,
+/// or any path serving a [write], require edit rights on every collaborative
+/// source along the way.
 String _relationshipAccessByUserExpression(
   EntityGraphSpec graph,
   EntitySpec target, {
@@ -817,7 +823,9 @@ String _relationshipAccessByUserExpression(
   required String entityId,
   required String userExpression,
   required String aliasPrefix,
+  bool write = false,
 }) {
+  final writes = write || operation != RlsOperation.select;
   final paths = <String>[];
   var index = 0;
   for (final relationship in graph.entities) {
@@ -838,6 +846,7 @@ String _relationshipAccessByUserExpression(
           relationship,
           rowAlias: alias,
           userExpression: userExpression,
+          write: writes,
         );
         final targetMatch = _accessTargetMatchExpression(
           graph,
@@ -892,6 +901,27 @@ String _emitWorkflowCollaborationSql(EntityGraphSpec graph) {
     );
   end if;'''
         : '';
+    final editorSql = switch (collaboration.editPermissionField) {
+      null => '',
+      final column =>
+        '''
+
+create or replace function public.is_${target.tableName}_editor(p_id uuid)
+returns boolean language sql stable security definer
+set search_path = '' as \$\$
+  select exists (
+    select 1 from public.${membership.tableName} member
+    where member.${workflow.targetReference.columnName} = p_id
+      and member.${workflow.participant.columnName} = auth.uid()
+      and member.${workflow.status.columnName} = $accepted
+      and member.$column
+      and member.${deletedAt.columnName} is null
+  );
+\$\$;
+
+revoke all on function public.is_${target.tableName}_editor(uuid) from $supabaseApiRoles;
+grant execute on function public.is_${target.tableName}_editor(uuid) to authenticated;''',
+    };
     if (collaboration.hasAdditionalReadableStates) {
       final readable = collaboration.readableValues.map(_sqlLiteral).join(', ');
       sections.add('''-- Entity-backed collaboration for ${target.className}.
@@ -923,7 +953,7 @@ set search_path = '' as \$\$
 revoke all on function public.is_${target.tableName}_collaborator(uuid) from $supabaseApiRoles;
 revoke all on function public.is_${target.tableName}_viewer(uuid) from $supabaseApiRoles;
 grant execute on function public.is_${target.tableName}_collaborator(uuid) to authenticated;
-grant execute on function public.is_${target.tableName}_viewer(uuid) to authenticated;
+grant execute on function public.is_${target.tableName}_viewer(uuid) to authenticated;$editorSql
 
 create or replace function public.$functionName()
 returns trigger
@@ -1011,7 +1041,7 @@ set search_path = '' as \$\$
 \$\$;
 
 revoke all on function public.is_${target.tableName}_collaborator(uuid) from $supabaseApiRoles;
-grant execute on function public.is_${target.tableName}_collaborator(uuid) to authenticated;
+grant execute on function public.is_${target.tableName}_collaborator(uuid) to authenticated;$editorSql
 
 create or replace function public.$functionName()
 returns trigger
@@ -1281,12 +1311,15 @@ on public.${collaboration.membershipTable}
 for each row execute function public.$triggerFunction();''';
 }
 
+/// Users reaching [entity] through its select grants. A [write] narrows
+/// collaborators to editors so the reach can authorize derived writes.
 String _readableByUserExpression(
   EntityGraphSpec graph,
   EntitySpec entity, {
   required String rowAlias,
   required String userExpression,
   bool includeReadableStates = false,
+  bool write = false,
 }) {
   final expressions = entity.security.grants
       .where((grant) => grant.operation == RlsOperation.select)
@@ -1298,6 +1331,7 @@ String _readableByUserExpression(
           rowAlias: rowAlias,
           userExpression: userExpression,
           includeReadableStates: includeReadableStates,
+          write: write,
         ),
       )
       .toSet();
@@ -1312,6 +1346,7 @@ String _readableByUserExpression(
         aliasPrefix: _sqlAlias(
           '${rowAlias}_${entity.tableName}_relationship_select',
         ),
+        write: write,
       ),
     );
   }
@@ -1325,6 +1360,7 @@ String _principalByUserExpression(
   required String rowAlias,
   required String userExpression,
   bool includeReadableStates = false,
+  bool write = false,
 }) => switch (principal) {
   RlsPrincipal.owner =>
     '$rowAlias.${entity.ownerField.columnName} = $userExpression',
@@ -1338,12 +1374,14 @@ String _principalByUserExpression(
     entityId: '$rowAlias.${entity.idField.columnName}',
     userExpression: userExpression,
     includeReadableStates: includeReadableStates,
+    write: write,
   ),
   RlsPrincipal.reference => _referencesByUserExpression(
     graph,
     entity,
     rowAlias: rowAlias,
     userExpression: userExpression,
+    write: write,
   ),
   RlsPrincipal.relationship => _relationshipAccessByUserExpression(
     graph,
@@ -1354,6 +1392,7 @@ String _principalByUserExpression(
     aliasPrefix: _sqlAlias(
       '${rowAlias}_${entity.tableName}_relationship_select',
     ),
+    write: write,
   ),
   RlsPrincipal.authenticated => '$userExpression is not null',
 };
@@ -1364,6 +1403,7 @@ String _collaboratorByUserExpression(
   required String entityId,
   required String userExpression,
   bool includeReadableStates = false,
+  bool write = false,
 }) {
   final collaboration = entity.security.collaboration;
   if (collaboration == null) return 'false';
@@ -1383,7 +1423,8 @@ String _collaboratorByUserExpression(
   return 'exists (select 1 from public.${membership.tableName} member '
       'where member.${workflow.targetReference.columnName} = $entityId '
       'and member.${workflow.participant.columnName} = $userExpression '
-      'and ${_workflowStatePredicate('member.${workflow.status.columnName}', collaboration, includeReadableStates: includeReadableStates)} '
+      'and ${_workflowStatePredicate('member.${workflow.status.columnName}', collaboration, includeReadableStates: includeReadableStates && !write)} '
+      '${write && collaboration.separatesEditors ? 'and member.${collaboration.editPermissionField} ' : ''}'
       'and member.${deletedAt.columnName} is null)';
 }
 
@@ -1402,6 +1443,7 @@ String _referencesByUserExpression(
   EntitySpec entity, {
   required String rowAlias,
   required String userExpression,
+  bool write = false,
 }) {
   final byClass = {
     for (final candidate in graph.entities) candidate.className: candidate,
@@ -1417,6 +1459,7 @@ String _referencesByUserExpression(
                 target,
                 rowAlias: targetAlias,
                 userExpression: userExpression,
+                write: write,
               );
               return 'exists (select 1 from public.${target.tableName} '
                   '$targetAlias where '
