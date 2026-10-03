@@ -609,7 +609,19 @@ final class SupabaseSyncBackend
         callback: (_) => _signalRemoteChange(),
       );
     }
-    return channel.subscribe();
+    // Changes committed before the channel joins, or while it rejoins after a
+    // dropped connection, never arrive as events, so catch up once it is live:
+    // when the join succeeds and again when replication reports it is ready.
+    channel = channel.onSystemEvents((payload) {
+      if (payload is Map &&
+          payload['status'] == 'ok' &&
+          payload['extension'] == 'postgres_changes') {
+        _signalRemoteChange();
+      }
+    });
+    return channel.subscribe((status, _) {
+      if (status == RealtimeSubscribeStatus.subscribed) _signalRemoteChange();
+    });
   }
 
   static List<Object?> _list(Object? value) {

@@ -34,6 +34,46 @@ void main() {
     expect(client.getChannels(), hasLength(1));
   });
 
+  test('a joined or rejoined Realtime channel signals a catch-up pull, as '
+      'changes committed before it was live never arrive as events', () async {
+    final client = SupabaseClient('https://example.invalid', 'test-anon-key');
+    final backend = SupabaseSyncBackend.graph(
+      client: client,
+      definition: _testGraphDefinition(),
+    );
+    addTearDown(() async {
+      await backend.disposeRemoteChangeSignals();
+      await client.dispose();
+    });
+    var signals = 0;
+    final subscription = backend.remoteChangeSignals.listen((_) => signals++);
+    addTearDown(subscription.cancel);
+    final channel = client.getChannels().single;
+    final bindings = [
+      for (final table in ['local_entity_changes', 'notes'])
+        {'event': '*', 'schema': 'public', 'table': table, 'filter': null},
+    ];
+
+    // Stands in for the server's join reply, which a test has no socket for.
+    // ignore: invalid_use_of_internal_member
+    channel.joinPush.trigger('ok', {
+      'postgres_changes': [
+        for (final (index, binding) in bindings.indexed)
+          {...binding, 'id': index},
+      ],
+    });
+    await pumpEventQueue();
+    expect(signals, 1, reason: 'the join succeeded');
+
+    channel.trigger('system', {
+      'status': 'ok',
+      'extension': 'postgres_changes',
+      'message': 'Subscribed to PostgreSQL',
+    });
+    await pumpEventQueue();
+    expect(signals, 2, reason: 'replication is live');
+  });
+
   test('snapshot lookup uses an RLS table read instead of an RPC', () async {
     const entityId = 'a0000000-0000-7000-8000-000000000010';
     late Uri requestUri;
