@@ -1431,10 +1431,15 @@ final class _MembershipEntityPredicate<E, V> extends EntityPredicate<E> {
   final EntityField<E, V> field;
   final List<V> expected;
 
+  /// Membership in constant time rather than comparing every candidate for
+  /// every entity, under the same equality as the other predicates.
+  late final Set<Object?> _expectedSet = HashSet<Object?>(
+    equals: entityValuesEqual,
+    hashCode: entityValueHash,
+  )..addAll(expected);
+
   @override
-  bool test(E entity) => expected.any(
-    (candidate) => entityValuesEqual(candidate, field.read(entity)),
-  );
+  bool test(E entity) => _expectedSet.contains(field.read(entity));
 
   @override
   String get _stableKey =>

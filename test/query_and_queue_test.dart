@@ -208,6 +208,37 @@ void main() {
     expect(entityValueHash(first), isNot(entityValueHash(different)));
   });
 
+  test('membership predicates match by entity value equality at scale', () {
+    final title = ComparableEntityField<_TextItem, String>(
+      name: 'title',
+      read: (item) => item.title,
+      encode: normalizeTrimmedString,
+      normalize: normalizeTrimmedString,
+    );
+    final scalar = EqualityEntityField<_ScalarItem, _ScalarValue>(
+      name: 'value',
+      read: (item) => item.value,
+      encode: (value) => value,
+      normalize: (value) => value,
+    );
+    final titles = title.isIn([for (var i = 0; i < 5000; i++) 'Task $i']);
+
+    expect(
+      titles.test(const _TextItem(title: 'Task 4999', summary: null)),
+      isTrue,
+    );
+    expect(
+      titles.test(const _TextItem(title: 'Task 5000', summary: null)),
+      isFalse,
+    );
+    expect(
+      scalar
+          .isIn([_ScalarValue.fromScalar(7)])
+          .test(const _ScalarItem(_ScalarValue(7))),
+      isTrue,
+    );
+  });
+
   test('sync operation IDs validate and canonicalize UUID wire values', () {
     expect(
       parseSyncOperationId('  A0000000-0000-7000-8000-000000000001  '),
@@ -4084,6 +4115,12 @@ final class _TextItem {
 
   final String title;
   final String? summary;
+}
+
+final class _ScalarItem {
+  const _ScalarItem(this.value);
+
+  final _ScalarValue value;
 }
 
 final class _ScalarValue implements PersistedScalarValue<int> {
