@@ -522,6 +522,71 @@ void main() {
   );
 
   testWidgets(
+    'automatic paging continues past pages a screen filters out entirely',
+    (tester) async {
+      final values = List<int>.generate(40, (index) => index);
+      final cache = LocalEntityQueryCache<int>.database(
+        invalidations: const Stream.empty(),
+        loader: (spec, {required after, required limit}) async {
+          final offset = (after as _OffsetCursor?)?.offset ?? 0;
+          final items = values.skip(offset).take(limit).toList(growable: false);
+          final nextOffset = offset + items.length;
+          return EntityQueryPage(
+            items: items,
+            hasMore: nextOffset < values.length,
+            nextCursor: _OffsetCursor(nextOffset),
+          );
+        },
+      );
+      addTearDown(cache.dispose);
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            height: 300,
+            child: HookBuilder(
+              builder: (_) {
+                final observed = useObservedEntityQuery(
+                  () => cache.acquire(EntityQuerySpec<int>(pageSize: 4)),
+                );
+                return observed.when(
+                  loading: SizedBox.shrink,
+                  empty: SizedBox.shrink,
+                  failure: (error, retry) => Text('$error'),
+                  data:
+                      (
+                        items, {
+                        required hasMore,
+                        required refreshing,
+                        refreshError,
+                      }) {
+                        // The second page and those after it show nothing
+                        // until item 30.
+                        final shown = [
+                          for (final item in items)
+                            if (item == 0 || item >= 30) item,
+                        ];
+                        return ListView.builder(
+                          itemExtent: 100,
+                          itemCount: shown.length,
+                          itemBuilder: (_, index) => Text('${shown[index]}'),
+                        );
+                      },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('0'), findsOneWidget);
+      expect(find.text('30'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'automatic paging fills a viewport without hot-retrying a failed page',
     (tester) async {
       var loadCount = 0;

@@ -438,15 +438,18 @@ final class EntityQueryPagingBoundary extends StatefulWidget {
 final class _EntityQueryPagingBoundaryState
     extends State<EntityQueryPagingBoundary> {
   final Set<LocalEntityQuery<dynamic>> _loading = {};
+  BuildContext? _scrollContext;
   ScrollMetrics? _pendingMetrics;
   bool _metricsCheckScheduled = false;
 
   bool _onScroll(ScrollNotification notification) {
+    _scrollContext = notification.context;
     _scheduleMaybeLoad(notification.metrics);
     return false;
   }
 
   bool _onMetrics(ScrollMetricsNotification notification) {
+    _scrollContext = notification.context;
     _scheduleMaybeLoad(notification.metrics);
     return false;
   }
@@ -487,11 +490,30 @@ final class _EntityQueryPagingBoundaryState
   Future<void> _loadNextPage(LocalEntityQuery<dynamic> query) async {
     try {
       await query.loadNextPage();
+      _recheckAfterLayout();
     } on Object {
       // The query publishes the failure through its typed observable state.
     } finally {
       _loading.remove(query);
     }
+  }
+
+  /// A page the screen filters out entirely leaves its layout unchanged, so no
+  /// new metrics arrive; the scroll position is read again once laid out.
+  void _recheckAfterLayout() {
+    if (!mounted) return;
+    WidgetsBinding.instance
+      ..addPostFrameCallback((_) {
+        final scrollContext = _scrollContext;
+        if (!mounted || scrollContext == null || !scrollContext.mounted) {
+          return;
+        }
+        final position = Scrollable.maybeOf(scrollContext)?.position;
+        if (position != null && position.axis == widget.axis) {
+          _maybeLoad(position);
+        }
+      })
+      ..ensureVisualUpdate();
   }
 
   @override
