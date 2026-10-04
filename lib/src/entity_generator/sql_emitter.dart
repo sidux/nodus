@@ -505,13 +505,16 @@ void _emitAccessReferenceFunction(StringBuffer buffer, EntitySpec spec) {
   }
 }
 
-/// Whether a referenced target grants writes to fewer collaborators than it
-/// grants reads, so reference-derived writes need their own predicate.
+/// Whether a referenced target grants writes to fewer users than it grants
+/// reads, so reference-derived writes need their own predicate: it separates
+/// editors from read-only collaborators, or is readable through a
+/// relationship.
 bool _separatesReferenceWrites(EntitySpec spec) =>
-    spec.accessReferenceFields.any(
-      (field) =>
-          field.reference!.targetCollaboration?.separatesEditors ?? false,
-    );
+    spec.accessReferenceFields.any((field) {
+      final reference = field.reference!;
+      return (reference.targetCollaboration?.separatesEditors ?? false) ||
+          reference.targetReadableByRelationship;
+    });
 
 void _emitAccessReferenceFunctionNamed(
   StringBuffer buffer,
@@ -827,23 +830,38 @@ String _targetReadableByIdExpression(
   String idExpression, {
   bool write = false,
 }) {
+  // Seeing a target through a relationship never grants writing through it;
+  // a write needs the relationship's update access.
+  final relationshipOperation = write
+      ? RlsOperation.update
+      : RlsOperation.select;
   final expressions = reference.targetSelectPrincipals
+      .where((principal) => !write || principal != RlsPrincipal.relationship)
       .map(
         (principal) => _targetPrincipalByIdExpression(
           reference,
           principal,
           idExpression,
+          operation: relationshipOperation,
           write: write,
         ),
       )
       .toSet();
-  if (reference.targetReadableByRelationship) {
+  // Whoever owns the target may always write through it.
+  if (write) {
     expressions.add(
-      'public.is_${reference.targetTableName}_relationship_select('
-      '$idExpression)',
+      'public.is_${reference.targetTableName}_owner($idExpression)',
     );
   }
-  return expressions.join(' or ');
+  if (reference.targetRelationshipAccessOperations.contains(
+    relationshipOperation,
+  )) {
+    expressions.add(
+      'public.is_${reference.targetTableName}_relationship_'
+      '${relationshipOperation.name}($idExpression)',
+    );
+  }
+  return expressions.isEmpty ? 'false' : expressions.join(' or ');
 }
 
 String? _ownershipReferenceExpression(
@@ -1238,7 +1256,7 @@ String _pushOperationRoutingSql(
         raise exception 'Create access denied' using errcode = '42501';
       end if;
 ${!spec.hasOwnershipReference && activitySource == null ? "      if (current_operation -> 'patch' ->> '${spec.ownerField.name}')::uuid\n          <> auth.uid() then\n        raise exception 'Owner must match authenticated user' using errcode = '42501';\n      end if;" : ''}
-${[_initialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _actionInitialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _referenceValidation(spec, "current_operation -> 'patch'", indent: '      '), _workflowMembershipCreateValidationSql(spec, "current_operation -> 'patch'", indent: '      ')].where((section) => section.isNotEmpty).join('\n')}${createOrderScopeLock.isEmpty ? '' : '\n$createOrderScopeLock'}${createOrderedIntent.isEmpty ? '' : '\n$createOrderedIntent'}
+${[_initialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _actionInitialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _foreignInitialValueValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _referenceValidation(spec, "current_operation -> 'patch'", indent: '      '), _workflowMembershipCreateValidationSql(spec, "current_operation -> 'patch'", indent: '      ')].where((section) => section.isNotEmpty).join('\n')}${createOrderScopeLock.isEmpty ? '' : '\n$createOrderScopeLock'}${createOrderedIntent.isEmpty ? '' : '\n$createOrderedIntent'}
       insert into public.${spec.tableName} ($createColumns)
       values ($createValues) returning * into canonical;${createOrderScopeAdvance.isEmpty ? '' : '\n$createOrderScopeAdvance'}''',
     ));
@@ -3384,6 +3402,29 @@ ${indent}end if;''',
   }
   return sections.join('\n');
 }
+
+/// A value only another principal may change, such as a participant's own
+/// consent, starts at its default: its creator cannot choose it for them.
+String _foreignInitialValueValidationSql(
+  EntitySpec spec,
+  String patchExpression, {
+  required String indent,
+}) => spec.fields
+    .where(
+      (field) =>
+          field.updatePrincipals.isNotEmpty &&
+          !field.updatePrincipals.contains(RlsPrincipal.owner) &&
+          field.transitions.isEmpty &&
+          field.defaultValue != null,
+    )
+    .map((field) {
+      final value = _jsonCast("$patchExpression -> '${field.name}'", field);
+      final expected = _sqlLiteral(field.persistedDefaultValue);
+      return '''${indent}if ($value) is distinct from $expected then
+$indent  raise exception 'Invalid initial value for ${field.name}' using errcode = '23514';
+${indent}end if;''';
+    })
+    .join('\n');
 
 String _actionInitialStateValidationSql(
   EntitySpec spec,

@@ -8198,6 +8198,151 @@ abstract class TaskMember implements OwnedBy<TaskMember, Account> {
     );
   });
 
+  test('a component readable through its aggregate is written only by its '
+      'owner', () async {
+    final sources =
+        _sources(r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/document.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  collaboration: CollaborationAccess.direct(),
+)
+abstract class Task implements OwnedBy<Task, Account> {
+  @Composition()
+  abstract final LocalId<Document> documentId;
+}
+''', fileName: 'task.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}'
+          ..['nodus|lib/document.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity()
+abstract class Document implements OwnedBy<Document, Account>, Component {}
+'''
+          ..['nodus|lib/paragraph.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/document.dart';
+
+@Entity(
+  grants: [
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.select, RlsPrincipal.reference),
+    RlsGrant(RlsOperation.update, RlsPrincipal.reference),
+    RlsGrant(RlsOperation.delete, RlsPrincipal.reference),
+  ],
+)
+abstract class Paragraph implements OwnedBy<Paragraph, Account>, SoftDeletable {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Document> documentId;
+
+  abstract final String text;
+}
+''';
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            predicate<String>(
+              (sql) => _sqlFunctionBody(
+                sql,
+                'public.is_paragraphs_reference(p_id uuid)',
+              ).contains('public.is_documents_relationship_select('),
+              'lets everyone who sees the aggregate read the paragraphs',
+            ),
+            predicate<String>((sql) {
+              final body = _sqlFunctionBody(
+                sql,
+                'public.is_paragraphs_reference_write(p_id uuid)',
+              );
+              return body.contains('public.is_documents_owner(') &&
+                  !body.contains('relationship_select');
+            }, 'lets only the document owner change or delete them'),
+          ]),
+        ),
+      },
+    );
+  });
+
+  test('a participant is fixed once shared, and a value only they may change '
+      'starts at its default', () async {
+    final sources = _sources(
+      r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.select, RlsPrincipal.participant),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.participant),
+  ],
+)
+abstract class Pairing implements OwnedBy<Pairing, Account> {
+  @AccessParticipant()
+  abstract final LocalId<Account> partnerId;
+
+  @Persisted(defaultValue: false, updateBy: [RlsPrincipal.owner])
+  abstract final bool ownerShares;
+
+  @Persisted(defaultValue: false, updateBy: [RlsPrincipal.participant])
+  abstract final bool partnerShares;
+}
+''',
+      fileName: 'pairing.dart',
+    )..['nodus|lib/account.dart'] = 'final class Account {}';
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            // A patch may change the sharing choices, never the participant.
+            contains(
+              "jsonb_object_keys(p_patch) key where not (key = any("
+              "array['ownerShares', 'partnerShares']::text[]))",
+            ),
+            contains(
+              "raise exception 'Invalid initial value for partnerShares'",
+            ),
+            isNot(contains("'Invalid initial value for ownerShares'")),
+          ]),
+        ),
+      },
+    );
+  });
+
   test('rejects non-enum workflow readable states', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';

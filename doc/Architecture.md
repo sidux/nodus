@@ -866,7 +866,11 @@ Capability visibility conventions are:
   reference-derived graph, while collaborator mutations, reference-derived
   writes through the target, and relationship-derived update or delete access
   require the permission. Guards that only prove a row's target is visible,
-  such as a member's own check-in, stay read-based;
+  such as a member's own check-in, stay read-based. Seeing a target through
+  a relationship, such as an aggregate's component or a goal's validator
+  seeing its linked work, never grants writing through it: a
+  reference-derived write needs the target's owner, an editor, or the
+  relationship's update access;
 - `Collaborative<Principal>` generates the collaboration relationship,
   authorization metadata, durable semantic operation, and the direct
   `entity.setCollaborator(principalId, active: ...)` API. A separate

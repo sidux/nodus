@@ -222,9 +222,12 @@ final class EntitySpec {
     if (!canUpdate || isActivityEntry) return false;
     if (isPersistedVariantField(field)) return false;
     if (field.draftEditableOverride == false) return false;
+    // A participant, like the owner, identifies who the row is shared with
+    // and never changes once created.
     return !field.isId &&
         !field.generatedOnly &&
         field != ownerField &&
+        !field.isParticipant &&
         field.inCreatePayload &&
         field.reference == null &&
         field.transitions.isEmpty &&

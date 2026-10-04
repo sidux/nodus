@@ -1449,16 +1449,22 @@ String _readableByUserExpression(
         ),
       )
       .toSet();
-  if (entity.relationshipAccessOperations.contains(RlsOperation.select)) {
+  // Seeing an entity through a relationship never grants writing through it;
+  // a write follows the relationship's update access.
+  final relationshipOperation = write
+      ? RlsOperation.update
+      : RlsOperation.select;
+  if (entity.relationshipAccessOperations.contains(relationshipOperation)) {
     expressions.add(
       _relationshipAccessByUserExpression(
         graph,
         entity,
-        operation: RlsOperation.select,
+        operation: relationshipOperation,
         entityId: '$rowAlias.${entity.idField.columnName}',
         userExpression: userExpression,
         aliasPrefix: _sqlAlias(
-          '${rowAlias}_${entity.tableName}_relationship_select',
+          '${rowAlias}_${entity.tableName}_relationship_'
+          '${relationshipOperation.name}',
         ),
         write: write,
       ),
