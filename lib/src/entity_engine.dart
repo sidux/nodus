@@ -3214,7 +3214,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       ...existingOperation.patch.toWire(),
       ...(mutation.syncPatch ?? mutation.patch).toWire(),
     };
-    if (_mustPreserveCreateBoundary(
+    if (_mustPreserveActionBoundary(
           existingOperation,
           mutation.syncPatch ?? mutation.patch,
           mergedPatch,
@@ -3308,18 +3308,25 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     return false;
   }
 
-  bool _mustPreserveCreateBoundary(
+  /// Whether merging [nextPatch] into queued [existing] work would hide a
+  /// semantic step from the server: a status-like field moved twice would
+  /// skip the state between (done to todo to started becoming done to
+  /// started, which the transition rules refuse), and two guarded actions
+  /// would arrive as one shape that matches neither.
+  bool _mustPreserveActionBoundary(
     PushOperation existing,
     EntityPatch nextPatch,
     JsonMap mergedPatch,
   ) {
-    if (existing is! CreatePushOperation) return false;
     final next = nextPatch.toWire();
+    final queued = existing.patch.toWire();
+    final isCreate = existing is CreatePushOperation;
     for (final field in descriptor.fields) {
       if (field.allowedTransitions.isEmpty || !next.containsKey(field.name)) {
         continue;
       }
-      if (!entityValuesEqual(existing.patch[field.name], next[field.name])) {
+      if ((isCreate || queued.containsKey(field.name)) &&
+          !entityValuesEqual(queued[field.name], next[field.name])) {
         return true;
       }
     }
@@ -3327,7 +3334,13 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       ActionPolicyProvider provider => provider.actionPolicy,
       _ => null,
     };
-    return actionPolicy != null && !actionPolicy.allowsCreate(mergedPatch);
+    if (actionPolicy == null) return false;
+    if (isCreate) return !actionPolicy.allowsCreate(mergedPatch);
+    bool touchesGuardedField(JsonMap patch) => patch.keys.any(
+      (fieldName) =>
+          actionPolicy.actions.any((action) => action.guards(fieldName)),
+    );
+    return touchesGuardedField(queued) && touchesGuardedField(next);
   }
 
   Future<void> _insertPushWork(
@@ -3513,6 +3526,23 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       if (projection != null) projections.add(projection);
     }
     return projections;
+  }
+
+  /// The entity rebuilt from its last accepted server version and the work
+  /// still queued for it, when the server's version has been received.
+  Future<_RejectedProjection?> _reconstructFromAccepted(
+    PushSyncWorkItem settled,
+    String entityId,
+  ) async {
+    final row = await database
+        .customSelect(
+          'select accepted_snapshot from ${descriptor.tableName} '
+          'where ${EntityConventions.idColumnName} = ?',
+          variables: [Variable.withString(entityId)],
+        )
+        .getSingleOrNull();
+    if (row?.readNullable<String>('accepted_snapshot') == null) return null;
+    return _reconstructIdentityAfterRejection(settled, entityId);
   }
 
   Future<_RejectedProjection?> _reconstructIdentityAfterRejection(
@@ -4360,7 +4390,9 @@ final class LocalEntityGraphCoordinator
   }
 
   Future<R> _runExclusiveTransaction<R>(FutureOr<R> Function() body) async {
-    await _mutationCoordinator.flush();
+    // Earlier work persists first; a failure in it was already given to its
+    // own caller and rolled back, so it is not this transaction's error.
+    await _mutationCoordinator.flush(throwOnError: false);
     final pending = <_PendingMutation>[];
     final scope = _TransactionScope(pending);
     late R result;
@@ -4386,7 +4418,14 @@ final class LocalEntityGraphCoordinator
       scope.active = false;
     }
     _mutationCoordinator._scheduleBatch(pending);
-    await _mutationCoordinator.flush();
+    await _mutationCoordinator.flush(throwOnError: false);
+    for (final mutation in pending) {
+      final committed = await mutation.committed;
+      if (!committed.succeeded) {
+        _mutationCoordinator._markFailuresReported();
+        committed.throwIfFailed();
+      }
+    }
     return result;
   }
 
@@ -5293,6 +5332,8 @@ final class LocalEntityGraphCoordinator
           )
         >[];
     var supersededReceipt = false;
+    final acknowledgedCreates =
+        <(_ErasedLocalEntityEngine, _RejectedProjection)>[];
     await database.transaction(() async {
       final cursorRow = await database
           .customSelect(
@@ -5309,9 +5350,41 @@ final class LocalEntityGraphCoordinator
               variables: [Variable.withInt(item.id)],
             )
             .getSingle();
+        final queued = _decodeMap(workRow.read<String>('payload'));
+        // The receipt proves the server created the entity, so a create is
+        // done; sent again it would only be refused as taken. Later work
+        // for the entity builds on that creation, as after any receipt.
+        if (queued['operation'] == SyncMutationOperation.create.name) {
+          await database.customStatement(
+            'delete from local_entity_sync_work where id = ?',
+            [item.id],
+          );
+          for (final change in canonicalChanges) {
+            final engine = _engineForRemoteChange(
+              change,
+              target: item.target,
+              fromPull: false,
+            );
+            await engine._rebasePendingPushes(
+              change.identity.rawId,
+              change.serverVersion,
+            );
+            // Pulled edits made after the create were held behind it; the
+            // entity now shows the server's version and the work still
+            // queued on top of it.
+            final projection = await engine._reconstructFromAccepted(
+              item,
+              change.identity.rawId,
+            );
+            if (projection != null) {
+              acknowledgedCreates.add((engine, projection));
+            }
+          }
+          return;
+        }
         final replacementId = idGenerator.nextOperationId();
         final payload = <String, Object?>{
-          ..._decodeMap(workRow.read<String>('payload')),
+          ...queued,
           'operationId': replacementId.value,
         };
         await database.customStatement(
@@ -5351,6 +5424,16 @@ final class LocalEntityGraphCoordinator
         ));
       }
     });
+    for (final (engine, projection) in acknowledgedCreates) {
+      engine._applyRejectedProjection(projection);
+      if (projection.changedFieldNames.isNotEmpty) {
+        engine._notifyErasedProjectionChanged(
+          EntityProjectionChange<dynamic>._fromFieldNames(
+            projection.changedFieldNames,
+          ),
+        );
+      }
+    }
     if (!supersededReceipt) {
       final notifications =
           <_ErasedLocalEntityEngine, EntityProjectionChange<dynamic>>{};
@@ -5808,7 +5891,9 @@ final class LocalEntityGraphCoordinator
       }
     }
     await release(() async => _queueUpdateSubscription?.cancel());
-    await release(flushLocal);
+    // Failed local writes were rolled back and reported to their callers;
+    // closing only waits for the rest to persist.
+    await release(() => _mutationCoordinator.flush(throwOnError: false));
     for (final worker in _workers.values) {
       await release(worker.waitForIdle);
     }

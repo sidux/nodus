@@ -6284,6 +6284,9 @@ final class MutationCoordinator {
     });
   }
 
+  /// Failures up to now were reported through their own commit results.
+  void _markFailuresReported() => _reportedFailureCount = failures.length;
+
   Future<void> flush({bool throwOnError = true}) async {
     if (_pendingCount != 0) await _tail;
     if (throwOnError && failures.length > _reportedFailureCount) {
