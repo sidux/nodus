@@ -1,6 +1,6 @@
 // GENERATED FILE. DO NOT EDIT.
 // Source: package:tasks_example/nodus.lock
-// Schema fingerprint: e0c585ebd830e81339a7aebb5643063cdb13703d2577e05e9b4d2dba5adbca6d
+// Schema fingerprint: 13cfdb9da324f3bbbd678a0bcdb455bac217453a6cb4b3081183e2895838997c
 // ignore_for_file: unused_field, type=lint
 
 import 'dart:async';

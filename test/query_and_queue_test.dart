@@ -262,6 +262,37 @@ void main() {
     expect(concurrent.rebasedPendingPatch, isEmpty);
   });
 
+  test('a newer remote version overrides only the server-wins fields it '
+      'changed since the pending base', () {
+    final merged = mergeRemoteFields(
+      visibleFields: const {'canEdit': true, 'status': 'pending'},
+      pendingPatch: const {
+        'canEdit': true,
+        'tags': ['b', 'a'],
+      },
+      remoteFields: const {
+        'canEdit': false,
+        'status': 'accepted',
+        'tags': ['a', 'b'],
+      },
+      policies: const {},
+      remoteVersion: ServerVersion(3),
+      pendingBaseVersion: ServerVersion(2),
+      baseFields: const {
+        'canEdit': false,
+        'status': 'pending',
+        'tags': ['b', 'a'],
+      },
+    );
+
+    expect(merged.visibleFields, {
+      'canEdit': true,
+      'status': 'accepted',
+      'tags': ['a', 'b'],
+    });
+    expect(merged.rebasedPendingPatch, {'canEdit': true});
+  });
+
   test('schema transitions are positive and contiguous', () {
     expect(NodusSchemaTransition(from: 2, to: 3).toString(), '2->3');
     expect(() => NodusSchemaTransition(from: 0, to: 1), throwsRangeError);

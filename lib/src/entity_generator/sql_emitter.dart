@@ -2735,6 +2735,39 @@ void _emitSyncInfrastructure(
       ..writeln('end;')
       ..writeln('\$\$;')
       ..writeln()
+      // A pull advances its cursor past every committed sequence, so a
+      // sequence must never commit after a later one. Writers append to the
+      // log one transaction at a time; the statement trigger runs before the
+      // identity allocates any sequence and holds the lock until commit.
+      ..writeln(
+        'create or replace function public.serialize_local_entity_changes()',
+      )
+      ..writeln('returns trigger')
+      ..writeln('language plpgsql')
+      ..writeln("set search_path = ''")
+      ..writeln('as \$\$')
+      ..writeln('begin')
+      ..writeln(
+        '  perform pg_catalog.pg_advisory_xact_lock('
+        "pg_catalog.hashtextextended('nodus.local_entity_changes', 0));",
+      )
+      ..writeln('  return null;')
+      ..writeln('end;')
+      ..writeln('\$\$;')
+      ..writeln(
+        'revoke all on function public.serialize_local_entity_changes() '
+        'from $supabaseApiRoles;',
+      )
+      ..writeln(
+        'drop trigger if exists local_entity_changes_serialize '
+        'on public.local_entity_changes;',
+      )
+      ..writeln(
+        'create trigger local_entity_changes_serialize before insert on '
+        'public.local_entity_changes for each statement execute function '
+        'public.serialize_local_entity_changes();',
+      )
+      ..writeln()
       // Who may pull each change is decided once, when it is recorded, so a
       // pull reads only the rows addressed to its caller instead of judging
       // every account's history.

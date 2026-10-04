@@ -103,6 +103,20 @@ begin
 end;
 $$;
 
+create or replace function public.serialize_local_entity_changes()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('nodus.local_entity_changes', 0));
+  return null;
+end;
+$$;
+revoke all on function public.serialize_local_entity_changes() from public, anon, authenticated, service_role;
+drop trigger if exists local_entity_changes_serialize on public.local_entity_changes;
+create trigger local_entity_changes_serialize before insert on public.local_entity_changes for each statement execute function public.serialize_local_entity_changes();
+
 create table if not exists public.local_entity_change_recipients (
   user_id uuid not null references auth.users (id) on delete cascade,
   sequence bigint not null,

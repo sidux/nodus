@@ -6084,6 +6084,12 @@ final class MergeResolution {
   final JsonMap rebasedPendingPatch;
 }
 
+/// Rebases [pendingPatch] over [remoteFields].
+///
+/// A server-wins field yields only to a remote version newer than the pending
+/// base that changed it. [baseFields], the record at the pending base when
+/// known, tells which fields the remote changed; without it every field of a
+/// newer remote version counts as changed.
 MergeResolution mergeRemoteFields({
   required JsonMap visibleFields,
   required JsonMap pendingPatch,
@@ -6091,6 +6097,7 @@ MergeResolution mergeRemoteFields({
   required Map<String, FieldConflictPolicy> policies,
   required ServerVersion remoteVersion,
   required ServerVersion pendingBaseVersion,
+  JsonMap? baseFields,
 }) {
   final visible = JsonMap.of(visibleFields);
   final pending = JsonMap.of(pendingPatch);
@@ -6109,7 +6116,11 @@ MergeResolution mergeRemoteFields({
       case FieldConflictPolicy.localWins:
         break;
       case FieldConflictPolicy.serverWins:
-        if (remoteIsNewerThanPendingBase) {
+        final remoteChangedField =
+            baseFields == null ||
+            !baseFields.containsKey(entry.key) ||
+            !_sameWireValue(baseFields[entry.key], entry.value);
+        if (remoteIsNewerThanPendingBase && remoteChangedField) {
           visible[entry.key] = entry.value;
           pending.remove(entry.key);
         }
@@ -6117,6 +6128,27 @@ MergeResolution mergeRemoteFields({
   }
 
   return MergeResolution(visibleFields: visible, rebasedPendingPatch: pending);
+}
+
+bool _sameWireValue(Object? left, Object? right) {
+  if (left is List && right is List) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!_sameWireValue(left[index], right[index])) return false;
+    }
+    return true;
+  }
+  if (left is Map && right is Map) {
+    if (left.length != right.length) return false;
+    for (final entry in left.entries) {
+      if (!right.containsKey(entry.key) ||
+          !_sameWireValue(entry.value, right[entry.key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return left == right;
 }
 
 final class LocalPersistenceFailure {

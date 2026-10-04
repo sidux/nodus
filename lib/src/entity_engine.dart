@@ -3198,6 +3198,10 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           target,
           existing.read<int>('id'),
           mutation.syncPatch ?? mutation.patch,
+        ) ||
+        await _wouldOvertakeReferencedWork(
+          existing.read<int>('id'),
+          mutation.syncPatch ?? mutation.patch,
         )) {
       await _insertPushWork(target, mutation, operation);
       return;
@@ -3249,6 +3253,34 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         )
         .getSingleOrNull();
     return later != null;
+  }
+
+  /// Whether merging [nextPatch] into queued work [existingId] would send a
+  /// reference ahead of the queued work that creates or restores its target,
+  /// so the server would reject the reference as unknown.
+  Future<bool> _wouldOvertakeReferencedWork(
+    int existingId,
+    EntityPatch nextPatch,
+  ) async {
+    final next = nextPatch.toWire();
+    for (final field in descriptor.fields) {
+      final reference = field.reference;
+      final targetId = next[field.name];
+      if (reference == null || targetId is! String) continue;
+      final later = await database
+          .customSelect(
+            "select 1 from local_entity_sync_work where direction = 'push' "
+            'and entity_type = ? and entity_id = ? and id > ? limit 1',
+            variables: [
+              Variable.withString(reference.targetEntityType),
+              Variable.withString(targetId),
+              Variable.withInt(existingId),
+            ],
+          )
+          .getSingleOrNull();
+      if (later != null) return true;
+    }
+    return false;
   }
 
   bool _mustPreserveCreateBoundary(
@@ -3499,12 +3531,17 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     for (final pendingRow in pendingRows) {
       final kind = SyncWorkKind.values.byName(pendingRow.read<String>('kind'));
       final pendingPayload = _decodeMap(pendingRow.read<String>('payload'));
-      final patch = _pendingLocalStatePatch(
-        kind: kind,
-        primaryEntityId: pendingRow.read<String>('entity_id'),
-        payload: pendingPayload,
-        entityId: entityId,
-      );
+      final primaryEntityId = pendingRow.read<String>('entity_id');
+      final patch = kind == SyncWorkKind.statePatch
+          ? primaryEntityId == entityId
+                ? _decodeMap(pendingPayload['patch'])
+                : null
+          : _pendingLocalStatePatch(
+              kind: kind,
+              primaryEntityId: primaryEntityId,
+              payload: pendingPayload,
+              entityId: entityId,
+            );
       if (patch == null) continue;
       for (final entry in patch.entries) {
         if (persistedFieldNames.contains(entry.key)) {
@@ -3624,21 +3661,30 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     final policies = {
       for (final field in descriptor.fields) field.name: field.conflictPolicy,
     };
+    // The accepted record is the base of every queued patch made against its
+    // version, so it tells which fields the remote version changed.
+    final acceptedJson = row?.readNullable<String>('accepted_snapshot');
+    final acceptedVersion = row?.read<int>(
+      EntityConventions.serverVersionColumnName,
+    );
     for (final pendingRow in pendingRows) {
       final kind = SyncWorkKind.values.byName(pendingRow.read<String>('kind'));
       final pendingPayload = _decodeMap(pendingRow.read<String>('payload'));
       if (kind == SyncWorkKind.statePatch) {
         if (pendingRow.read<String>('entity_id') != identity.rawId) continue;
         final patch = _decodeMap(pendingPayload['patch']);
+        final pendingBaseVersion = pendingRow.read<int>('base_server_version');
         final resolution = mergeRemoteFields(
           visibleFields: resolved,
           pendingPatch: patch,
           remoteFields: fields.toWire(),
           policies: policies,
           remoteVersion: serverVersion,
-          pendingBaseVersion: ServerVersion(
-            pendingRow.read<int>('base_server_version'),
-          ),
+          pendingBaseVersion: ServerVersion(pendingBaseVersion),
+          baseFields:
+              acceptedJson != null && acceptedVersion == pendingBaseVersion
+              ? _decodeMap(acceptedJson)
+              : null,
         );
         final rebasedPatch = resolution.rebasedPendingPatch;
         resolved
@@ -3682,7 +3728,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     } else {
       await _updateResolved(identity.rawId, resolved, acceptedFields: accepted);
     }
-    await _rebaseFirstPendingPush(identity.rawId, serverVersion);
+    await _rebasePendingPushes(identity.rawId, serverVersion);
     final previousFields = row == null ? null : _fieldsFromRow(row.data);
     return _MergedRemoteProjection(
       fields: resolved,
@@ -3729,33 +3775,44 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     return null;
   }
 
-  Future<void> _rebaseFirstPendingPush(
+  /// Moves queued pushes for [entityId] onto [serverVersion].
+  ///
+  /// Queued operations were made on top of every earlier local operation, so
+  /// once the server has applied an earlier one (or its result was merged into
+  /// them), its version is their base rather than a concurrent remote edit.
+  /// [queuedAfterWorkId] limits the rebase to operations queued after that
+  /// work item.
+  Future<void> _rebasePendingPushes(
     String entityId,
-    ServerVersion serverVersion,
-  ) async {
-    final row = await database
+    ServerVersion serverVersion, {
+    int? queuedAfterWorkId,
+  }) async {
+    final rows = await database
         .customSelect(
           "select id, base_server_version, payload from local_entity_sync_work "
           "where direction = 'push' "
-          "and entity_type = ? and entity_id = ? and status in "
-          "('pending', 'processing', 'retryableFailure') order by id limit 1",
+          "and entity_type = ? and entity_id = ? and id > ? "
+          "and base_server_version < ? and status in "
+          "('pending', 'processing', 'retryableFailure') order by id",
           variables: [
             Variable.withString(descriptor.entityType),
             Variable.withString(entityId),
+            Variable.withInt(queuedAfterWorkId ?? 0),
+            Variable.withInt(serverVersion.value),
           ],
         )
-        .getSingleOrNull();
-    if (row == null) return;
-    if (serverVersion.value <= row.read<int>('base_server_version')) return;
-    final payload = <String, Object?>{
-      ..._decodeMap(row.read<String>('payload')),
-      'baseServerVersion': serverVersion.value,
-    };
-    await database.customStatement(
-      'update local_entity_sync_work set base_server_version = ?, payload = ? '
-      'where id = ?',
-      [serverVersion.value, jsonEncode(payload), row.read<int>('id')],
-    );
+        .get();
+    for (final row in rows) {
+      final payload = <String, Object?>{
+        ..._decodeMap(row.read<String>('payload')),
+        'baseServerVersion': serverVersion.value,
+      };
+      await database.customStatement(
+        'update local_entity_sync_work set base_server_version = ?, '
+        'payload = ? where id = ?',
+        [serverVersion.value, jsonEncode(payload), row.read<int>('id')],
+      );
+    }
   }
 
   Future<void> _insertResolved(
@@ -3962,6 +4019,21 @@ final class LocalEntityGraphCoordinator
   List<RemoteEntityChange> _inCompositionOrder(
     List<RemoteEntityChange> changes,
   ) {
+    // Revocations apply first, so a change the same page lists before an
+    // entity's revocation would restore what the revocation removed.
+    String keyOf(RemoteEntityChange change) =>
+        '${change.identity.entityType}\u0000${change.identity.rawId}';
+    final revokedAt = <String, int>{
+      for (final (index, change) in changes.indexed)
+        if (change.isRevocation) keyOf(change): index,
+    };
+    if (revokedAt.isNotEmpty) {
+      changes = [
+        for (final (index, change) in changes.indexed)
+          if (change.isRevocation || (revokedAt[keyOf(change)] ?? -1) < index)
+            change,
+      ];
+    }
     if (_compositionDepth.isEmpty) return changes;
     int depthOf(RemoteEntityChange change) => change.isRevocation
         ? 0
@@ -5049,11 +5121,13 @@ final class LocalEntityGraphCoordinator
   }
 
   Future<void> _schedulePullInCurrentTransaction(SyncTargetId target) async {
+    // A pull already in flight read the server before this request, so it
+    // cannot satisfy it; only one that has not started yet can.
     final existing = await database
         .customSelect(
           "select id from local_entity_sync_work where direction = 'pull' "
           "and sync_target = ? "
-          "and status in ('pending', 'processing', 'retryableFailure') limit 1",
+          "and status in ('pending', 'retryableFailure') limit 1",
           variables: [Variable.withString(target.wireName)],
         )
         .getSingleOrNull();
@@ -5205,7 +5279,7 @@ final class LocalEntityGraphCoordinator
         // Remaining operations for this identity happened after the scope
         // operation just acknowledged. Rebase before conflict resolution so
         // the server receipt is not mistaken for a concurrent remote edit.
-        await engine._rebaseFirstPendingPush(
+        await engine._rebasePendingPushes(
           change.identity.rawId,
           change.serverVersion,
         );
@@ -5259,6 +5333,36 @@ final class LocalEntityGraphCoordinator
     await _workChanged();
   }
 
+  /// Removes the queued work [operationId] acknowledges and returns its id.
+  ///
+  /// One operation can produce several changes in a page, so the id stays in
+  /// [acknowledgedWorkIds] for the changes after the first.
+  Future<int?> _takeAcknowledgedWork(
+    SyncTargetId target,
+    SyncOperationId operationId,
+    Map<String, int> acknowledgedWorkIds,
+  ) async {
+    final known = acknowledgedWorkIds[operationId.value];
+    if (known != null) return known;
+    final row = await database
+        .customSelect(
+          'select id from local_entity_sync_work '
+          'where sync_target = ? and operation_id = ? order by id limit 1',
+          variables: [
+            Variable.withString(target.wireName),
+            Variable.withString(operationId.value),
+          ],
+        )
+        .getSingleOrNull();
+    if (row == null) return null;
+    await database.customStatement(
+      'delete from local_entity_sync_work '
+      'where sync_target = ? and operation_id = ?',
+      [target.wireName, operationId.value],
+    );
+    return acknowledgedWorkIds[operationId.value] = row.read<int>('id');
+  }
+
   Future<void> _completePull(PullSyncWorkItem item, PullResult result) async {
     final resolved =
         <
@@ -5268,6 +5372,7 @@ final class LocalEntityGraphCoordinator
             _MergedRemoteProjection,
           )
         >[];
+    final acknowledgedWorkIds = <String, int>{};
     await database.transaction(() async {
       for (final change in _inCompositionOrder(result.changes)) {
         final engine = _engineForRemoteChange(
@@ -5288,12 +5393,23 @@ final class LocalEntityGraphCoordinator
           ));
           continue;
         }
-        if (change.sourceOperationId != null) {
-          await database.customStatement(
-            'delete from local_entity_sync_work '
-            'where sync_target = ? and operation_id = ?',
-            [item.target.wireName, change.sourceOperationId!.value],
+        final sourceOperationId = change.sourceOperationId;
+        if (sourceOperationId != null) {
+          final acknowledgedWorkId = await _takeAcknowledgedWork(
+            item.target,
+            sourceOperationId,
+            acknowledgedWorkIds,
           );
+          // A pulled receipt of this device's own operation (for example
+          // after its push reply was lost) is the base of everything queued
+          // after it, not a concurrent edit those operations must yield to.
+          if (acknowledgedWorkId != null) {
+            await engine._rebasePendingPushes(
+              change.identity.rawId,
+              change.serverVersion,
+              queuedAfterWorkId: acknowledgedWorkId,
+            );
+          }
         }
         resolved.add((
           engine,
@@ -5310,6 +5426,14 @@ final class LocalEntityGraphCoordinator
         [result.nextSequence.value, item.target.wireName],
       );
       if (result.hasMore) {
+        // A pull requested meanwhile continues from the advanced cursor.
+        await database.customStatement(
+          'delete from local_entity_sync_work where id = ? and exists ('
+          "select 1 from local_entity_sync_work where direction = 'pull' "
+          "and sync_target = ? and id <> ? and status in "
+          "('pending', 'retryableFailure'))",
+          [item.id, item.target.wireName, item.id],
+        );
         await database.customStatement(
           "update local_entity_sync_work set status = 'pending' where id = ?",
           [item.id],

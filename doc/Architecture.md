@@ -2404,7 +2404,10 @@ target adapter signal, foreground, reconnect, or periodic recovery
 This flow applies only to replicated and imported entities. Realtime is a
 latency hint, not the correctness mechanism. Signals may be
 duplicated, delayed, or lost. An ordered durable change log and cursor provide
-recovery. Every pull-capable target lane owns an independent durable cursor,
+recovery. Writers append to the log one transaction at a time, so no sequence
+commits after a later one and a cursor never passes a change it has not read.
+A pull already reading the server does not satisfy a signal that arrives
+meanwhile; the signal requests another pull. Every pull-capable target lane owns an independent durable cursor,
 retry state, signal subscription, and diagnostics. Resources are shared per
 target, not allocated per entity.
 
@@ -2436,12 +2439,20 @@ constrained relationship that cannot be implemented by the selected adapters.
 Replicated conflict detection uses authoritative server or ordered-scope
 versions and accepted base, not timestamps. The runtime rebases remaining
 pending operations over a new canonical base according to generated field,
-transition, action, and ordering policies.
+transition, action, and ordering policies. Every operation queued after one the
+server acknowledges, whether through its reply or a pulled receipt after a lost
+reply, was made on top of it, so the acknowledged version becomes its base
+rather than a concurrent edit it must yield to. A server-wins field yields only
+to a newer remote version that changed it since the pending base, so an
+unrelated concurrent edit never discards it. Queued work never merges a
+reference ahead of the queued work that creates or restores its target.
 
 Conflict policies MUST be deterministic, typed, and declared once. Automatic
 resolution is allowed only where field semantics make it safe. Rejection must
-restore or rebase the visible projection without losing the accepted base and
-must expose typed diagnostic state.
+restore or rebase the visible projection without losing the accepted base or
+the operations still queued after the rejected one, and must expose typed
+diagnostic state. A pulled page that revokes an entity removes it even when the
+same page lists an earlier change to it.
 
 Imported entities replace their accepted projection from ordered remote input
 and have no local-write conflict policy. Export rejection preserves the
