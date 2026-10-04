@@ -3334,6 +3334,31 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     SyncTargetId target,
     LocalEntityMutation mutation,
     PushOperation operation,
+  ) async {
+    await _insertPushWorkRow(target, mutation, operation);
+    // The mutation's base comes from the in-memory entity, which can trail a
+    // remote version just merged into the database; the work is built on that
+    // accepted version all the same.
+    final accepted = await database
+        .customSelect(
+          'select ${EntityConventions.serverVersionColumnName} as version '
+          'from ${descriptor.tableName} '
+          'where ${EntityConventions.idColumnName} = ?',
+          variables: [Variable.withString(mutation.entityId)],
+        )
+        .getSingleOrNull();
+    if (accepted != null) {
+      await _rebasePendingPushes(
+        mutation.entityId,
+        ServerVersion(accepted.read<int>('version')),
+      );
+    }
+  }
+
+  Future<void> _insertPushWorkRow(
+    SyncTargetId target,
+    LocalEntityMutation mutation,
+    PushOperation operation,
   ) => database.customStatement(
     'insert into local_entity_sync_work '
     '(sync_target, direction, kind, status, entity_type, entity_id, operation_id, '
@@ -3664,9 +3689,16 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           ],
         )
         .get();
+    // A version already accepted, such as a pulled echo of a push this device
+    // already applied, carries nothing new; merging it again would make
+    // queued work look older than the server.
     if (row != null &&
-        serverVersion.value <
+        serverVersion.value <=
             row.read<int>(EntityConventions.serverVersionColumnName)) {
+      await _rebasePendingPushes(
+        identity.rawId,
+        ServerVersion(row.read<int>(EntityConventions.serverVersionColumnName)),
+      );
       return _MergedRemoteProjection(
         fields: _fieldsFromRow(row.data),
         inserted: false,
