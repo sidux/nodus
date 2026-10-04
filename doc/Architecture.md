@@ -1552,7 +1552,10 @@ root and hierarchy descriptor, rejects cycles, traverses the durable local
 projection recursively in bounded pages, keeps identities only for the active
 page, and orders parent/child lifecycle safely. Removal and archive are
 children-first where required; restoration is parent-first and rejects a root
-whose external parent is still deleted. For separately owned entities,
+whose external parent is still deleted. Restoring or unarchiving brings back
+only descendants removed or archived by the same operation as the root, so a
+descendant removed on its own earlier stays removed. For separately owned
+entities,
 foreign-owned descendants count as skipped rather than receiving unauthorized
 mutations. Feature code MUST NOT reconstruct descendants from a bounded
 identity map or issue its own recursive lifecycle loop.

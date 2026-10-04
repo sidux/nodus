@@ -2973,6 +2973,9 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln('    rootId: rootId.value,')
       ..writeln("    parentFieldName: '${parentField.name}',")
       ..writeln('    requireActiveExternalParent: true,')
+      ..writeln(
+        "    sameOperationStampFieldName: '${spec.deletedAtField!.name}',",
+      )
       ..writeln('    pageSize: pageSize,')
       ..writeln('    action: (entity) async {');
     if (cachesAuthenticatedOwner) {
@@ -2998,6 +3001,10 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         ..writeln('    rootId: rootId.value,')
         ..writeln("    parentFieldName: '${parentField.name}',")
         ..writeln('    childrenFirst: archived,')
+        ..writeln(
+          '    sameOperationStampFieldName: archived ? null : '
+          "'${spec.archivedAtField!.name}',",
+        )
         ..writeln('    pageSize: pageSize,')
         ..writeln('    action: (entity) async {');
       if (cachesAuthenticatedOwner) {

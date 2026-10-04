@@ -2,6 +2,10 @@ part of '../nodus.dart';
 
 final Object _relationshipOutboundSuppressionZoneKey = Object();
 
+/// How long one hierarchy removal may take between its first descendant and
+/// its root.
+const _sameOperationStampWindow = Duration(seconds: 3);
+
 enum EntityFieldKind { text, uuid, boolean, integer, real, date, timestamp }
 
 @TableIndex.sql(
@@ -2151,6 +2155,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     required Future<bool> Function(E entity) action,
     bool childrenFirst = false,
     bool requireActiveExternalParent = false,
+    String? sameOperationStampFieldName,
     int pageSize = 100,
   }) async {
     if (_closing) throw StateError('The entity engine is closed.');
@@ -2178,6 +2183,25 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         entityId: rootId,
       );
     }
+    // Undoing a removal restores only what that removal stamped: removal
+    // runs children first just before its root, so a descendant stamped
+    // well before the root was removed on its own and stays removed.
+    final stampField = sameOperationStampFieldName == null
+        ? null
+        : _field(sameOperationStampFieldName);
+    DateTime? stampOf(QueryRow row) {
+      final value = stampField?.fromDatabase(row.data[stampField.columnName]);
+      return value is String ? DateTime.parse(value) : null;
+    }
+
+    final rootStamp = stampOf(rootRow);
+    bool removedSeparately(QueryRow row) {
+      if (rootStamp == null) return false;
+      final stamp = stampOf(row);
+      return stamp != null &&
+          stamp.isBefore(rootStamp.subtract(_sameOperationStampWindow));
+    }
+
     final deletedAtField = _field(EntityConventions.deletedAtFieldName);
     if (requireActiveExternalParent) {
       final parentId = rootRow.data[parentField.columnName] as String?;
@@ -2258,6 +2282,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       final entities = <E>[];
       final retainedIds = <String>[];
       for (final row in rows) {
+        if (removedSeparately(row)) continue;
         final entity = _materializeRow(row);
         entities.add(entity.generatedDomain);
         if (descriptor.cardinality == Cardinality.unbounded) {
