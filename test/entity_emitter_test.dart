@@ -1473,6 +1473,80 @@ void main() {
         'target_row.invitee_id = candidate.user_id',
       ),
     );
+    expect(
+      graphSql,
+      contains(
+        '    cross join lateral (select edge.invitee_id as user_id) audience\n'
+        '    where edge.deleted_at is null\n'
+        '    and (\n'
+        '      edge.owner_id = p_principal\n'
+        '      or edge.invitee_id = p_principal\n'
+        '    )\n',
+      ),
+      reason:
+          'a departing principal revokes its participant rows for the '
+          'other participant before the identity cascade removes them',
+    );
+  });
+
+  test('principal retirement hands collaborative aggregates on', () {
+    final sql = emitEntityGraphSupabaseSql(
+      _supabaseGraph(
+        className: 'Example',
+        inputImport: 'package:example/entity_graph.dart',
+        schemaVersion: 1,
+        entities: [spec],
+      ),
+    );
+
+    expect(
+      sql,
+      contains(
+        'create or replace function '
+        'public.retire_example_graph_principal(p_principal uuid)',
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        'revoke all on function public.retire_example_graph_principal(uuid) '
+        'from public, anon, authenticated, service_role;',
+      ),
+    );
+    expect(
+      sql,
+      isNot(
+        contains('on function public.retire_example_graph_principal(uuid) to'),
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        '      select member.user_id from public.work_item_members member\n'
+        '      where member.work_item_id = root.id\n'
+        '        and member.active\n'
+        '        and member.user_id <> p_principal\n'
+        '      order by member.user_id\n',
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        '    delete from public.work_item_members\n'
+        '    where work_item_id = handover.entity_id\n'
+        '      and user_id = handover.successor_id;\n'
+        '    update public.work_items\n'
+        '    set owner_id = handover.successor_id,',
+      ),
+      reason: 'a successor stops being a collaborator on what it now owns',
+    );
+    expect(
+      sql,
+      contains(
+        '  delete from public.work_item_members\n'
+        '  where user_id = p_principal;',
+      ),
+    );
   });
 
   test('create-only entities omit unreachable patch infrastructure', () {

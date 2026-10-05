@@ -2474,6 +2474,8 @@ group deterministically emits entity-owned remote schema:
 - tables, columns, SQL types, defaults, checks, indexes, and foreign keys;
 - synchronization metadata and ordered change capture;
 - mode-required idempotent push and ordered pull functions;
+- a server-only principal retirement function run before an identity is
+  removed;
 - payload validation and compatible-policy protocol upcasting;
 - RLS policies, grants, and required helper predicates when authorization is
   derivable without ambiguity;
@@ -2536,6 +2538,18 @@ reject an offline mutation.
 
 Direct table writes that bypass optimistic concurrency, idempotency, capture,
 or authorization are forbidden for ordinary clients.
+
+Removing an authenticated identity hard-deletes the rows it owns, and a hard
+delete is never captured. The identity removal entry point therefore runs the
+generated principal retirement in the same transaction first. Each
+collaborative aggregate with an accepted collaborator passes, with every row
+that derives its owner from it, its compositions, and the targets linked into
+it, to the longest-standing accepted collaborator, preferring one who may
+edit, who last receives it as its owner. Every other audience that can read a
+row about to disappear receives a revocation or tombstone, addressed copies of
+the principal's remaining rows become identity-only revocations, and the
+principal's own history is purged. Applications MUST NOT hand-write that
+policy per entity.
 
 ## 12. Serialization and API boundaries
 

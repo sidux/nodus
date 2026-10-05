@@ -14,6 +14,10 @@
   both without requiring an unused restriction kind.
 - Includes direct collaboration, ordering, archiving, soft deletion, activity
   tracking, and deterministic in-memory synchronization support.
+- Generates a server-only principal retirement step that hands collaborative
+  aggregates to their longest-standing accepted collaborator, preferring an
+  editor, and revokes every other audience before an account identity is
+  removed.
 - Enforces immutable persisted declarations and routes durable changes through
   typed actions or mutation drafts; JSON/object and collection persistence are
   rejected in favor of native scalar fields and normalized relationships.

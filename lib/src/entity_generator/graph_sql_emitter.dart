@@ -78,6 +78,7 @@ String emitEntityGraphSupabaseSql(EntityGraphSpec graph) {
   final workflowCollaborationSql = _emitWorkflowCollaborationSql(graph);
   final relationshipAccessSql = _emitRelationshipAccessSql(graph);
   final compositionSql = _emitCompositionSql(graph);
+  final principalRetirementSql = _emitPrincipalRetirementSql(graph);
 
   return '''-- GENERATED FILE. DO NOT EDIT.
 -- Source: ${graph.inputImport}
@@ -209,7 +210,477 @@ end;
 
 revoke all on function public.$functionName(bigint) from $supabaseApiRoles;
 grant execute on function public.$functionName(bigint) to authenticated;
+
+$principalRetirementSql
 ''';
+}
+
+/// Emits the step that runs before a principal's identity is removed.
+///
+/// Identity removal hard-deletes every row the principal owns through the
+/// owner foreign keys, and a hard delete is never captured as a change. This
+/// step therefore first hands each collaborative aggregate with an active
+/// collaborator to its longest-standing collaborator, preferring one who may
+/// edit, then tells every other audience what it is about to lose, so no
+/// client keeps a stale copy.
+String _emitPrincipalRetirementSql(EntityGraphSpec graph) {
+  final functionName = 'retire_${snakeCase(graph.className)}_graph_principal';
+  final owned = graph.entities
+      .where((entity) => entity.ownership == Ownership.separate)
+      .toList(growable: false);
+  final ownedClasses = {for (final entity in owned) entity.className};
+  final byClass = {
+    for (final entity in graph.entities) entity.className: entity,
+  };
+
+  final succession = graph.entities
+      .where((entity) => entity.security.collaboration != null)
+      .where((entity) => ownedClasses.contains(entity.className))
+      .map((target) => _successionSql(graph, target))
+      .join('\n');
+
+  final repairs = <String>[];
+  for (final entity in owned) {
+    for (final field in entity.ownershipReferenceFields) {
+      final target = byClass[field.reference!.targetClassName]!;
+      final guards = entity.participantFields
+          .map(
+            (participant) =>
+                '\n        and dependent.${participant.columnName} is distinct '
+                'from target.${field.reference!.ownershipSourceColumnName}',
+          )
+          .join();
+      repairs.add(
+        _repairSql(
+          entity,
+          comment:
+              '${entity.className} follows its owner reference '
+              '${field.name}.',
+          update:
+              'update public.${entity.tableName} dependent\n'
+              '      set ${entity.ownerField.columnName} = '
+              'target.${field.reference!.ownershipSourceColumnName},\n'
+              '        ${entity.serverVersionField.columnName} = '
+              'dependent.${entity.serverVersionField.columnName} + 1\n'
+              '      from public.${target.tableName} target\n'
+              '      where target.${target.idField.columnName} = '
+              'dependent.${field.columnName}\n'
+              '        and dependent.${entity.ownerField.columnName} = '
+              'p_principal\n'
+              '        and target.${field.reference!.ownershipSourceColumnName} '
+              '<> p_principal$guards\n'
+              '      returning dependent.${entity.idField.columnName} as id',
+        ),
+      );
+    }
+  }
+  for (final aggregate in graph.entities) {
+    for (final field in aggregate.fields.where(
+      (field) => field.isComposition,
+    )) {
+      final component = byClass[field.reference!.targetClassName]!;
+      if (!ownedClasses.contains(component.className) ||
+          !ownedClasses.contains(aggregate.className)) {
+        continue;
+      }
+      repairs.add(
+        _repairSql(
+          component,
+          comment:
+              '${component.className} follows its aggregate '
+              '${aggregate.className}.${field.name}.',
+          update:
+              'update public.${component.tableName} dependent\n'
+              '      set ${component.ownerField.columnName} = '
+              'aggregate.${aggregate.ownerField.columnName},\n'
+              '        ${component.serverVersionField.columnName} = '
+              'dependent.${component.serverVersionField.columnName} + 1\n'
+              '      from public.${aggregate.tableName} aggregate\n'
+              '      where aggregate.${field.columnName} = '
+              'dependent.${component.idField.columnName}\n'
+              '        and dependent.${component.ownerField.columnName} = '
+              'p_principal\n'
+              '        and aggregate.${aggregate.ownerField.columnName} '
+              '<> p_principal\n'
+              '      returning dependent.${component.idField.columnName} as id',
+        ),
+      );
+    }
+  }
+  for (final link in owned.where((entity) => entity.hasOwnershipReference)) {
+    for (final field in link.accessTargetFields) {
+      if (field.isOwnerReference ||
+          field.isComposition ||
+          field.accessTargetThroughColumnName != null) {
+        continue;
+      }
+      final target = byClass[field.reference!.targetClassName]!;
+      if (!ownedClasses.contains(target.className)) continue;
+      final active = [
+        'link.${field.columnName} = dependent.${target.idField.columnName}',
+        'link.${link.ownerField.columnName} <> p_principal',
+        ..._relationshipActivePredicates(link, field, rowAlias: 'link'),
+      ].join('\n            and ');
+      repairs.add(
+        _repairSql(
+          target,
+          comment:
+              '${target.className} shared through ${link.className} '
+              'follows the owner of that link.',
+          update:
+              'update public.${target.tableName} dependent\n'
+              '      set ${target.ownerField.columnName} = (\n'
+              '          select link.${link.ownerField.columnName} '
+              'from public.${link.tableName} link\n'
+              '          where $active\n'
+              '          order by link.${link.idField.columnName}\n'
+              '          limit 1\n'
+              '        ),\n'
+              '        ${target.serverVersionField.columnName} = '
+              'dependent.${target.serverVersionField.columnName} + 1\n'
+              '      where dependent.${target.ownerField.columnName} = '
+              'p_principal\n'
+              '        and exists (\n'
+              '          select 1 from public.${link.tableName} link\n'
+              '          where $active\n'
+              '        )\n'
+              '      returning dependent.${target.idField.columnName} as id',
+        ),
+      );
+    }
+  }
+
+  final retirements = <String>[
+    for (final target in graph.entities)
+      if (target.security.collaboration case final collaboration?
+          when collaboration.isDirect)
+        '  -- Retire the principal\'s direct ${target.className} memberships.\n'
+            '  delete from public.${collaboration.membershipTable}\n'
+            '  where ${collaboration.userForeignKey} = p_principal;',
+  ];
+  for (final entity in owned) {
+    final edge = _edgeRetirementSql(graph, entity, byClass);
+    if (edge != null) retirements.add(edge);
+  }
+  final detachments = <String>[];
+  final restrictedDeletes = <String>[];
+  for (final entity in owned) {
+    for (final field in entity.fields) {
+      final reference = field.reference;
+      if (reference == null ||
+          field.isOwnerReference ||
+          !ownedClasses.contains(reference.targetClassName)) {
+        continue;
+      }
+      final target = byClass[reference.targetClassName]!;
+      final referencesRetiredRow =
+          'dependent.${entity.ownerField.columnName} <> p_principal\n'
+          '    and dependent.${field.columnName} in (\n'
+          '      select target.${target.idField.columnName} '
+          'from public.${target.tableName} target\n'
+          '      where target.${target.ownerField.columnName} = p_principal\n'
+          '    )';
+      final version =
+          '${entity.serverVersionField.columnName} = '
+          'dependent.${entity.serverVersionField.columnName} + 1';
+      if (field.nullable &&
+          (reference.hierarchy ||
+              reference.onDelete == ReferenceDeleteAction.setNull)) {
+        detachments.add(
+          '  -- ${entity.className}.${field.name} detaches from a retired '
+          '${target.className}.\n'
+          '  update public.${entity.tableName} dependent\n'
+          '  set ${field.columnName} = null, $version\n'
+          '  where $referencesRetiredRow;',
+        );
+        continue;
+      }
+      final deletedAt = entity.deletedAtField;
+      if (deletedAt != null) {
+        detachments.add(
+          '  -- ${entity.className}.${field.name} loses a retired '
+          '${target.className}.\n'
+          '  update public.${entity.tableName} dependent\n'
+          '  set ${deletedAt.columnName} = now(), $version\n'
+          '  where dependent.${deletedAt.columnName} is null\n'
+          '    and $referencesRetiredRow;',
+        );
+      }
+      if (reference.onDelete == ReferenceDeleteAction.restrict) {
+        restrictedDeletes.add(
+          '  delete from public.${entity.tableName} dependent\n'
+          '  where $referencesRetiredRow;',
+        );
+      }
+    }
+  }
+
+  final reannouncements = owned
+      .map(
+        (entity) =>
+            '  update public.${entity.tableName} successor\n'
+            '  set ${entity.serverVersionField.columnName} = '
+            'successor.${entity.serverVersionField.columnName} + 1\n'
+            '  where successor.${entity.idField.columnName} in (\n'
+            '    select succession.entity_id '
+            'from pg_temp.nodus_principal_successions succession\n'
+            "    where succession.entity_type = ${_sqlLiteral(entity.className)}\n"
+            '  );',
+      )
+      .join('\n');
+
+  return '''-- Ownership succession and audience-safe retirement before a principal's
+-- identity is removed. Callers delete the identity in the same transaction.
+
+create or replace function public.$functionName(p_principal uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as \$\$
+declare
+  handover record;
+  moved_count bigint;
+  repaired bigint;
+begin
+  if p_principal is null then
+    raise exception 'Principal required' using errcode = '22004';
+  end if;
+  create temporary table if not exists nodus_principal_successions (
+    entity_type text not null,
+    entity_id uuid not null,
+    primary key (entity_type, entity_id)
+  ) on commit drop;
+  truncate pg_temp.nodus_principal_successions;
+
+$succession
+  -- Rows derived from a successor-owned row follow it until nothing moves.
+  loop
+    repaired := 0;
+${repairs.join('\n')}
+    exit when repaired = 0;
+  end loop;
+
+${retirements.join('\n\n')}
+
+${detachments.join('\n\n')}
+
+  -- A successor last sees its inherited rows as their owner, after any
+  -- revocation its own retired membership published.
+$reannouncements
+
+${restrictedDeletes.join('\n\n')}
+
+  -- Every row still owned by the principal is removed with its identity, so
+  -- its addressed copies become identity-only revocations. Addressed copies
+  -- of inherited rows are superseded by their reannouncement. Everything
+  -- else the principal could read is purged.
+  with addressed as (
+    delete from public.local_entity_changes changes
+    where changes.owner_id = p_principal
+      and changes.audience_user_id is not null
+      and changes.audience_user_id <> p_principal
+    returning changes.sequence, changes.entity_type, changes.entity_id,
+      changes.owner_id, changes.server_version, changes.audience_user_id
+  )
+  insert into public.local_entity_changes (
+    entity_type, entity_id, owner_id, server_version,
+    operation_id, audience_user_id, is_revocation, record
+  )
+  select distinct on (addressed.entity_type, addressed.entity_id, addressed.audience_user_id)
+    addressed.entity_type, addressed.entity_id, addressed.owner_id,
+    addressed.server_version, null::uuid, addressed.audience_user_id, true,
+    jsonb_build_object('id', addressed.entity_id)
+  from addressed
+  where not exists (
+    select 1 from pg_temp.nodus_principal_successions succession
+    where succession.entity_type = addressed.entity_type
+      and succession.entity_id = addressed.entity_id
+  )
+  order by addressed.entity_type, addressed.entity_id,
+    addressed.audience_user_id, addressed.sequence desc;
+  delete from public.local_entity_changes changes
+  where changes.audience_user_id = p_principal
+    or (changes.audience_user_id is null and changes.owner_id = p_principal);
+  delete from public.local_entity_operation_receipts receipts
+  where receipts.user_id = p_principal;
+end;
+\$\$;
+
+revoke all on function public.$functionName(uuid) from $supabaseApiRoles;''';
+}
+
+String _successionSql(EntityGraphSpec graph, EntitySpec target) {
+  final collaboration = target.security.collaboration!;
+  final String entityKey;
+  final String userKey;
+  final String activeMember;
+  final String order;
+  // A direct membership is a server-only row, so the successor's own row is
+  // simply removed. A workflow membership is an entity and is retired with
+  // the other rows that connect the principal to another user.
+  final String retireSuccessorMembership;
+  if (collaboration.isWorkflow) {
+    final membership = graph.entities.singleWhere(
+      (entity) => entity.tableName == collaboration.membershipTable,
+    );
+    final workflow = membership.workflowMembership!;
+    entityKey = workflow.targetReference.columnName;
+    userKey = workflow.participant.columnName;
+    activeMember = [
+      _workflowStatePredicate(
+        'member.${workflow.status.columnName}',
+        collaboration,
+        includeReadableStates: false,
+      ),
+      if (membership.deletedAtField case final deletedAt?)
+        'member.${deletedAt.columnName} is null',
+    ].join('\n        and ');
+    final createdAt = membership.fields
+        .where((field) => field.name == EntityConventions.createdAtFieldName)
+        .firstOrNull;
+    // A member trusted to edit inherits before a read-only one.
+    order = [
+      if (collaboration.editPermissionField case final canEdit?)
+        'member.$canEdit desc',
+      if (createdAt != null) 'member.${createdAt.columnName}',
+      'member.${membership.idField.columnName}',
+    ].join(', ');
+    retireSuccessorMembership = '';
+  } else {
+    entityKey = collaboration.entityForeignKey;
+    userKey = collaboration.userForeignKey;
+    activeMember = 'member.${collaboration.activeField}';
+    order = 'member.$userKey';
+    retireSuccessorMembership =
+        '    delete from public.${collaboration.membershipTable}\n'
+        '    where $entityKey = handover.entity_id\n'
+        '      and $userKey = handover.successor_id;\n';
+  }
+  final liveRoot = target.deletedAtField == null
+      ? ''
+      : '\n      and root.${target.deletedAtField!.columnName} is null';
+  final owner = target.ownerField.columnName;
+  return '''  -- ${target.className} passes to its longest-standing active collaborator,
+  -- preferring one who may edit.
+  for handover in
+    select root.${target.idField.columnName} as entity_id, (
+      select member.$userKey from public.${collaboration.membershipTable} member
+      where member.$entityKey = root.${target.idField.columnName}
+        and $activeMember
+        and member.$userKey <> p_principal
+      order by $order
+      limit 1
+    ) as successor_id
+    from public.${target.tableName} root
+    where root.$owner = p_principal$liveRoot
+  loop
+    continue when handover.successor_id is null;
+$retireSuccessorMembership    update public.${target.tableName}
+    set $owner = handover.successor_id,
+      ${target.serverVersionField.columnName} = ${target.serverVersionField.columnName} + 1
+    where ${target.idField.columnName} = handover.entity_id;
+    insert into pg_temp.nodus_principal_successions (entity_type, entity_id)
+    values (${_sqlLiteral(target.className)}, handover.entity_id)
+    on conflict do nothing;
+  end loop;
+''';
+}
+
+String _repairSql(
+  EntitySpec entity, {
+  required String comment,
+  required String update,
+}) =>
+    '''    -- $comment
+    with moved as (
+      $update
+    )
+    insert into pg_temp.nodus_principal_successions (entity_type, entity_id)
+    select ${_sqlLiteral(entity.className)}, moved.id from moved
+    on conflict do nothing;
+    get diagnostics moved_count = row_count;
+    repaired := repaired + moved_count;''';
+
+/// Retires live participant and relationship rows that connect the principal
+/// to another user. Each row is revoked for its audience other than its owner
+/// first, because that audience can no longer read the tombstone once the
+/// identity cascade removes the row; the owner reads the tombstone itself.
+String? _edgeRetirementSql(
+  EntityGraphSpec graph,
+  EntitySpec entity,
+  Map<String, EntitySpec> byClass,
+) {
+  final directTargets = [
+    for (final field in entity.accessTargetFields)
+      if (!field.isComposition &&
+          field.accessTargetThroughColumnName == null &&
+          byClass[field.reference!.targetClassName]!.ownership ==
+              Ownership.separate)
+        (field, byClass[field.reference!.targetClassName]!),
+  ];
+  if (entity.participantFields.isEmpty && directTargets.isEmpty) return null;
+
+  final owner = 'edge.${entity.ownerField.columnName}';
+  final connections = [
+    '$owner = p_principal',
+    for (final participant in entity.participantFields)
+      'edge.${participant.columnName} = p_principal',
+    for (final (field, target) in directTargets)
+      'exists (select 1 from public.${target.tableName} target '
+          'where target.${target.idField.columnName} = '
+          'edge.${field.columnName} and '
+          'target.${target.ownerField.columnName} = p_principal)',
+  ];
+  final live = entity.deletedAtField == null
+      ? ''
+      : 'edge.${entity.deletedAtField!.columnName} is null\n    and ';
+  final retired = '$live(\n      ${connections.join('\n      or ')}\n    )';
+
+  final audience = entity.accessTargetFields.isEmpty
+      ? entity.participantFields
+            .map(
+              (participant) =>
+                  'select edge.${participant.columnName} as user_id',
+            )
+            .join(' union ')
+      : _relationshipAudienceSelect(graph, entity, rowAlias: 'edge');
+  final revocation =
+      '''  with revoked as (
+    select edge.${entity.idField.columnName} as entity_id,
+      edge.${entity.ownerField.columnName} as owner_id,
+      edge.${entity.serverVersionField.columnName} as server_version,
+      audience.user_id
+    from public.${entity.tableName} edge
+    cross join lateral ($audience) audience
+    where $retired
+      and audience.user_id is not null
+      and audience.user_id <> p_principal
+      and audience.user_id <> $owner
+  ), replaced as (
+    delete from public.local_entity_changes changes
+    using revoked
+    where changes.entity_type = ${_sqlLiteral(entity.className)}
+      and changes.entity_id = revoked.entity_id
+      and changes.audience_user_id = revoked.user_id
+  )
+  insert into public.local_entity_changes (
+    entity_type, entity_id, owner_id, server_version,
+    operation_id, audience_user_id, is_revocation, record
+  )
+  select distinct ${_sqlLiteral(entity.className)}, revoked.entity_id,
+    revoked.owner_id, revoked.server_version, null::uuid, revoked.user_id, true,
+    jsonb_build_object('id', revoked.entity_id)
+  from revoked;
+''';
+  final tombstone = entity.deletedAtField == null
+      ? ''
+      : '''  update public.${entity.tableName} edge
+  set ${entity.deletedAtField!.columnName} = now(),
+    ${entity.serverVersionField.columnName} = edge.${entity.serverVersionField.columnName} + 1
+  where $retired;''';
+  return '  -- Retire ${entity.className} rows connecting the principal to '
+      'another user.\n$revocation$tombstone';
 }
 
 /// The `case` branch listing who may pull a change to [entity]: its owner and
