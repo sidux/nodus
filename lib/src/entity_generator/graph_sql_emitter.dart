@@ -316,6 +316,10 @@ String _emitPrincipalRetirementSql(EntityGraphSpec graph) {
       }
       final target = byClass[field.reference!.targetClassName]!;
       if (!ownedClasses.contains(target.className)) continue;
+      // A target unique per owner, such as a tag name, could collide with the
+      // link owner's own row and fail the whole retirement, so it leaves with
+      // the principal and its links are retired instead.
+      if (_hasOwnerScopedUniqueIndex(target)) continue;
       final active = [
         'link.${field.columnName} = dependent.${target.idField.columnName}',
         'link.${link.ownerField.columnName} <> p_principal',
@@ -2120,3 +2124,9 @@ List<EntitySpec> _dependencyOrder(EntityGraphSpec graph) {
   }
   return ordered;
 }
+
+bool _hasOwnerScopedUniqueIndex(EntitySpec entity) =>
+    entity.postgresIndexes.any(
+      (index) =>
+          index.unique && index.fieldNames.contains(entity.ownerField.name),
+    );
