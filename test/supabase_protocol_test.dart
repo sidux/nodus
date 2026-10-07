@@ -306,6 +306,91 @@ void main() {
     },
   );
 
+  test('a change recorded before a field existed decodes with the field\'s '
+      'default, or null when it has none and may be empty', () async {
+    final fixture = _fixture(
+      {
+        'changes': [
+          {
+            'sequence': 1,
+            'entity_type': 'Note',
+            'record': {
+              'id': 'a0000000-0000-7000-8000-000000000001',
+              'is_active': true,
+              'server_version': 1,
+            },
+            'server_version': 1,
+            'operation_id': null,
+            'is_revocation': false,
+          },
+        ],
+        'nextSequence': 1,
+        'hasMore': false,
+      },
+      descriptors: const [
+        TestDescriptor<_TestEntity>(
+          fields: [
+            ..._laterFields,
+            EntityFieldDescriptor(
+              name: 'priority',
+              columnName: 'priority',
+              kind: EntityFieldKind.integer,
+              nullable: false,
+              mutable: true,
+              conflictPolicy: FieldConflictPolicy.localWins,
+              hasProtocolDefault: true,
+              protocolDefault: 0,
+            ),
+            EntityFieldDescriptor(
+              name: 'note',
+              columnName: 'note',
+              kind: EntityFieldKind.text,
+              nullable: true,
+              mutable: true,
+              conflictPolicy: FieldConflictPolicy.localWins,
+            ),
+          ],
+        ),
+      ],
+    );
+    addTearDown(fixture.dispose);
+
+    final result = await fixture.backend.pull(
+      afterSequence: ServerSequence.zero,
+    );
+
+    final fields = result.changes.single.fields;
+    expect(fields['priority'], 0);
+    expect(fields['note'], isNull);
+  });
+
+  test('a change missing a required field without a default is still '
+      'rejected', () async {
+    final fixture = _fixture({
+      'changes': [
+        {
+          'sequence': 1,
+          'entity_type': 'Note',
+          'record': {
+            'id': 'a0000000-0000-7000-8000-000000000001',
+            'server_version': 1,
+          },
+          'server_version': 1,
+          'operation_id': null,
+          'is_revocation': false,
+        },
+      ],
+      'nextSequence': 1,
+      'hasMore': false,
+    });
+    addTearDown(fixture.dispose);
+
+    await expectLater(
+      fixture.backend.pull(afterSequence: ServerSequence.zero),
+      throwsA(_serverContractRejection),
+    );
+  });
+
   test('record and envelope server versions must match', () async {
     final fixture = _fixture({
       'changes': [
@@ -412,7 +497,39 @@ final _serverContractRejection = isA<RejectedSyncException>().having(
   SyncRejectionCategory.serverContract,
 );
 
-_SupabaseFixture _fixture(Object response) {
+const _laterFields = [
+  EntityFieldDescriptor(
+    name: 'id',
+    columnName: 'id',
+    kind: EntityFieldKind.uuid,
+    nullable: false,
+    mutable: false,
+    conflictPolicy: FieldConflictPolicy.serverWins,
+  ),
+  EntityFieldDescriptor(
+    name: 'isActive',
+    columnName: 'is_active',
+    kind: EntityFieldKind.boolean,
+    nullable: false,
+    mutable: true,
+    conflictPolicy: FieldConflictPolicy.localWins,
+  ),
+  EntityFieldDescriptor(
+    name: 'serverVersion',
+    columnName: 'server_version',
+    kind: EntityFieldKind.integer,
+    nullable: false,
+    mutable: false,
+    conflictPolicy: FieldConflictPolicy.serverWins,
+  ),
+];
+
+_SupabaseFixture _fixture(
+  Object response, {
+  List<EntityDescriptorBase> descriptors = const [
+    TestDescriptor<_TestEntity>(),
+  ],
+}) {
   final httpClient = MockClient(
     (request) async => http.Response(
       jsonEncode(response),
@@ -428,7 +545,7 @@ _SupabaseFixture _fixture(Object response) {
   );
   final backend = SupabaseSyncBackend.graph(
     client: client,
-    definition: _testGraphDefinition(),
+    definition: _testGraphDefinition(descriptors: descriptors),
   );
   return _SupabaseFixture(backend: backend, client: client);
 }

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dart_style/dart_style.dart';
 
 import '../configuration.dart';
+import 'change_snapshot_backfill.dart';
 import 'conformance_inventory.dart';
 
 typedef CommandRunner =
@@ -1187,13 +1188,36 @@ final class NodusGenerator {
         'Supabase generated ${candidates.length} migrations named $name.',
       );
     }
-    if (!fragment.existsSync()) return;
     final output = candidates.single;
+    output.writeAsStringSync(
+      appendChangeSnapshotBackfills(
+        output.readAsStringSync(),
+        entityTypeByTable: _entityTypeByTable(),
+      ),
+    );
+    if (!fragment.existsSync()) return;
     output.writeAsStringSync(
       '${output.readAsStringSync().trimRight()}\n\n'
       '-- Reviewed manual migration extension.\n'
       '${fragment.readAsStringSync().trim()}\n',
     );
+  }
+
+  /// The synchronized entity of each table, from the resolved explanation.
+  Map<String, String> _entityTypeByTable() {
+    final file = File(_path('lib/src/generated/nodus.explain.g.json'));
+    if (!file.existsSync()) return const {};
+    final explanation = jsonDecode(file.readAsStringSync());
+    if (explanation is! Map<String, Object?>) return const {};
+    return {
+      for (final entity
+          in explanation['entities'] as List<Object?>? ?? const [])
+        if (entity case {
+          'name': final String name,
+          'table': final String table,
+        })
+          table: name,
+    };
   }
 
   void bootstrapSupabaseMigration(String name, {required bool overwrite}) {

@@ -575,20 +575,29 @@ final class SupabaseSyncBackend
     await _remoteChanges.close();
   }
 
+  /// Pulls replay the row as it was recorded, so a change recorded before a
+  /// field was added lacks it. Such a field takes its protocol default, or
+  /// null when it may be empty, rather than failing the whole pull.
   JsonMap _decodeRecord(Object? value, EntityDescriptorBase descriptor) {
     final record = _map(value);
-    for (final field in descriptor.fields) {
-      if (!record.containsKey(field.columnName)) {
-        throw FormatException(
-          'Supabase ${descriptor.entityType} record is missing '
-          '`${field.columnName}`.',
-        );
-      }
-    }
     return {
       for (final field in descriptor.fields)
-        field.name: record[field.columnName],
+        field.name: record.containsKey(field.columnName)
+            ? record[field.columnName]
+            : _missingFieldValue(field, descriptor),
     };
+  }
+
+  Object? _missingFieldValue(
+    EntityFieldDescriptor field,
+    EntityDescriptorBase descriptor,
+  ) {
+    if (field.hasProtocolDefault) return field.protocolDefault;
+    if (field.nullable) return null;
+    throw FormatException(
+      'Supabase ${descriptor.entityType} record is missing '
+      '`${field.columnName}`.',
+    );
   }
 
   void _validateEntityType(
