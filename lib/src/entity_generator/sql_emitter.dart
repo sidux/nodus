@@ -2770,16 +2770,24 @@ void _emitSyncInfrastructure(
       ..writeln()
       // Who may pull each change is decided once, when it is recorded, so a
       // pull reads only the rows addressed to its caller instead of judging
-      // every account's history.
+      // every account's history. A change superseded by a later one takes its
+      // addressing with it.
       ..writeln(
         'create table if not exists public.local_entity_change_recipients (',
       )
       ..writeln(
         '  user_id uuid not null references auth.users (id) on delete cascade,',
       )
-      ..writeln('  sequence bigint not null,')
+      ..writeln(
+        '  sequence bigint not null references public.local_entity_changes '
+        '(sequence) on delete cascade,',
+      )
       ..writeln('  primary key (user_id, sequence)')
       ..writeln(');')
+      ..writeln(
+        'create index if not exists local_entity_change_recipients_sequence_idx '
+        'on public.local_entity_change_recipients (sequence);',
+      )
       ..writeln(
         'alter table public.local_entity_change_recipients '
         'enable row level security;',

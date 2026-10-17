@@ -149,7 +149,9 @@ after insert on public.local_entity_changes
 for each row execute function public.address_${graphName}_change();
 
 -- One globally ordered pull contract for this synchronization target. It reads
--- only the changes addressed to the caller, by index, in sequence order.
+-- only the changes addressed to the caller, by index, in sequence order. A page
+-- is full when 500 sequences are addressed, however many of them still hold a
+-- change, so a short page always means the caller has caught up.
 
 create or replace function public.$functionName(p_after_sequence bigint)
 returns jsonb
@@ -160,12 +162,21 @@ stable
 as \$\$
 declare
   page jsonb := '[]'::jsonb;
-  page_count integer;
+  addressed_sequences bigint[];
+  page_full boolean;
   next_cursor bigint;
 begin
   if auth.uid() is null then
     raise exception 'Authentication required' using errcode = '42501';
   end if;
+  select coalesce(array_agg(addressed.sequence order by addressed.sequence), '{}')
+  into addressed_sequences
+  from (
+    $addressedChanges
+    order by 1
+    limit 500
+  ) addressed;
+  page_full := cardinality(addressed_sequences) = 500;
   select coalesce(jsonb_agg(jsonb_build_object(
     'sequence', visible.sequence,
     'entity_type', visible.entity_type,
@@ -184,17 +195,11 @@ begin
       changes.operation_id,
       (changes.is_revocation and changes.audience_user_id = auth.uid())
         as is_revocation
-    from (
-      $addressedChanges
-      order by 1
-      limit 500
-    ) addressed
-    join public.local_entity_changes changes
-      on changes.sequence = addressed.sequence
+    from public.local_entity_changes changes
+    where changes.sequence = any(addressed_sequences)
   ) visible;
-  page_count := jsonb_array_length(page);
-  if page_count = 500 then
-    next_cursor := (page -> (page_count - 1) ->> 'sequence')::bigint;
+  if page_full then
+    next_cursor := addressed_sequences[500];
   else
     select coalesce(max(changes.sequence), p_after_sequence)
       into next_cursor
@@ -203,7 +208,7 @@ begin
   return jsonb_build_object(
     'changes', page,
     'nextSequence', next_cursor,
-    'hasMore', page_count = 500
+    'hasMore', page_full
   );
 end;
 \$\$;
