@@ -83,17 +83,14 @@ boundary, inject it from the application composition root, and commit any
 resulting entity change through Nodus:
 
 ```dart
-abstract interface class TaskSummaryClient {
-  Future<String> summarize(String text);
+abstract interface class IssueTrackerClient {
+  Future<String> issueTitle(String issueKey);
 }
 
-extension TaskSummarization on Task {
-  Future<void> summarizeWith(TaskSummaryClient client) async {
-    final source = description;
-    if (source == null || source.trim().isEmpty) return;
-
-    final summary = await client.summarize(source);
-    final draft = beginEdit()..description = summary;
+extension TaskIssueImport on Task {
+  Future<void> importTitleFrom(IssueTrackerClient client, String issueKey) async {
+    final title = await client.issueTitle(issueKey);
+    final draft = beginEdit()..title = title;
     await draft.save();
   }
 }
@@ -104,8 +101,8 @@ A suitable feature layout is:
 ```text
 features/tasks/
   domain/task.dart
-  application/task_summarization.dart
-  infrastructure/supabase_task_summary_client.dart
+  application/task_issue_import.dart
+  infrastructure/supabase_issue_tracker_client.dart
   presentation/...
 ```
 
@@ -121,20 +118,20 @@ wrapper around a typed `ExternalCapabilityContract` and the shared
 to a typed `ExternalCapabilityException`:
 
 ```dart
-final _summarize = ExternalCapabilityContract<String, String>.jsonObject(
-  name: 'summarize-task',
-  encodeRequest: (text) => {'text': text},
-  decodeResponse: (json) => json['summary']! as String,
+final _issueTitle = ExternalCapabilityContract<String, String>.jsonObject(
+  name: 'issue-title',
+  encodeRequest: (issueKey) => {'key': issueKey},
+  decodeResponse: (json) => json['title']! as String,
 );
 
-final class SupabaseTaskSummaryClient implements TaskSummaryClient {
-  const SupabaseTaskSummaryClient(this._adapter);
+final class SupabaseIssueTrackerClient implements IssueTrackerClient {
+  const SupabaseIssueTrackerClient(this._adapter);
 
   final SupabaseExternalCapabilityAdapter _adapter;
 
   @override
-  Future<String> summarize(String text) =>
-      _adapter.invokeFunction(_summarize, text);
+  Future<String> issueTitle(String issueKey) =>
+      _adapter.invokeFunction(_issueTitle, issueKey);
 }
 ```
 

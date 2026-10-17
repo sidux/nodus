@@ -29,8 +29,6 @@ Pick a starting point based on what you need.
   and the architecture disagree, the architecture wins.
 - [Architecture atlas](Architecture.puml) — PlantUML diagrams of the
   compiler, runtime, synchronization, and dependency boundaries.
-- [AI-assisted development](ai-assisted-development.md) — why a single typed
-  source of truth suits coding agents, and what is not yet measured.
 
 ## Work on Nodus
 

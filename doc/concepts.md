@@ -195,7 +195,7 @@ Nodus generates repeatable mechanics; you still write:
 - business decisions, as getters, pure methods, and declared actions on the
   entity;
 - UI, observing generated entities and lists directly;
-- integrations with online-only services (payments, AI, file uploads), as
+- integrations with online-only services (payments, email, file uploads), as
   small typed clients that commit their results through generated APIs.
 
 [Writing custom application code](custom-code.md) shows where each kind of

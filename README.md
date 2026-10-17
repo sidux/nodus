@@ -152,12 +152,6 @@ See the [Tasks guide](https://github.com/sidux/nodus/blob/main/example/tasks/REA
 
 All documentation is indexed in [`doc/`](https://github.com/sidux/nodus/blob/main/doc/README.md).
 
-## Acknowledgements
-
-Nodus was developed with assistance from OpenAI Codex. Product and architecture
-decisions remain human-owned; see
-[AI-assisted development](https://github.com/sidux/nodus/blob/main/doc/ai-assisted-development.md).
-
 ## License
 
 [BSD 3-Clause](https://github.com/sidux/nodus/blob/main/LICENSE). Report

@@ -600,18 +600,19 @@ and [§6.6](Architecture.md#66-named-source-creation-and-entity-owned-processes)
 
 ## Online-only operations
 
-Some calls cannot work offline, such as a payment or an AI request. Give them
-a typed contract and keep them outside entity persistence:
+Some calls cannot work offline, such as a payment or a lookup in another
+company's system. Give them a typed contract and keep them outside entity
+persistence:
 
 ```dart
-final summarize = ExternalCapabilityContract<String, String>.jsonObject(
-  name: 'summarize-task',
-  encodeRequest: (text) => {'text': text},
-  decodeResponse: (json) => json['summary']! as String,
+final issueTitle = ExternalCapabilityContract<String, String>.jsonObject(
+  name: 'issue-title',
+  encodeRequest: (issueKey) => {'key': issueKey},
+  decodeResponse: (json) => json['title']! as String,
 );
 
-final summary = await SupabaseExternalCapabilityAdapter(client)
-    .invokeFunction(summarize, task.description!);
+final title = await SupabaseExternalCapabilityAdapter(client)
+    .invokeFunction(issueTitle, 'APP-42');
 ```
 
 `SupabaseExternalCapabilityAdapter` calls an Edge Function
