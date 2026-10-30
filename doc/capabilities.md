@@ -676,7 +676,10 @@ the [Drift web setup](https://drift.simonbinder.eu/platforms/web/)).
 ### Observing entities and queries
 
 Read entity fields inside a MobX `Observer` (from `flutter_mobx`); only the
-fields read are tracked. Nodus provides these hooks, built on
+fields read are tracked. In debug builds, `AccountEntityGraphScope` reports a
+field read by a widget build that does not observe it, since that widget would
+not rebuild when the field changes. Wrap a deliberate one-time read, such as
+seeding a controller, in `readEntitySnapshot(() => ...)`. Nodus provides these hooks, built on
 `flutter_hooks`, for queries and actions:
 
 | Hook | Purpose |
@@ -684,7 +687,7 @@ fields read are tracked. Nodus provides these hooks, built on
 | `useObservedEntityList(() => list, keys: [...])` | Own a list for the widget's lifetime and fold it with `when(loading:, empty:, data:, failure:)`. It pages automatically as descendant scroll views scroll. When `keys` change, the previous results stay on screen (marked refreshing) until the new ones load. |
 | `useObservedEntityQuery` | The same for a raw `LocalEntityQuery`. |
 | `useObservedEntityLookup` | Zero-or-one lookup state. |
-| `useObservedEntityValue` | A synchronous lookup on a bounded set. |
+| `useObserved(() => value, keys: [...])` | Any narrow MobX value, such as a synchronous lookup on a bounded set or an application observable. |
 | `useObservedEntityExistence`, `useObservedEntityFirst` | Existence and first-match state. |
 | `ObservedEntityQueryGroup` | Fold several observed queries' shared loading/failure/refresh state. |
 | `EntityQueryPagingBoundary` / `observed.pagingBoundary(...)` | Automatic paging when rendering observed state manually. |

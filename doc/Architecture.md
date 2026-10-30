@@ -1924,6 +1924,15 @@ and MUST be removed. MobX entities and queries are observed directly with the
 narrowest `Observer` scope. Widgets must not copy persisted fields into
 `useState`, a hook, or another controller.
 
+Nodus enforces observation in debug builds. Every generated entity field
+getter runs a debug-only check, and `AccountEntityGraphScope` installs one that
+reports a field read by a widget build outside a MobX derivation as a Flutter
+error, which fails the widget test that renders it. A widget that renders or
+derives anything from entity fields MUST therefore be a MobX-observing widget
+(`StatelessObserverWidget`, `StatefulObserverWidget`, the application's
+`HookObserverWidget`, or an `Observer` scope). Release builds compile the
+check away.
+
 Typed inherited scopes and constructor injection are the preferred dependency
 composition surfaces. An `AccountEntityGraphScope` publishes account
 entity-graph lifecycle, not individual entity changes. Entity mutation MUST NOT

@@ -3016,7 +3016,10 @@ abstract class Document implements OwnedBy<Document, Account>, Component {
               contains('A Component must be created inside an entity-graph'),
               contains('Future<Document> create({'),
               contains('required String body'),
-              contains('DateTime? get deletedAt => _deletedAtStore.value;'),
+              contains('DateTime? get deletedAt {'),
+              contains(
+                "assert(debugEntityFieldRead('Document', 'deletedAt'));",
+              ),
               contains('DocumentFields.deletedAt.isNull'),
               isNot(contains('OrderRank get generatedOrderRank')),
               contains('principals: const [RlsPrincipal.owner]'),
@@ -6788,7 +6791,8 @@ final class Account {}
       outputs: {
         'nodus|lib/note.entity.g.dart': decodedMatches(
           allOf([
-            contains('DateTime? get archivedAt => _archivedAtStore.value;'),
+            contains('DateTime? get archivedAt {'),
+            contains("assert(debugEntityFieldRead('Note', 'archivedAt'));"),
             contains('Future<void> archive()'),
             contains('Future<void> unarchive()'),
             contains('ArchiveVisibility archives = ArchiveVisibility.exclude'),

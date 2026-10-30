@@ -126,6 +126,34 @@ final class AccountEntityGraphScope<G, A> extends StatefulWidget {
       _AccountEntityGraphScopeState<G, A>();
 }
 
+/// Reports an entity field read by a widget build that MobX does not track.
+///
+/// The widget would keep showing the old value until something else rebuilds
+/// it. Read the field inside an `Observer`, a `StatelessObserverWidget`, or
+/// another MobX-observing widget instead.
+void _reportUnobservedBuildRead(String entityType, String field) {
+  if (!WidgetsBinding.instance.buildOwner!.debugBuilding) return;
+  if (mainContext.isComputingDerivation()) return;
+  FlutterError.reportError(
+    FlutterErrorDetails(
+      exception: FlutterError.fromParts([
+        ErrorSummary(
+          'A widget build read $entityType.$field without observing it.',
+        ),
+        ErrorDescription(
+          'The widget will not rebuild when $entityType.$field changes.',
+        ),
+        ErrorHint(
+          'Read it inside an Observer or a MobX-observing widget such as '
+          'StatelessObserverWidget.',
+        ),
+      ]),
+      stack: StackTrace.current,
+      library: 'nodus',
+    ),
+  );
+}
+
 final class _AccountEntityGraphScopeState<G, A>
     extends State<AccountEntityGraphScope<G, A>> {
   late AccountEntityGraphSessionState<G, A> _state;
@@ -134,6 +162,10 @@ final class _AccountEntityGraphScopeState<G, A>
   @override
   void initState() {
     super.initState();
+    assert(() {
+      debugEntityFieldReadCheck ??= _reportUnobservedBuildRead;
+      return true;
+    }());
     _bind();
   }
 
@@ -693,15 +725,13 @@ ObservedEntityLookup<E> useObservedEntityLookup<E extends Object>(
   return ObservedEntityLookup(lookup, observed.state);
 }
 
-/// Observes one synchronous generated bounded-set lookup.
+/// Returns [read]'s result and rebuilds the widget when any MobX value it
+/// reads changes.
 ///
-/// The generated computed index remains the only state owner. This hook owns
-/// only the MobX reaction that rebuilds its widget when exact membership or the
-/// selected stable identity changes.
-E? useObservedEntityValue<E extends Object>(
-  E? Function() read, {
-  List<Object?> keys = const [],
-}) {
+/// Use it for a narrow value, such as a synchronous lookup on a bounded set or
+/// an application observable, instead of copying that value into widget
+/// state. The hook owns only the reaction, which it disposes with the widget.
+T useObserved<T>(T Function() read, {List<Object?> keys = const []}) {
   final currentRead = useMemoized(() => read, keys);
   final rebuild = useState(0);
   useEffect(() {
@@ -717,26 +747,15 @@ E? useObservedEntityValue<E extends Object>(
     return disposeReaction.call;
   }, [currentRead]);
   rebuild.value;
-  return currentRead();
+  // The reaction above tracks these reads; this one only returns the value.
+  return readEntitySnapshot(currentRead);
 }
 
-ObservedEntityQuery<E> _useObservedEntityQuery<E>(LocalEntityQuery<E> query) {
-  final rebuild = useState(0);
-  useEffect(() {
-    var initial = true;
-    final disposeReaction = autorun((_) {
-      query.state.value;
-      if (initial) {
-        initial = false;
-      } else {
-        rebuild.value++;
-      }
-    });
-    return disposeReaction.call;
-  }, [query]);
-  rebuild.value;
-  return ObservedEntityQuery(query, query.state.value);
-}
+ObservedEntityQuery<E> _useObservedEntityQuery<E>(LocalEntityQuery<E> query) =>
+    ObservedEntityQuery(
+      query,
+      useObserved(() => query.state.value, keys: [query]),
+    );
 
 /// Owns one generated draft for exactly the lifetime of the Hook widget.
 D useEntityMutationDraft<E, D extends EntityMutationDraft<E>>(

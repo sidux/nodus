@@ -900,9 +900,13 @@ void _emitRecord(StringBuffer buffer, EntitySpec spec) {
         '  OrderRank get generatedOrderRank => _${field.name}Store.value;',
       );
     } else {
-      buffer.writeln(
-        '  ${field.dartType} get ${field.name} => _${field.name}Store.value;',
-      );
+      buffer
+        ..writeln('  ${field.dartType} get ${field.name} {')
+        ..writeln(
+          "    assert(debugEntityFieldRead('${spec.className}', '${field.name}'));",
+        )
+        ..writeln('    return _${field.name}Store.value;')
+        ..writeln('  }');
     }
     if (field.isMutable && !spec.isCommandOnly(field)) {
       _emitSetter(buffer, spec, field);

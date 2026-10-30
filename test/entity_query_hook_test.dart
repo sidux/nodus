@@ -172,7 +172,7 @@ void main() {
   });
 
   testWidgets(
-    'Given a bounded exact index, When membership changes, Then the value hook rebuilds and disposes its reaction',
+    'Given an observed value, When it changes, Then the hook rebuilds and disposes its reaction',
     (tester) async {
       final selected = Observable<int?>(1);
       var reads = 0;
@@ -182,7 +182,7 @@ void main() {
           textDirection: TextDirection.ltr,
           child: HookBuilder(
             builder: (_) {
-              final value = useObservedEntityValue<int>(() {
+              final value = useObserved<int?>(() {
                 reads++;
                 return selected.value;
               });

@@ -2049,6 +2049,42 @@ final class EntityQuerySpec<E> {
   int get hashCode => Object.hash(E, where, orderBy, pageSize);
 }
 
+/// Debug check run on every generated entity field read.
+///
+/// Nodus Flutter installs one that reports a field read by a widget build
+/// outside a MobX derivation: such a widget never rebuilds when that field
+/// changes. Release builds never call it.
+void Function(String entityType, String field)? debugEntityFieldReadCheck;
+
+int _debugEntitySnapshotDepth = 0;
+
+/// Runs [debugEntityFieldReadCheck] from a generated getter's `assert`.
+bool debugEntityFieldRead(String entityType, String field) {
+  if (_debugEntitySnapshotDepth == 0) {
+    debugEntityFieldReadCheck?.call(entityType, field);
+  }
+  return true;
+}
+
+/// Reads entity fields once on purpose, such as to seed a controller.
+///
+/// Exempts [read] from [debugEntityFieldReadCheck]. A widget using the result
+/// does not follow later changes to those fields.
+T readEntitySnapshot<T>(T Function() read) {
+  assert(() {
+    _debugEntitySnapshotDepth++;
+    return true;
+  }());
+  try {
+    return read();
+  } finally {
+    assert(() {
+      _debugEntitySnapshotDepth--;
+      return true;
+    }());
+  }
+}
+
 /// Describes the smallest persisted projection change that can affect queries.
 ///
 /// Unknown external database writes conservatively refresh every query.

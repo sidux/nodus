@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobx/mobx.dart';
 import 'package:nodus/nodus_flutter.dart';
 
 void main() {
@@ -83,6 +84,46 @@ void main() {
       await session.dispose();
     },
   );
+
+  testWidgets('scope reports an entity field read a widget build does not '
+      'observe, but not one MobX tracks or one outside a build', (
+    tester,
+  ) async {
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (accountId) async => _TestEntityGraph(accountId.value),
+      close: (_) async {},
+    );
+    var tracked = false;
+
+    await tester.pumpWidget(
+      AccountEntityGraphScope<_TestEntityGraph, _TestAccount>(
+        session: session,
+        child: Builder(
+          builder: (context) {
+            if (tracked) {
+              autorun((_) => debugEntityFieldRead('Goal', 'status'))();
+            } else {
+              debugEntityFieldRead('Goal', 'status');
+            }
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+
+    final error = tester.takeException();
+    expect(error, isA<FlutterError>());
+    expect(
+      '$error',
+      contains('A widget build read Goal.status without observing it.'),
+    );
+
+    debugEntityFieldRead('Goal', 'status');
+    tracked = true;
+    tester.element(find.byType(Builder)).markNeedsBuild();
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
 }
 
 final class _TestEntityGraph {
