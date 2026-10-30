@@ -29,6 +29,7 @@ void main() {
       ),
     ]);
     expect(loading.isInitialLoading, isTrue);
+    expect(loading.isSettled, isFalse);
     expect(loading.failure, isNull);
 
     final error = StateError('query failed');
@@ -43,6 +44,27 @@ void main() {
       ),
     ]);
     expect(failed.failure, same(error));
+
+    final refreshing = ObservedEntityQueryGroup([
+      ObservedEntityQuery(
+        first,
+        const EntityQueryStaleData<int>(items: [1], hasMore: false),
+      ),
+      ObservedEntityQuery(
+        second,
+        const EntityQueryData<int>(items: [1], hasMore: false),
+      ),
+    ]);
+    expect(refreshing.isSettled, isFalse);
+    expect(
+      ObservedEntityQueryGroup([
+        ObservedEntityQuery(
+          second,
+          const EntityQueryData<int>(items: [1], hasMore: false),
+        ),
+      ]).isSettled,
+      isTrue,
+    );
   });
 
   testWidgets(
@@ -292,6 +314,92 @@ void main() {
     expect(draft.isConsumed, isTrue);
   });
 
+  testWidgets('Given a list keyed on another list, When the first list loads, '
+      'Then the group stays loading until the dependent list has loaded too, '
+      'and only later selection changes show as refreshing', (tester) async {
+    final invalidations =
+        StreamController<EntityProjectionChange<int>>.broadcast(sync: true);
+    addTearDown(invalidations.close);
+    final parentLoad = Completer<void>();
+    final childLoads = {3: Completer<void>(), 4: Completer<void>()};
+    final parents = LocalEntityQueryCache<int>.database(
+      loader: (spec, {required after, required limit}) async {
+        await parentLoad.future;
+        return const EntityQueryPage(
+          items: [1, 2],
+          hasMore: false,
+          nextCursor: null,
+        );
+      },
+      invalidations: invalidations.stream,
+    );
+    // The page size stands in for a filter on the parent ids: 1 means none.
+    final children = LocalEntityQueryCache<int>.database(
+      loader: (spec, {required after, required limit}) async {
+        await childLoads[spec.pageSize]?.future;
+        return EntityQueryPage(
+          items: spec.pageSize == 1 ? const [] : [spec.pageSize],
+          hasMore: false,
+          nextCursor: null,
+        );
+      },
+      invalidations: invalidations.stream,
+    );
+    addTearDown(parents.dispose);
+    addTearDown(children.dispose);
+    final extra = ValueNotifier(0);
+    addTearDown(extra.dispose);
+    late ObservedEntityQueryGroup group;
+
+    await tester.pumpWidget(
+      ValueListenableBuilder<int>(
+        valueListenable: extra,
+        builder: (_, extraFilter, _) => HookBuilder(
+          builder: (_) {
+            final parent = useObservedEntityList(
+              () => _IntList(parents.acquire(EntityQuerySpec<int>())),
+            );
+            final childFilter = parent.state.items.isEmpty
+                ? 1
+                : parent.state.items.length + 1 + extraFilter;
+            final child = useObservedEntityList(
+              () => _IntList(
+                children.acquire(EntityQuerySpec<int>(pageSize: childFilter)),
+              ),
+              keys: [childFilter],
+            );
+            group = useObservedEntityQueryGroup([parent, child]);
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(group.isInitialLoading, isTrue);
+
+    parentLoad.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(group.queries.last.state, isA<EntityQueryStaleData<dynamic>>());
+    expect(group.isInitialLoading, isTrue);
+
+    childLoads[3]!.complete();
+    await tester.pumpAndSettle();
+    expect(group.isInitialLoading, isFalse);
+    expect(group.isSettled, isTrue);
+
+    extra.value = 1;
+    await tester.pump();
+    await tester.pump();
+    expect(group.isInitialLoading, isFalse);
+    expect(group.isRefreshing, isTrue);
+
+    childLoads[4]!.complete();
+    await tester.pumpAndSettle();
+    expect(group.queries.last.state.items, [4]);
+  });
+
   testWidgets('a list hook whose selection changes keeps showing the previous '
       'results as refreshing until the new ones load, then releases them', (
     tester,
@@ -344,6 +452,7 @@ void main() {
     await tester.pump();
 
     expect(observed.state, isA<EntityQueryStaleData<int>>());
+    expect(observed.isSettled, isFalse);
     expect(observed.state.items, [1, 3]);
     expect(lists.first.state.value, isNot(isA<EntityQueryDisposed<int>>()));
 
@@ -351,6 +460,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(observed.state, isA<EntityQueryData<int>>());
+    expect(observed.isSettled, isTrue);
     expect(observed.state.items, [2, 4]);
     expect(lists.first.state.value, isA<EntityQueryDisposed<int>>());
 

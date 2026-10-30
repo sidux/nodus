@@ -294,6 +294,14 @@ final class ObservedEntityQuery<E> {
   final LocalEntityQuery<E> query;
   final EntityQueryState<E> state;
 
+  /// Whether the items are loaded for the query's current selection.
+  ///
+  /// False during the first load and while a replaced selection is still
+  /// presented as stale data. Presentation that reacts to a value changing,
+  /// such as a delay or an animation, must treat only changes between settled
+  /// states as changes: anything else is data arriving, not the user acting.
+  bool get isSettled => !state.isInitialLoading && !state.isRefreshing;
+
   Future<void> refresh() => query.refresh();
 
   Future<void> loadNextPage() => query.loadNextPage();
@@ -367,15 +375,30 @@ final class ObservedEntityQuery<E> {
 /// only shared loading, refresh, and failure presentation so screens do not
 /// rebuild a parallel state model or hand-fold the same sealed states.
 final class ObservedEntityQueryGroup {
-  ObservedEntityQueryGroup(Iterable<ObservedEntityQuery<dynamic>> queries)
-    : queries = List.unmodifiable(queries);
+  ObservedEntityQueryGroup(
+    Iterable<ObservedEntityQuery<dynamic>> queries, {
+    bool hasSettled = true,
+  }) : queries = List.unmodifiable(queries),
+       _hasSettled = hasSettled;
 
   final List<ObservedEntityQuery<dynamic>> queries;
+  final bool _hasSettled;
 
+  /// Whether the group has no consistent content to show yet.
+  ///
+  /// A group from [useObservedEntityQueryGroup] stays loading until all its
+  /// queries have settled together once, so stale data from a query keyed on
+  /// another's results is never shown as the first content.
   bool get isInitialLoading =>
-      queries.any((query) => query.state.isInitialLoading);
+      queries.any((query) => query.state.isInitialLoading) ||
+      (!_hasSettled && !isSettled);
 
   bool get isRefreshing => queries.any((query) => query.state.isRefreshing);
+
+  /// Whether every query is [ObservedEntityQuery.isSettled], so values derived
+  /// from several of them, including from a query keyed on another's results,
+  /// are consistent with each other.
+  bool get isSettled => queries.every((query) => query.isSettled);
 
   Object? get failure {
     for (final query in queries) {
@@ -559,6 +582,21 @@ final class _EntityQueryPagingBoundaryState
       );
 }
 
+/// Groups observed queries for one widget's loading, failure, and refresh.
+///
+/// Until every query has settled in the same build, the group reports initial
+/// loading, so chained queries (one keyed on another's results) show their
+/// first content only once it is consistent. After that, a replaced selection
+/// shows as refreshing stale data, as for a single list.
+ObservedEntityQueryGroup useObservedEntityQueryGroup(
+  Iterable<ObservedEntityQuery<dynamic>> queries,
+) {
+  final hasSettled = useRef(false);
+  final group = ObservedEntityQueryGroup(queries, hasSettled: hasSettled.value);
+  if (group.isSettled) hasSettled.value = true;
+  return group;
+}
+
 ObservedEntityQuery<E> useObservedEntityQuery<E>(
   LocalEntityQuery<E> Function() acquire, {
   List<Object?> keys = const [],
@@ -634,6 +672,10 @@ final class ObservedEntityLookup<E extends Object> {
 
   E? get value => lookup.value;
 
+  /// This selection as a query, to join an [ObservedEntityQueryGroup].
+  ObservedEntityQuery<E> get asQuery =>
+      ObservedEntityQuery(lookup.query, state);
+
   Future<void> refresh() => lookup.query.refresh();
 
   Widget when({
@@ -669,6 +711,10 @@ final class ObservedEntityExistence<E> {
   final EntityQueryState<E> state;
 
   bool get value => existence.value;
+
+  /// This selection as a query, to join an [ObservedEntityQueryGroup].
+  ObservedEntityQuery<E> get asQuery =>
+      ObservedEntityQuery(existence.query, state);
   bool get loading => state is EntityQueryInitialLoading<E>;
   Object? get error => switch (state) {
     EntityQueryFailure<E>(:final error) => error,
@@ -696,6 +742,9 @@ final class ObservedEntityFirst<E> {
   final EntityQueryState<E> state;
 
   E? get value => first.value;
+
+  /// This selection as a query, to join an [ObservedEntityQueryGroup].
+  ObservedEntityQuery<E> get asQuery => ObservedEntityQuery(first.query, state);
   bool get loading => state is EntityQueryInitialLoading<E>;
   Object? get error => switch (state) {
     EntityQueryFailure<E>(:final error) => error,

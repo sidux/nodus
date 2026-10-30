@@ -689,7 +689,7 @@ seeding a controller, in `readEntitySnapshot(() => ...)`. Nodus provides these h
 | `useObservedEntityLookup` | Zero-or-one lookup state. |
 | `useObserved(() => value, keys: [...])` | Any narrow MobX value, such as a synchronous lookup on a bounded set or an application observable. |
 | `useObservedEntityExistence`, `useObservedEntityFirst` | Existence and first-match state. |
-| `ObservedEntityQueryGroup` | Fold several observed queries' shared loading/failure/refresh state. |
+| `useObservedEntityQueryGroup([...])` | Fold several observed queries' shared loading/failure/refresh state. It stays initial-loading until all queries have settled together once, so chained queries never show inconsistent first content; `isSettled` says values derived across them are consistent now. Lookups, existence and first-row queries join with `.asQuery`. |
 | `EntityQueryPagingBoundary` / `observed.pagingBoundary(...)` | Automatic paging when rendering observed state manually. |
 | `useEntityQueryScrollController`, `useEntityListScrollController` | A scroll controller that loads pages, for custom scroll setups. |
 | `useEntityAction()` | Busy/error state for an awaited operation: `action.run(() async { ... })`, `action.error`. |

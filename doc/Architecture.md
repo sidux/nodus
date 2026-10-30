@@ -1969,6 +1969,15 @@ When an observed list's selection changes, such as a new filter, the hook keeps
 the previous list leased and presents it as stale/refreshing data until the
 replacement settles, so a screen never returns to its first-load placeholder
 after showing content.
+A widget that combines observed queries folds them with
+`useObservedEntityQueryGroup`, which reports initial loading until every query
+has settled in the same build. A query keyed on another query's results is
+therefore never shown with stale or empty data as the first content.
+`isSettled` on an observed query or group is false during a first load and
+while stale data is presented. Presentation that reacts to a value changing,
+such as a completion delay or animation, MUST treat a change as a user
+transition only between two settled states; a value that changes as data
+arrives was already true.
 
 Observed list/query data installs an automatic paging boundary by default.
 Vertical scroll and scroll-metrics notifications load the next page before the
