@@ -314,6 +314,13 @@ cancels target signals and claimable background work, waits for in-flight local
 commits, checkpoints durable remote work, and closes the previous graph before
 publishing the next. It MUST NOT wait indefinitely for a network request:
 idempotent durable work remains recoverable by the next compatible session.
+An application MAY keep several signed-in accounts on one device. It closes
+the active graph before the platform identity changes to another account and
+opens the next graph only once it has, so no graph runs while another account
+is signed in. A remote adapter also sends each request with its own graph
+account's credentials, read together with the check that the account is still
+signed in, so a request already under way when the identity changes still acts
+as that account and never brings another account's rows into its store.
 Deleting an account also deletes its local store: once its graph has closed,
 the application calls the generated `eraseLocalStore`, which removes that
 account's database and journals through the same `NodusLocalStore` that opened

@@ -196,6 +196,48 @@ void main() {
     expect(requests, 0, reason: 'nothing is sent without the account');
   });
 
+  test('a request started for one account still carries that account\'s '
+      'token when another account signs in before it is sent', () async {
+    const accountA = 'a0000000-0000-7000-8000-0000000000aa';
+    const accountB = 'b0000000-0000-7000-8000-0000000000bb';
+    final authorizations = <String?>[];
+    final client = SupabaseClient(
+      'https://example.invalid',
+      'test-anon-key',
+      authOptions: const AuthClientOptions(autoRefreshToken: false),
+      httpClient: MockClient((request) async {
+        authorizations.add(request.headers['Authorization']);
+        return http.Response(
+          jsonEncode({
+            'changes': <Object?>[],
+            'nextSequence': 0,
+            'hasMore': false,
+          }),
+          200,
+          headers: const {'content-type': 'application/json'},
+          request: request,
+        );
+      }),
+    );
+    await client.auth.recoverSession(_sessionJson(accountA, 'token-a'));
+    final backend = SupabaseSyncBackend.graph(
+      client: client,
+      definition: _testGraphDefinition(),
+      accountId: accountA,
+    );
+    addTearDown(() async {
+      await backend.disposeRemoteChangeSignals();
+      await client.dispose();
+    });
+
+    final pulling = backend.pull(afterSequence: ServerSequence.zero);
+    await client.auth.recoverSession(_sessionJson(accountB, 'token-b'));
+    await pulling;
+
+    expect(client.auth.currentUser?.id, accountB);
+    expect(authorizations, ['Bearer token-a']);
+  });
+
   test('a session that ends mid-request leaves the work to retry, while a '
       'refusal of the work itself stays final', () async {
     final signedOut = _errorFixture(
@@ -523,6 +565,23 @@ const _laterFields = [
     conflictPolicy: FieldConflictPolicy.serverWins,
   ),
 ];
+
+String _sessionJson(String userId, String accessToken) => jsonEncode({
+  'access_token': accessToken,
+  'token_type': 'bearer',
+  'expires_in': 3600,
+  'expires_at':
+      DateTime.now().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/
+      1000,
+  'refresh_token': 'refresh-$accessToken',
+  'user': {
+    'id': userId,
+    'aud': 'authenticated',
+    'app_metadata': <String, Object?>{},
+    'user_metadata': <String, Object?>{},
+    'created_at': '2026-10-31T00:00:00Z',
+  },
+});
 
 _SupabaseFixture _fixture(
   Object response, {

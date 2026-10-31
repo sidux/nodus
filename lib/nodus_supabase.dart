@@ -340,18 +340,21 @@ final class SupabaseSyncBackend
 
   @override
   Future<PushResult> push(PushSyncWorkItem item) async {
-    _requireAccountSession();
+    final accessToken = await _accountAccessToken();
     try {
       final descriptor = _descriptorFor(item.operation.identity.entityType);
       item = item.upcast(descriptor);
       final payload = item.operation.toRemoteWire();
       _validateEntityType(payload['entityType'], descriptor);
       final response = await _bounded(
-        _client.rpc(
-          'push_${descriptor.tableName}_operations',
-          params: {
-            'p_operations': [payload],
-          },
+        _asAccount(
+          _client.rpc(
+            'push_${descriptor.tableName}_operations',
+            params: {
+              'p_operations': [payload],
+            },
+          ),
+          accessToken,
         ),
       );
       final results = _list(response);
@@ -438,12 +441,15 @@ final class SupabaseSyncBackend
 
   @override
   Future<PullResult> pull({required ServerSequence afterSequence}) async {
-    _requireAccountSession();
+    final accessToken = await _accountAccessToken();
     try {
       final response = await _bounded(
-        _client.rpc(
-          _pullRpcName,
-          params: {'p_after_sequence': afterSequence.value},
+        _asAccount(
+          _client.rpc(
+            _pullRpcName,
+            params: {'p_after_sequence': afterSequence.value},
+          ),
+          accessToken,
         ),
       );
       final envelope = _map(response);
@@ -508,15 +514,18 @@ final class SupabaseSyncBackend
   Future<RemoteEntitySnapshot?> fetchSnapshot(
     EntityIdentity<dynamic> identity,
   ) async {
-    _requireAccountSession();
+    final accessToken = await _accountAccessToken();
     try {
       final descriptor = _descriptorFor(identity.entityType);
       final response = await _bounded(
-        _client
-            .from(descriptor.tableName)
-            .select()
-            .eq(EntityConventions.idColumnName, identity.rawId)
-            .maybeSingle(),
+        _asAccount(
+          _client
+              .from(descriptor.tableName)
+              .select()
+              .eq(EntityConventions.idColumnName, identity.rawId)
+              .maybeSingle(),
+          accessToken,
+        ),
       );
       if (response == null) return null;
       final fields = RemoteEntityFields.decode(
@@ -546,18 +555,47 @@ final class SupabaseSyncBackend
     }
   }
 
-  void _requireAccountSession() {
+  /// The access token of this graph's own account, read together with the
+  /// check that it is still the signed-in one.
+  ///
+  /// The token is then pinned to the request, so a request already on its way
+  /// keeps acting as this account even if another account signs in before it
+  /// is sent: a pull never brings another account's rows into this store, and
+  /// a push is never judged under another identity.
+  Future<String?> _accountAccessToken() async {
     final accountId = _accountId;
-    if (accountId == null) return;
-    final signedIn = _client.auth.currentUser?.id;
-    if (signedIn == accountId) return;
+    if (accountId == null) return null;
+    var session = _client.auth.currentSession;
+    if (session != null && session.user.id == accountId && session.isExpired) {
+      try {
+        await _client.auth.refreshSession();
+      } on AuthException catch (error) {
+        throw RetryableSyncException(
+          code: 'session_refresh_failed',
+          message: error.message,
+        );
+      }
+      session = _client.auth.currentSession;
+    }
+    if (session != null && session.user.id == accountId) {
+      return session.accessToken;
+    }
     throw RetryableSyncException(
       code: 'account_not_signed_in',
-      message: signedIn == null
+      message: session == null
           ? 'The account is signed out; its work waits for it to sign in.'
           : 'Another account is signed in; this account\'s work waits.',
     );
   }
+
+  /// Sends [request] with [accessToken] instead of whichever account's token
+  /// the client holds when the request leaves.
+  B _asAccount<B extends PostgrestBuilder<Object?, Object?, Object?>>(
+    B request,
+    String? accessToken,
+  ) => accessToken == null
+      ? request
+      : request.setHeader('Authorization', 'Bearer $accessToken') as B;
 
   Future<T> _bounded<T>(Future<T> request) => request.timeout(
     requestTimeout,
