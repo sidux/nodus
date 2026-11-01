@@ -454,6 +454,7 @@ behavior is a domain decision.
 | `inverseCardinality` | `Cardinality.bounded` when each target's children form a small complete set. |
 | `aggregateMember` | The child is edited as part of its parent's aggregate draft. |
 | `hierarchy` | A self-reference forming a tree, with generated subtree remove/restore/archive. |
+| `inheritsAccess` | With `hierarchy`, descendants share the access relationships grant on their ancestors, such as a goal's editors on the steps of a linked task. Moving a subtree moves its access; a descendant whose owner leaves follows its parent's owner. |
 
 PostgreSQL keeps the authoritative foreign keys. Locally, a child may
 reference a target the user cannot see; the generated accessor then returns

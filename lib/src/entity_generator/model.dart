@@ -484,6 +484,15 @@ final class EntitySpec {
   FieldSpec? get hierarchyParentField =>
       fields.where((field) => field.reference?.hierarchy == true).firstOrNull;
 
+  /// The hierarchy parent whose relationship access descendants share.
+  FieldSpec? get accessInheritingParentField => fields
+      .where(
+        (field) =>
+            field.reference?.hierarchy == true &&
+            field.reference!.inheritsAccess,
+      )
+      .firstOrNull;
+
   /// Resolves what the whole graph decides about this entity: the access
   /// relationships elsewhere grant on it and on its references, which
   /// referenced entities' relationship readers act for their owner, and the
@@ -1760,6 +1769,7 @@ final class ReferenceSpec {
     required this.inverseCardinality,
     required this.aggregateMember,
     required this.hierarchy,
+    this.inheritsAccess = false,
     required this.targetSelectPrincipals,
     required this.targetOwnerOperations,
     required this.targetOwnerDartType,
@@ -1781,6 +1791,9 @@ final class ReferenceSpec {
   final Cardinality? inverseCardinality;
   final bool aggregateMember;
   final bool hierarchy;
+
+  /// Whether a hierarchy child shares its ancestors' relationship access.
+  final bool inheritsAccess;
   final List<RlsPrincipal> targetSelectPrincipals;
   final List<RlsOperation> targetOwnerOperations;
   final String targetOwnerDartType;
@@ -1816,6 +1829,7 @@ final class ReferenceSpec {
       inverseCardinality: inverseCardinality,
       aggregateMember: aggregateMember,
       hierarchy: hierarchy,
+      inheritsAccess: inheritsAccess,
       targetSelectPrincipals: targetSelectPrincipals,
       targetOwnerOperations: targetOwnerOperations,
       targetOwnerDartType: targetOwnerDartType,

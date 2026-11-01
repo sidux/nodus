@@ -4213,6 +4213,102 @@ abstract class HelperReview implements OwnedBy<HelperReview, Account> {
       );
     });
 
+    test('share their access with the task\'s steps at any depth', () async {
+      final sources = _reviewedTaskSources(blockedTransition: null)
+        ..['nodus|lib/task.dart'] = _steppedTaskSource();
+
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(
+            allOf([
+              contains(
+                'create or replace function public.tasks_lineage(p_id uuid)\n'
+                'returns setof uuid language sql stable security definer',
+              ),
+              contains('where lineage.depth < 64'),
+              contains(
+                'select exists (select 1 from public.goal_task_links '
+                'access_path_0 where access_path_0.task_id in (select '
+                'public.tasks_lineage(p_id))',
+              ),
+              // A change of access to a task reaches its steps.
+              contains(
+                '  perform public.publish_tasks_relationship_access(\n'
+                '    child.id, p_user_id\n'
+                '  )\n'
+                '  from public.tasks child\n'
+                '  where child.parent_task_id = p_target_id;',
+              ),
+              // Moving a step republishes it to its old and new audiences.
+              contains(
+                'create trigger tasks_parent_task_id_publish_access\n'
+                'after update of parent_task_id\n'
+                'on public.tasks',
+              ),
+              // A step whose owner leaves follows the owner of its parent.
+              contains(
+                "-- Task sharing its ancestors' access follows the owner of "
+                'its parent parentTaskId.',
+              ),
+            ]),
+          ),
+        },
+      );
+    });
+
+    test('remove steps owned by someone else, as the server authorizes '
+        'them through the shared access', () async {
+      await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(_steppedTaskSource(), fileName: 'task.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}',
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/task.entity.g.dart': decodedMatches(
+            allOf([
+              contains('Future<EntityBulkMutationResult> removeHierarchy('),
+              isNot(contains('if (entity.ownerId != _ownerId) return false;')),
+            ]),
+          ),
+        },
+      );
+    });
+
+    test('reject inherited access outside a hierarchy', () async {
+      final errors = await generationErrors(
+        _reviewedTaskSources(blockedTransition: null)
+          ..['nodus|lib/task.dart'] = _steppedTaskSource(hierarchy: false),
+      );
+
+      expect(errors, contains('(inheritsAccess: true) requires hierarchy'));
+    });
+
+    test('reject inherited access no relationship grants', () async {
+      final errors = await generationErrors(
+        _sources(_steppedTaskSource(), fileName: 'task.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}',
+      );
+
+      expect(
+        errors,
+        contains(
+          '`Task.parentTaskId` inherits access, but no @AccessTarget in the '
+          'graph grants relationship access on `Task`.',
+        ),
+      );
+    });
+
     test('reject a cycle through the editors\' read access', () async {
       final sources = _reviewedTaskSources()
         ..['nodus|lib/review_task_link.dart'] = r'''
@@ -8968,6 +9064,37 @@ String _sqlPolicy(String sql, String name) {
   if (start < 0) return '';
   return sql.substring(start, sql.indexOf('\n', start));
 }
+
+/// A task whose steps share whatever relationships grant on it.
+String _steppedTaskSource({bool hierarchy = true}) =>
+    '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+enum TaskStatus { todo, done }
+
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Task implements OwnedBy<Task, Account>, SoftDeletable {
+  @Reference(
+    inverse: 'steps',
+    onDelete: ReferenceDeleteAction.cascade,
+    ${hierarchy ? 'hierarchy: true,' : ''}
+    inheritsAccess: true,
+  )
+  abstract final LocalId<Task>? parentTaskId;
+
+  abstract final String title;
+
+  @Persisted(
+    defaultValue: TaskStatus.todo,
+    transitions: [AllowedTransition(TaskStatus.todo, TaskStatus.done)],
+  )
+  abstract final TaskStatus status;
+
+  @Action(values: [ActionValue(#status, TaskStatus.done)])
+  Future<void> complete();
+}
+''';
 
 /// A goal shared with editors, a task linked into it, the task's review by a
 /// chosen reviewer, and the review's check requests.

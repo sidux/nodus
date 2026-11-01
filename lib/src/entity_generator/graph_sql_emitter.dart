@@ -312,6 +312,31 @@ String _emitPrincipalRetirementSql(EntityGraphSpec graph) {
       );
     }
   }
+  for (final entity in owned) {
+    final parent = entity.accessInheritingParentField;
+    if (parent == null) continue;
+    repairs.add(
+      _repairSql(
+        entity,
+        comment:
+            '${entity.className} sharing its ancestors\' access follows the '
+            'owner of its parent ${parent.name}.',
+        update:
+            'update public.${entity.tableName} dependent\n'
+            '      set ${entity.ownerField.columnName} = '
+            'parent.${entity.ownerField.columnName},\n'
+            '        ${entity.serverVersionField.columnName} = '
+            'dependent.${entity.serverVersionField.columnName} + 1\n'
+            '      from public.${entity.tableName} parent\n'
+            '      where parent.${entity.idField.columnName} = '
+            'dependent.${parent.columnName}\n'
+            '        and dependent.${entity.ownerField.columnName} = '
+            'p_principal\n'
+            '        and parent.${entity.ownerField.columnName} <> p_principal\n'
+            '      returning dependent.${entity.idField.columnName} as id',
+      ),
+    );
+  }
   for (final link in owned.where((entity) => entity.hasOwnershipReference)) {
     for (final field in link.accessTargetFields) {
       if (field.isOwnerReference ||
@@ -889,7 +914,11 @@ for each row execute function public.cleanup_$base();''',
 }
 
 String _emitRelationshipAccessSql(EntityGraphSpec graph) {
-  final sections = <String>[];
+  final sections = <String>[
+    for (final entity in graph.entities)
+      if (entity.accessInheritingParentField case final parent?)
+        _lineageSql(entity, parent),
+  ];
   for (final target in graph.entities.where(
     (entity) => entity.relationshipAccessOperations.isNotEmpty,
   )) {
@@ -926,6 +955,15 @@ grant execute on function public.is_${target.tableName}_relationship_${operation
       target,
     );
     final editorRows = _relationshipEditorPublicationSql(graph, target);
+    final descendants = switch (target.accessInheritingParentField) {
+      null => '',
+      final parent =>
+        '  perform public.publish_${target.tableName}_relationship_access(\n'
+            '    child.${target.idField.columnName}, p_user_id\n'
+            '  )\n'
+            '  from public.${target.tableName} child\n'
+            '  where child.${parent.columnName} = p_target_id;\n',
+    };
     final publishFunction = 'publish_${target.tableName}_relationship_access';
     sections.add(
       '''-- Ordered snapshots and revocations for relationship-derived ${target.className} access.
@@ -964,13 +1002,16 @@ ${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression
     not target_readable,
     ${_publishedRecord(target, 'target_row', readable: 'target_readable')}
   );
-$editorRows${propagatesReferenceAccess ? '  perform public.publish_${target.tableName}_reference_access(\n    p_target_id,\n    p_user_id\n  );' : ''}
+$editorRows$descendants${propagatesReferenceAccess ? '  perform public.publish_${target.tableName}_reference_access(\n    p_target_id,\n    p_user_id\n  );' : ''}
   return;
 end;
 \$\$;
 
 revoke all on function public.$publishFunction(uuid, uuid) from $supabaseApiRoles;''',
     );
+    if (target.accessInheritingParentField case final parent?) {
+      sections.add(_movedSubtreePublicationSql(graph, target, parent));
+    }
   }
   for (final relationship in graph.entities) {
     for (final targetField in relationship.accessTargetFields) {
@@ -1046,6 +1087,88 @@ for each row execute function public.$functionName();''',
     }
   }
   return sections.join('\n\n');
+}
+
+String _lineageFunction(EntitySpec entity) => '${entity.tableName}_lineage';
+
+/// The row and its ancestors, which share their relationship access with it.
+/// Depth is capped so a corrupt cycle cannot make an access check unbounded.
+String _lineageSql(EntitySpec entity, FieldSpec parent) {
+  final function = _lineageFunction(entity);
+  final id = entity.idField.columnName;
+  return '''-- ${entity.className} rows share the relationship access of their ancestors.
+
+create or replace function public.$function(p_id uuid)
+returns setof uuid language sql stable security definer
+set search_path = '' as \$\$
+  with recursive lineage(id, parent_id, depth) as (
+    select node.$id, node.${parent.columnName}, 0
+    from public.${entity.tableName} node
+    where node.$id = p_id
+    union
+    select parent.$id, parent.${parent.columnName}, lineage.depth + 1
+    from public.${entity.tableName} parent
+    join lineage on parent.$id = lineage.parent_id
+    where lineage.depth < $_maxLineageDepth
+  )
+  select distinct lineage.id from lineage;
+\$\$;
+
+revoke all on function public.$function(uuid) from $supabaseApiRoles;''';
+}
+
+const _maxLineageDepth = 64;
+
+/// Moving a subtree under another parent moves the access its old and new
+/// ancestors share, so both audiences receive snapshots or revocations.
+String _movedSubtreePublicationSql(
+  EntityGraphSpec graph,
+  EntitySpec entity,
+  FieldSpec parent,
+) {
+  final function = 'publish_${entity.tableName}_${parent.columnName}_access';
+  String audience(String rowAlias) => _relationshipPathCandidates(
+    graph,
+    entity,
+    entityId: '$rowAlias.${parent.columnName}',
+    aliasPrefix: _sqlAlias('moved_${entity.tableName}_$rowAlias'),
+    followReferences: false,
+  ).join(' union ');
+  return '''-- Access publication for a moved ${entity.className} subtree.
+
+create or replace function public.$function()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as \$\$
+declare
+  audience_user_id uuid;
+begin
+  if new.${parent.columnName} is not distinct from old.${parent.columnName} then
+    return new;
+  end if;
+  for audience_user_id in
+    select distinct candidate.user_id
+    from (${audience('old')} union ${audience('new')}) candidate
+    where candidate.user_id is not null
+  loop
+    perform public.publish_${entity.tableName}_relationship_access(
+      new.${entity.idField.columnName},
+      audience_user_id
+    );
+  end loop;
+  return new;
+end;
+\$\$;
+
+revoke all on function public.$function() from $supabaseApiRoles;
+drop trigger if exists ${entity.tableName}_${parent.columnName}_publish_access
+on public.${entity.tableName};
+create trigger ${entity.tableName}_${parent.columnName}_publish_access
+after update of ${parent.columnName}
+on public.${entity.tableName}
+for each row execute function public.$function();''';
 }
 
 /// The record a user receives: the row while they may read it, otherwise only
@@ -1166,8 +1289,12 @@ String _accessTargetMatchExpression(
   required String rowAlias,
   required String entityId,
 }) {
+  // A relationship to an ancestor reaches a row that inherits its access.
+  final matches = destination.target.accessInheritingParentField == null
+      ? '= $entityId'
+      : 'in (select public.${_lineageFunction(destination.target)}($entityId))';
   if (!destination.throughBridge) {
-    return '$rowAlias.${field.columnName} = $entityId';
+    return '$rowAlias.${field.columnName} $matches';
   }
   final bridge = graph.entities.singleWhere(
     (entity) => entity.className == field.reference!.targetClassName,
@@ -1175,7 +1302,7 @@ String _accessTargetMatchExpression(
   return 'exists (select 1 from public.${bridge.tableName} access_bridge '
       'where access_bridge.${bridge.idField.columnName} = '
       '$rowAlias.${field.columnName} and '
-      'access_bridge.${field.accessTargetThroughColumnName} = $entityId)';
+      'access_bridge.${field.accessTargetThroughColumnName} $matches)';
 }
 
 String _accessTargetIdExpression(

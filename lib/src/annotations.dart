@@ -696,6 +696,7 @@ final class Reference {
     this.inverseCardinality,
     this.aggregateMember = false,
     this.hierarchy = false,
+    this.inheritsAccess = false,
   });
 
   /// Domain name of the generated inverse query on the target entity.
@@ -726,6 +727,15 @@ final class Reference {
   /// target its declaring entity and use cascade deletion so descendants
   /// cannot outlive their parent lifecycle.
   final bool hierarchy;
+
+  /// Whether a [hierarchy] child shares the access relationships elsewhere in
+  /// the graph grant on its ancestors.
+  ///
+  /// A goal that links a task then also shares its subtasks, at any depth,
+  /// and moving a subtree under another parent moves its access with it. A
+  /// descendant whose owner leaves follows the owner of its parent. Owner and
+  /// collaborator access stay with each row.
+  final bool inheritsAccess;
 }
 
 /// Selects one entity and the persisted fields that can trigger declared work.

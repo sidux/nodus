@@ -3302,6 +3302,18 @@ EntityGraphSpec _resolveEntityGraph({
       actingThroughRelationship.add(entity.className);
     }
   }
+  for (final entity in entities) {
+    final parent = entity.accessInheritingParentField;
+    if (parent != null &&
+        (relationshipOperations[entity.className]?.isEmpty ?? true)) {
+      throw InvalidGenerationSourceError(
+        '`${entity.className}.${parent.name}` inherits access, but no '
+        '@AccessTarget in the graph grants relationship access on '
+        '`${entity.className}`.',
+        element: element,
+      );
+    }
+  }
   for (final className in actingThroughRelationship) {
     relationshipOperations
         .putIfAbsent(className, () => <RlsOperation>{})
@@ -4337,6 +4349,13 @@ ReferenceSpec _parseReference(
   final aggregateMember =
       annotation.peek('aggregateMember')?.boolValue ?? false;
   final hierarchy = annotation.peek('hierarchy')?.boolValue ?? false;
+  final inheritsAccess = annotation.peek('inheritsAccess')?.boolValue ?? false;
+  if (inheritsAccess && !hierarchy) {
+    throw InvalidGenerationSourceError(
+      '$annotationName(inheritsAccess: true) requires hierarchy: true.',
+      element: field,
+    );
+  }
   return ReferenceSpec(
     targetClassName: target.name!,
     targetInputImport: target.library.uri.toString(),
@@ -4349,6 +4368,7 @@ ReferenceSpec _parseReference(
     inverseCardinality: inverseCardinality,
     aggregateMember: aggregateMember,
     hierarchy: hierarchy,
+    inheritsAccess: inheritsAccess,
     targetSelectPrincipals:
         targetSecurity.grants
             .where((grant) => grant.operation == RlsOperation.select)

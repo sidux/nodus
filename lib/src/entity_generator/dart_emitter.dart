@@ -2947,6 +2947,10 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
     '(id.value);',
   );
   if (spec.hierarchyParentField case final parentField?) {
+    // Descendants sharing their ancestors' access are authorized remotely
+    // through it, so a foreign owner is no reason to skip them.
+    final skipsForeignOwners =
+        cachesAuthenticatedOwner && !parentField.reference!.inheritsAccess;
     buffer
       ..writeln('  Future<EntityBulkMutationResult> removeHierarchy(')
       ..writeln('    LocalId<${spec.className}> rootId, {')
@@ -2957,7 +2961,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       ..writeln('    childrenFirst: true,')
       ..writeln('    pageSize: pageSize,')
       ..writeln('    action: (entity) async {');
-    if (cachesAuthenticatedOwner) {
+    if (skipsForeignOwners) {
       buffer.writeln(
         '      if (entity.${spec.ownerField.name} != _ownerId) return false;',
       );
@@ -2982,7 +2986,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
       )
       ..writeln('    pageSize: pageSize,')
       ..writeln('    action: (entity) async {');
-    if (cachesAuthenticatedOwner) {
+    if (skipsForeignOwners) {
       buffer.writeln(
         '      if (entity.${spec.ownerField.name} != _ownerId) return false;',
       );
@@ -3011,7 +3015,7 @@ void _emitSet(StringBuffer buffer, EntitySpec spec) {
         )
         ..writeln('    pageSize: pageSize,')
         ..writeln('    action: (entity) async {');
-      if (cachesAuthenticatedOwner) {
+      if (skipsForeignOwners) {
         buffer.writeln(
           '      if (entity.${spec.ownerField.name} != _ownerId) return false;',
         );

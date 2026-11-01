@@ -1564,7 +1564,12 @@ only descendants removed or archived by the same operation as the root, so a
 descendant removed on its own earlier stays removed. For separately owned
 entities,
 foreign-owned descendants count as skipped rather than receiving unauthorized
-mutations. Feature code MUST NOT reconstruct descendants from a bounded
+mutations, unless the hierarchy declares `inheritsAccess`: descendants then
+share the relationship access granted on their ancestors, which the remote
+policy authorizes like any relationship grant. Generation resolves that
+lineage with a depth-capped helper, publishes snapshots and revocations to
+the old and new audiences of a moved subtree, and hands a retiring owner's
+descendants to the owner of their parent. Feature code MUST NOT reconstruct descendants from a bounded
 identity map or issue its own recursive lifecycle loop.
 
 Relationship mutation MUST enforce source and target existence, ownership or
