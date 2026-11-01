@@ -313,7 +313,7 @@ String _emitPrincipalRetirementSql(EntityGraphSpec graph) {
     }
   }
   for (final entity in owned) {
-    final parent = entity.accessInheritingParentField;
+    final parent = entity.lineageParentField;
     if (parent == null) continue;
     repairs.add(
       _repairSql(
@@ -595,10 +595,27 @@ String _successionSql(EntityGraphSpec graph, EntitySpec target) {
       ? ''
       : '\n      and root.${target.deletedAtField!.columnName} is null';
   final owner = target.ownerField.columnName;
+  final parent = target.collaborationInheritingParentField;
+  // A tree whose descendants inherit its collaborators passes with its root:
+  // roots go first, and a row whose parent passed on follows its owner.
+  final parentColumn = parent == null
+      ? ''
+      : ', root.${parent.columnName} as parent_id';
+  final treeOrder = parent == null
+      ? ''
+      : '\n    order by (select count(*) from '
+            'public.${_lineageFunction(target)}(root.${target.idField.columnName}))';
+  final followsParent = parent == null
+      ? ''
+      : '\n    continue when exists (\n'
+            '      select 1 from public.${target.tableName} parent\n'
+            '      where parent.${target.idField.columnName} = handover.parent_id\n'
+            '        and parent.$owner <> p_principal\n'
+            '    );';
   return '''  -- ${target.className} passes to its longest-standing active collaborator,
   -- preferring one who may edit.
   for handover in
-    select root.${target.idField.columnName} as entity_id, (
+    select root.${target.idField.columnName} as entity_id$parentColumn, (
       select member.$userKey from public.${collaboration.membershipTable} member
       where member.$entityKey = root.${target.idField.columnName}
         and $activeMember
@@ -607,8 +624,8 @@ String _successionSql(EntityGraphSpec graph, EntitySpec target) {
       limit 1
     ) as successor_id
     from public.${target.tableName} root
-    where root.$owner = p_principal$liveRoot
-  loop
+    where root.$owner = p_principal$liveRoot$treeOrder
+  loop$followsParent
     continue when handover.successor_id is null;
 $retireSuccessorMembership    update public.${target.tableName}
     set $owner = handover.successor_id,
@@ -916,7 +933,7 @@ for each row execute function public.cleanup_$base();''',
 String _emitRelationshipAccessSql(EntityGraphSpec graph) {
   final sections = <String>[
     for (final entity in graph.entities)
-      if (entity.accessInheritingParentField case final parent?)
+      if (entity.lineageParentField case final parent?)
         _lineageSql(entity, parent),
   ];
   for (final target in graph.entities.where(
@@ -1091,12 +1108,12 @@ for each row execute function public.$functionName();''',
 
 String _lineageFunction(EntitySpec entity) => '${entity.tableName}_lineage';
 
-/// The row and its ancestors, which share their relationship access with it.
-/// Depth is capped so a corrupt cycle cannot make an access check unbounded.
+/// The row and its ancestors, which share their access with it. Depth is
+/// capped so a corrupt cycle cannot make an access check unbounded.
 String _lineageSql(EntitySpec entity, FieldSpec parent) {
   final function = _lineageFunction(entity);
   final id = entity.idField.columnName;
-  return '''-- ${entity.className} rows share the relationship access of their ancestors.
+  return '''-- ${entity.className} rows share the access of their ancestors.
 
 create or replace function public.$function(p_id uuid)
 returns setof uuid language sql stable security definer
@@ -1510,11 +1527,19 @@ List<String> _entityAudienceCandidates(
         (entity) => entity.tableName == collaboration.membershipTable,
       );
       final workflow = membership.workflowMembership!;
+      final (targetMatch, stateMatch) = _membershipMatch(
+        target,
+        collaboration,
+        workflow,
+        memberAlias: memberAlias,
+        entityId: entityId,
+        includeReadableStates: includeReadableStates,
+      );
       candidates.add(
         'select $memberAlias.${workflow.participant.columnName} as user_id '
         'from public.${membership.tableName} $memberAlias where '
-        '$memberAlias.${workflow.targetReference.columnName} = $entityId '
-        'and ${_workflowStatePredicate('$memberAlias.${workflow.status.columnName}', collaboration, includeReadableStates: includeReadableStates)} '
+        '$targetMatch '
+        'and $stateMatch '
         'and $memberAlias.${membership.deletedAtField!.columnName} is null',
       );
     }
@@ -1792,6 +1817,22 @@ String _emitWorkflowCollaborationSql(EntityGraphSpec graph) {
       (field) => field.name == EntityConventions.deletedAtFieldName,
     );
     final functionName = 'publish_${membership.tableName}_access';
+    final (acceptedTarget, acceptedState) = _membershipMatch(
+      target,
+      collaboration,
+      workflow,
+      memberAlias: 'member',
+      entityId: 'p_id',
+      includeReadableStates: false,
+    );
+    final (viewerTarget, viewerState) = _membershipMatch(
+      target,
+      collaboration,
+      workflow,
+      memberAlias: 'member',
+      entityId: 'p_id',
+      includeReadableStates: true,
+    );
     final propagatesReferenceAccess = graph.entities.any(
       (entity) => entity.accessReferenceFields.any(
         (field) => field.reference!.targetClassName == target.className,
@@ -1844,9 +1885,9 @@ returns boolean language sql stable security definer
 set search_path = '' as \$\$
   select exists (
     select 1 from public.${membership.tableName} member
-    where member.${workflow.targetReference.columnName} = p_id
+    where $acceptedTarget
       and member.${workflow.participant.columnName} = auth.uid()
-      and member.${workflow.status.columnName} = $accepted
+      and $acceptedState
       and member.$column
       and member.${deletedAt.columnName} is null
   );
@@ -1855,40 +1896,24 @@ set search_path = '' as \$\$
 revoke all on function public.is_${target.tableName}_editor(uuid) from $supabaseApiRoles;
 grant execute on function public.is_${target.tableName}_editor(uuid) to authenticated;''',
     };
+    final inheritedPublication =
+        switch (target.collaborationInheritingParentField) {
+          null => null,
+          final parent => _inheritedCollaborationPublicationSql(
+            graph,
+            target,
+            parent,
+            membership: membership,
+            publishMembership: functionName,
+            editPermission: collaboration.editPermissionField,
+            propagatesReferenceAccess: propagatesReferenceAccess,
+          ),
+        };
     if (collaboration.hasAdditionalReadableStates) {
       final readable = collaboration.readableValues.map(_sqlLiteral).join(', ');
-      sections.add('''-- Entity-backed collaboration for ${target.className}.
-
-create or replace function public.is_${target.tableName}_collaborator(p_id uuid)
-returns boolean language sql stable security definer
-set search_path = '' as \$\$
-  select exists (
-    select 1 from public.${membership.tableName} member
-    where member.${workflow.targetReference.columnName} = p_id
-      and member.${workflow.participant.columnName} = auth.uid()
-      and member.${workflow.status.columnName} = $accepted
-      and member.${deletedAt.columnName} is null
-  );
-\$\$;
-
-create or replace function public.is_${target.tableName}_viewer(p_id uuid)
-returns boolean language sql stable security definer
-set search_path = '' as \$\$
-  select exists (
-    select 1 from public.${membership.tableName} member
-    where member.${workflow.targetReference.columnName} = p_id
-      and member.${workflow.participant.columnName} = auth.uid()
-      and member.${workflow.status.columnName} in ($readable)
-      and member.${deletedAt.columnName} is null
-  );
-\$\$;
-
-revoke all on function public.is_${target.tableName}_collaborator(uuid) from $supabaseApiRoles;
-revoke all on function public.is_${target.tableName}_viewer(uuid) from $supabaseApiRoles;
-grant execute on function public.is_${target.tableName}_collaborator(uuid) to authenticated;
-grant execute on function public.is_${target.tableName}_viewer(uuid) to authenticated;$editorSql
-
-create or replace function public.$functionName()
+      final publication =
+          inheritedPublication ??
+          '''create or replace function public.$functionName()
 returns trigger
 language plpgsql
 security definer
@@ -1956,27 +1981,44 @@ drop trigger if exists ${membership.tableName}_publish_access on public.${member
 create trigger ${membership.tableName}_publish_access
 after insert or update of $watchedColumns
 on public.${membership.tableName}
-for each row execute function public.$functionName();''');
-      continue;
-    }
-    sections.add('''-- Entity-backed collaboration for ${target.className}.
+for each row execute function public.$functionName();''';
+      sections.add('''-- Entity-backed collaboration for ${target.className}.
 
 create or replace function public.is_${target.tableName}_collaborator(p_id uuid)
 returns boolean language sql stable security definer
 set search_path = '' as \$\$
   select exists (
     select 1 from public.${membership.tableName} member
-    where member.${workflow.targetReference.columnName} = p_id
+    where $acceptedTarget
       and member.${workflow.participant.columnName} = auth.uid()
-      and member.${workflow.status.columnName} = $accepted
+      and $acceptedState
+      and member.${deletedAt.columnName} is null
+  );
+\$\$;
+
+create or replace function public.is_${target.tableName}_viewer(p_id uuid)
+returns boolean language sql stable security definer
+set search_path = '' as \$\$
+  select exists (
+    select 1 from public.${membership.tableName} member
+    where $viewerTarget
+      and member.${workflow.participant.columnName} = auth.uid()
+      and $viewerState
       and member.${deletedAt.columnName} is null
   );
 \$\$;
 
 revoke all on function public.is_${target.tableName}_collaborator(uuid) from $supabaseApiRoles;
-grant execute on function public.is_${target.tableName}_collaborator(uuid) to authenticated;$editorSql
+revoke all on function public.is_${target.tableName}_viewer(uuid) from $supabaseApiRoles;
+grant execute on function public.is_${target.tableName}_collaborator(uuid) to authenticated;
+grant execute on function public.is_${target.tableName}_viewer(uuid) to authenticated;$editorSql
 
-create or replace function public.$functionName()
+$publication''');
+      continue;
+    }
+    final publication =
+        inheritedPublication ??
+        '''create or replace function public.$functionName()
 returns trigger
 language plpgsql
 security definer
@@ -2036,9 +2078,231 @@ drop trigger if exists ${membership.tableName}_publish_access on public.${member
 create trigger ${membership.tableName}_publish_access
 after insert or update of $watchedColumns
 on public.${membership.tableName}
-for each row execute function public.$functionName();''');
+for each row execute function public.$functionName();''';
+    sections.add('''-- Entity-backed collaboration for ${target.className}.
+
+create or replace function public.is_${target.tableName}_collaborator(p_id uuid)
+returns boolean language sql stable security definer
+set search_path = '' as \$\$
+  select exists (
+    select 1 from public.${membership.tableName} member
+    where $acceptedTarget
+      and member.${workflow.participant.columnName} = auth.uid()
+      and $acceptedState
+      and member.${deletedAt.columnName} is null
+  );
+\$\$;
+
+revoke all on function public.is_${target.tableName}_collaborator(uuid) from $supabaseApiRoles;
+grant execute on function public.is_${target.tableName}_collaborator(uuid) to authenticated;$editorSql
+
+$publication''');
   }
   return sections.join('\n\n');
+}
+
+/// Publication for a [target] whose descendants count its accepted
+/// collaborators as their own: one function publishing a row, everything it
+/// shares, and its descendants to one user; the membership trigger calling
+/// it; and a trigger moving a subtree's inherited collaborators with it.
+String _inheritedCollaborationPublicationSql(
+  EntityGraphSpec graph,
+  EntitySpec target,
+  FieldSpec parent, {
+  required EntitySpec membership,
+  required String publishMembership,
+  required String? editPermission,
+  required bool propagatesReferenceAccess,
+}) {
+  final collaboration = target.security.collaboration!;
+  final workflow = membership.workflowMembership!;
+  final deletedAt = membership.deletedAtField!.columnName;
+  final status = workflow.status.columnName;
+  final accepted = _sqlLiteral(collaboration.acceptedValue!);
+  final readable = collaboration.readableValues.map(_sqlLiteral).join(', ');
+  final id = target.idField.columnName;
+  final publishRow = 'publish_${target.tableName}_collaboration_access';
+  final moveFunction =
+      'publish_${target.tableName}_${parent.columnName}_collaboration';
+
+  String rowPublication(String userExpression) {
+    final readableRow = _readableByUserExpression(
+      graph,
+      target,
+      rowAlias: 'target_row',
+      userExpression: userExpression,
+      includeReadableStates: true,
+    );
+    return '''  target_readable := $readableRow;
+${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression: userExpression, indent: '  ')}  delete from public.local_entity_changes
+  where entity_type = ${_sqlLiteral(target.className)}
+    and entity_id = target_row.$id
+    and audience_user_id = $userExpression;
+  insert into public.local_entity_changes (
+    entity_type, entity_id, owner_id, server_version,
+    operation_id, audience_user_id, is_revocation, record
+  ) values (
+    ${_sqlLiteral(target.className)},
+    target_row.$id,
+    target_row.${target.ownerField.columnName},
+    target_row.${target.serverVersionField.columnName},
+    nullif(current_setting('app.operation_id', true), '')::uuid,
+    $userExpression,
+    not target_readable,
+    ${_publishedRecord(target, 'target_row', readable: 'target_readable')}
+  );''';
+  }
+
+  final references = propagatesReferenceAccess
+      ? '  perform public.publish_${target.tableName}_reference_access(\n'
+            '    p_target_id,\n'
+            '    p_user_id\n'
+            '  );\n'
+      : '';
+  final visibility = collaboration.hasAdditionalReadableStates;
+  final declarations = [
+    if (visibility) ...[
+      'target_row public.${target.tableName};',
+      'target_readable boolean;',
+    ],
+    'was_active boolean := false;',
+    'is_active boolean;',
+    if (visibility) ...['was_visible boolean := false;', 'is_visible boolean;'],
+    if (editPermission != null) ...[
+      'was_editor boolean := false;',
+      'is_editor boolean;',
+    ],
+  ].map((line) => '  $line').join('\n');
+  String state(String row, String prefix, String indent) => [
+    '$indent${prefix}_active := $row.$status = $accepted\n'
+        '$indent  and $row.$deletedAt is null;',
+    if (visibility)
+      '$indent${prefix}_visible := $row.$status in ($readable)\n'
+          '$indent  and $row.$deletedAt is null;',
+    if (editPermission != null)
+      '$indent${prefix}_editor := ${prefix}_active and $row.$editPermission;',
+  ].join('\n');
+  final unchanged = [
+    'was_active = is_active',
+    if (visibility) 'was_visible = is_visible',
+    if (editPermission != null) 'was_editor = is_editor',
+  ].join(' and ');
+  final shared = [
+    'was_active is distinct from is_active',
+    if (editPermission != null) 'was_editor is distinct from is_editor',
+  ].join(' or ');
+  final participant = 'new.${workflow.participant.columnName}';
+  final targetReference = 'new.${workflow.targetReference.columnName}';
+  final invitation = visibility
+      ? '''
+  -- Any other readable state reveals only the row it names.
+  select * into target_row from public.${target.tableName}
+  where $id = $targetReference;
+  if not found then
+    raise exception 'Collaboration target not found' using errcode = 'P0001';
+  end if;
+${rowPublication(participant)}
+'''
+      : '';
+  return '''-- Collaborators of a ${target.className} also collaborate on its descendants.
+
+create or replace function public.$publishRow(
+  p_target_id uuid,
+  p_user_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as \$\$
+declare
+  target_row public.${target.tableName};
+  target_readable boolean;
+begin
+  select * into target_row from public.${target.tableName}
+  where $id = p_target_id;
+  if not found then return; end if;
+${rowPublication('p_user_id')}
+$references  perform public.$publishRow(child.$id, p_user_id)
+  from public.${target.tableName} child
+  where child.${parent.columnName} = p_target_id;
+end;
+\$\$;
+
+revoke all on function public.$publishRow(uuid, uuid) from $supabaseApiRoles;
+
+create or replace function public.$publishMembership()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as \$\$
+declare
+$declarations
+begin
+  if tg_op = 'UPDATE' then
+${state('old', 'was', '    ')}
+  end if;
+${state('new', 'is', '  ')}
+  if $unchanged then
+    return new;
+  end if;
+
+  if $shared then
+    perform public.$publishRow(
+      $targetReference,
+      $participant
+    );
+    return new;
+  end if;
+$invitation  return new;
+end;
+\$\$;
+
+revoke all on function public.$publishMembership() from $supabaseApiRoles;
+drop trigger if exists ${membership.tableName}_publish_access on public.${membership.tableName};
+create trigger ${membership.tableName}_publish_access
+after insert or update of ${[status, deletedAt, ?editPermission].join(', ')}
+on public.${membership.tableName}
+for each row execute function public.$publishMembership();
+
+-- Moving a ${target.className} subtree moves the collaborators it inherits.
+
+create or replace function public.$moveFunction()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as \$\$
+declare
+  audience_user_id uuid;
+begin
+  if new.${parent.columnName} is not distinct from old.${parent.columnName} then
+    return new;
+  end if;
+  for audience_user_id in
+    select distinct member.${workflow.participant.columnName}
+    from public.${membership.tableName} member
+    where member.${workflow.targetReference.columnName} in (
+        select public.${_lineageFunction(target)}(old.${parent.columnName})
+        union
+        select public.${_lineageFunction(target)}(new.${parent.columnName})
+      )
+      and member.$status = $accepted
+      and member.$deletedAt is null
+  loop
+    perform public.$publishRow(new.$id, audience_user_id);
+  end loop;
+  return new;
+end;
+\$\$;
+
+revoke all on function public.$moveFunction() from $supabaseApiRoles;
+drop trigger if exists ${target.tableName}_${parent.columnName}_publish_collaboration
+on public.${target.tableName};
+create trigger ${target.tableName}_${parent.columnName}_publish_collaboration
+after update of ${parent.columnName}
+on public.${target.tableName}
+for each row execute function public.$moveFunction();''';
 }
 
 String _emitReferenceAccessPropagationSql(EntityGraphSpec graph) {
@@ -2379,10 +2643,18 @@ String _collaboratorByUserExpression(
   final deletedAt = membership.fields.singleWhere(
     (field) => field.name == EntityConventions.deletedAtFieldName,
   );
+  final (targetMatch, stateMatch) = _membershipMatch(
+    entity,
+    collaboration,
+    workflow,
+    memberAlias: 'member',
+    entityId: entityId,
+    includeReadableStates: includeReadableStates && !write,
+  );
   return 'exists (select 1 from public.${membership.tableName} member '
-      'where member.${workflow.targetReference.columnName} = $entityId '
+      'where $targetMatch '
       'and member.${workflow.participant.columnName} = $userExpression '
-      'and ${_workflowStatePredicate('member.${workflow.status.columnName}', collaboration, includeReadableStates: includeReadableStates && !write)} '
+      'and $stateMatch '
       '${write && collaboration.separatesEditors ? 'and member.${collaboration.editPermissionField} ' : ''}'
       'and member.${deletedAt.columnName} is null)';
 }
@@ -2396,6 +2668,41 @@ String _workflowStatePredicate(
 }) => includeReadableStates && collaboration.hasAdditionalReadableStates
     ? '$column in (${collaboration.readableValues.map(_sqlLiteral).join(', ')})'
     : '$column = ${_sqlLiteral(collaboration.acceptedValue!)}';
+
+/// The memberships of [memberAlias] granting collaboration on [entityId], as
+/// a target match and a state match. A row inheriting collaboration is also
+/// shared by accepted members of its ancestors; any other readable state,
+/// such as a pending invitation, reveals only the row it names.
+(String, String) _membershipMatch(
+  EntitySpec target,
+  CollaborationSpec collaboration,
+  WorkflowMembershipSpec workflow, {
+  required String memberAlias,
+  required String entityId,
+  required bool includeReadableStates,
+}) {
+  final targetColumn = '$memberAlias.${workflow.targetReference.columnName}';
+  final statusColumn = '$memberAlias.${workflow.status.columnName}';
+  final state = _workflowStatePredicate(
+    statusColumn,
+    collaboration,
+    includeReadableStates: includeReadableStates,
+  );
+  if (target.collaborationInheritingParentField == null) {
+    return ('$targetColumn = $entityId', state);
+  }
+  final accepted = _workflowStatePredicate(
+    statusColumn,
+    collaboration,
+    includeReadableStates: false,
+  );
+  return (
+    '$targetColumn in (select public.${_lineageFunction(target)}($entityId))',
+    state == accepted
+        ? accepted
+        : '($accepted or ($targetColumn = $entityId and $state))',
+  );
+}
 
 String _referencesByUserExpression(
   EntityGraphSpec graph,

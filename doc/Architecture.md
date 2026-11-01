@@ -1569,7 +1569,16 @@ share the relationship access granted on their ancestors, which the remote
 policy authorizes like any relationship grant. Generation resolves that
 lineage with a depth-capped helper, publishes snapshots and revocations to
 the old and new audiences of a moved subtree, and hands a retiring owner's
-descendants to the owner of their parent. Feature code MUST NOT reconstruct descendants from a bounded
+descendants to the owner of their parent. A hierarchy of a workflow
+collaborative entity may also declare `inheritsCollaboration`: an accepted
+collaborator of a row then collaborates on every descendant with the edit
+permission held on that ancestor, and the most permissive of direct and
+inherited membership applies. Other readable states, such as a pending
+invitation, reveal only the row they name. The same lineage helper resolves
+membership in every collaborator check, audience, and publication; a change
+of membership publishes the whole subtree to that member, and moving a
+subtree publishes it to the collaborators of its old and new ancestors.
+Feature code MUST NOT reconstruct descendants from a bounded
 identity map or issue its own recursive lifecycle loop.
 
 Relationship mutation MUST enforce source and target existence, ownership or
@@ -2582,7 +2591,10 @@ generated principal retirement in the same transaction first. Each
 collaborative aggregate with an accepted collaborator passes, with every row
 that derives its owner from it, its compositions, and the targets linked into
 it, to the longest-standing accepted collaborator, preferring one who may
-edit, who last receives it as its owner. Every other audience that can read a
+edit, who last receives it as its owner. A tree inheriting collaboration
+passes with its root: a descendant whose parent passed on follows the
+owner of that parent, and only a descendant left under a parent that did
+not pass looks for a collaborator of its own. Every other audience that can read a
 row about to disappear receives a revocation or tombstone, addressed copies of
 the principal's remaining rows become identity-only revocations, and the
 principal's own history is purged. Applications MUST NOT hand-write that

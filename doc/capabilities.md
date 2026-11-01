@@ -455,6 +455,7 @@ behavior is a domain decision.
 | `aggregateMember` | The child is edited as part of its parent's aggregate draft. |
 | `hierarchy` | A self-reference forming a tree, with generated subtree remove/restore/archive. |
 | `inheritsAccess` | With `hierarchy`, descendants share the access relationships grant on their ancestors, such as a goal's editors on the steps of a linked task. Moving a subtree moves its access; a descendant whose owner leaves follows its parent's owner. |
+| `inheritsCollaboration` | With `hierarchy` and workflow collaboration, accepted collaborators of an ancestor collaborate on its descendants with the same edit permission, such as a goal's members on its subgoals and their linked work. Moving a subtree moves its collaborators; a retiring owner's tree passes with its root. |
 
 PostgreSQL keeps the authoritative foreign keys. Locally, a child may
 reference a target the user cannot see; the generated accessor then returns

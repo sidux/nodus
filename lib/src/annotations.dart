@@ -697,6 +697,7 @@ final class Reference {
     this.aggregateMember = false,
     this.hierarchy = false,
     this.inheritsAccess = false,
+    this.inheritsCollaboration = false,
   });
 
   /// Domain name of the generated inverse query on the target entity.
@@ -734,8 +735,19 @@ final class Reference {
   /// A goal that links a task then also shares its subtasks, at any depth,
   /// and moving a subtree under another parent moves its access with it. A
   /// descendant whose owner leaves follows the owner of its parent. Owner and
-  /// collaborator access stay with each row.
+  /// collaborator access stay with each row unless [inheritsCollaboration].
   final bool inheritsAccess;
+
+  /// Whether a [hierarchy] child counts the accepted collaborators of its
+  /// ancestors as its own, with the edit permission they hold there.
+  ///
+  /// Members of a shared goal then work on its subgoals at any depth, and on
+  /// everything those subgoals share. Only accepted membership is inherited:
+  /// a pending invitation reveals its own row only. When a row has direct and
+  /// inherited membership, the most permissive applies. Moving a subtree
+  /// moves its collaborators with it, and a retiring owner's tree passes with
+  /// its root. Requires workflow [CollaborationAccess] on the entity.
+  final bool inheritsCollaboration;
 }
 
 /// Selects one entity and the persisted fields that can trigger declared work.

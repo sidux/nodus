@@ -493,6 +493,20 @@ final class EntitySpec {
       )
       .firstOrNull;
 
+  /// The hierarchy parent whose accepted collaborators descendants share.
+  FieldSpec? get collaborationInheritingParentField => fields
+      .where(
+        (field) =>
+            field.reference?.hierarchy == true &&
+            field.reference!.inheritsCollaboration,
+      )
+      .firstOrNull;
+
+  /// The hierarchy parent through which descendants share any access, which
+  /// generation resolves with a lineage helper.
+  FieldSpec? get lineageParentField =>
+      accessInheritingParentField ?? collaborationInheritingParentField;
+
   /// Resolves what the whole graph decides about this entity: the access
   /// relationships elsewhere grant on it and on its references, which
   /// referenced entities' relationship readers act for their owner, and the
@@ -1776,6 +1790,7 @@ final class ReferenceSpec {
     required this.aggregateMember,
     required this.hierarchy,
     this.inheritsAccess = false,
+    this.inheritsCollaboration = false,
     required this.targetSelectPrincipals,
     required this.targetOwnerOperations,
     required this.targetOwnerDartType,
@@ -1800,6 +1815,10 @@ final class ReferenceSpec {
 
   /// Whether a hierarchy child shares its ancestors' relationship access.
   final bool inheritsAccess;
+
+  /// Whether a hierarchy child counts its ancestors' accepted collaborators
+  /// as its own.
+  final bool inheritsCollaboration;
   final List<RlsPrincipal> targetSelectPrincipals;
   final List<RlsOperation> targetOwnerOperations;
   final String targetOwnerDartType;
@@ -1836,6 +1855,7 @@ final class ReferenceSpec {
       aggregateMember: aggregateMember,
       hierarchy: hierarchy,
       inheritsAccess: inheritsAccess,
+      inheritsCollaboration: inheritsCollaboration,
       targetSelectPrincipals: targetSelectPrincipals,
       targetOwnerOperations: targetOwnerOperations,
       targetOwnerDartType: targetOwnerDartType,

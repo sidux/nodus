@@ -3788,6 +3788,14 @@ void _validateGraphEntities(List<EntitySpec> entities, Element element) {
             element: element,
           );
         }
+        if (reference.inheritsCollaboration &&
+            !(entity.security.collaboration?.isWorkflow ?? false)) {
+          throw InvalidGenerationSourceError(
+            '`${entity.className}.${field.name}` inherits collaboration, but '
+            '`${entity.className}` declares no workflow CollaborationAccess.',
+            element: element,
+          );
+        }
       }
       if (field.isAccessReference &&
           target.security.grants.any(
@@ -4370,6 +4378,14 @@ ReferenceSpec _parseReference(
       element: field,
     );
   }
+  final inheritsCollaboration =
+      annotation.peek('inheritsCollaboration')?.boolValue ?? false;
+  if (inheritsCollaboration && !hierarchy) {
+    throw InvalidGenerationSourceError(
+      '$annotationName(inheritsCollaboration: true) requires hierarchy: true.',
+      element: field,
+    );
+  }
   return ReferenceSpec(
     targetClassName: target.name!,
     targetInputImport: target.library.uri.toString(),
@@ -4383,6 +4399,7 @@ ReferenceSpec _parseReference(
     aggregateMember: aggregateMember,
     hierarchy: hierarchy,
     inheritsAccess: inheritsAccess,
+    inheritsCollaboration: inheritsCollaboration,
     targetSelectPrincipals:
         targetSecurity.grants
             .where((grant) => grant.operation == RlsOperation.select)

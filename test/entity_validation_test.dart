@@ -4330,6 +4330,113 @@ abstract class HelperReview implements OwnedBy<HelperReview, Account> {
       );
     });
 
+    test('share a goal\'s collaborators with its subgoals at any depth', () async {
+      final sources = _reviewedTaskSources(blockedTransition: null)
+        ..['nodus|lib/goal.dart'] = _nestedGoalSource();
+
+      await expectSql(
+        sources,
+        allOf([
+          contains(
+            'create or replace function public.goals_lineage(p_id uuid)\n'
+            'returns setof uuid language sql stable security definer',
+          ),
+          // Accepted members of an ancestor collaborate, with the edit
+          // permission they hold there; an invitation reveals its own row.
+          predicate<String>(
+            (sql) => _sqlFunctionBody(sql, 'public.is_goals_editor(p_id uuid)')
+                .contains(
+                  'where member.goal_id in (select public.goals_lineage(p_id))\n'
+                  '      and member.member_id = auth.uid()\n'
+                  "      and member.status = 'accepted'\n"
+                  '      and member.can_edit',
+                ),
+            'editor check spans the lineage',
+          ),
+          predicate<String>(
+            (sql) => _sqlFunctionBody(sql, 'public.is_goals_viewer(p_id uuid)')
+                .contains(
+                  "and (member.status = 'accepted' or (member.goal_id = p_id "
+                  "and member.status in ('accepted', 'pending')))",
+                ),
+            'an invitation is readable only on its own goal',
+          ),
+          // Work linked into a subgoal follows the members of its ancestors.
+          contains(
+            'exists (select 1 from public.goal_members member where '
+            'member.goal_id in (select public.goals_lineage(access_goal_id.id)) '
+            'and member.member_id = auth.uid()',
+          ),
+          // A change of membership publishes the whole subtree.
+          contains(
+            '  perform public.publish_goals_collaboration_access(child.id, '
+            'p_user_id)\n'
+            '  from public.goals child\n'
+            '  where child.parent_goal_id = p_target_id;',
+          ),
+          contains(
+            '  if was_active is distinct from is_active or was_editor is '
+            'distinct from is_editor then\n'
+            '    perform public.publish_goals_collaboration_access(\n'
+            '      new.goal_id,\n'
+            '      new.member_id\n'
+            '    );',
+          ),
+          // Moving a subgoal publishes it to its old and new collaborators.
+          contains(
+            "        select public.goals_lineage(old.parent_goal_id)\n"
+            '        union\n'
+            '        select public.goals_lineage(new.parent_goal_id)',
+          ),
+          contains(
+            'create trigger goals_parent_goal_id_publish_collaboration\n'
+            'after update of parent_goal_id\n'
+            'on public.goals',
+          ),
+          // A retiring owner's tree passes with its root.
+          contains(
+            '    order by (select count(*) from public.goals_lineage(root.id))\n'
+            '  loop\n'
+            '    continue when exists (',
+          ),
+          contains(
+            "-- Goal sharing its ancestors' access follows the owner of its "
+            'parent parentGoalId.',
+          ),
+        ]),
+      );
+    });
+
+    test('reject inherited collaboration outside a hierarchy', () async {
+      final errors = await generationErrors(
+        _reviewedTaskSources(blockedTransition: null)
+          ..['nodus|lib/goal.dart'] = _nestedGoalSource(hierarchy: false),
+      );
+
+      expect(
+        errors,
+        contains('(inheritsCollaboration: true) requires hierarchy'),
+      );
+    });
+
+    test(
+      'reject inherited collaboration without workflow collaboration',
+      () async {
+        final errors = await generationErrors(
+          _reviewedTaskSources(blockedTransition: null)
+            ..['nodus|lib/goal.dart'] = _nestedGoalSource(collaboration: false),
+        );
+
+        expect(
+          errors,
+          contains(
+            '`Goal.parentGoalId` inherits collaboration, but `Goal` declares no '
+            'workflow CollaborationAccess.',
+          ),
+        );
+      },
+    );
+
     test('reject a cycle through the editors\' read access', () async {
       final sources = _reviewedTaskSources()
         ..['nodus|lib/review_task_link.dart'] = r'''
@@ -9114,6 +9221,30 @@ abstract class Task implements OwnedBy<Task, Account>, SoftDeletable {
 
   @Action(values: [ActionValue(#status, TaskStatus.done)])
   Future<void> complete();
+}
+''';
+
+/// A goal whose subgoals count its collaborators as their own.
+String _nestedGoalSource({bool hierarchy = true, bool collaboration = true}) =>
+    '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/membership_status.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  ${collaboration ? "collaboration: CollaborationAccess.workflow(additionalReadableStates: [MembershipStatus.pending], editPermissionField: 'can_edit')," : ''}
+)
+abstract class Goal implements OwnedBy<Goal, Account>, SoftDeletable {
+  @Reference(
+    inverse: 'subgoals',
+    onDelete: ReferenceDeleteAction.cascade,
+    ${hierarchy ? 'hierarchy: true,' : ''}
+    inheritsCollaboration: true,
+  )
+  abstract final LocalId<Goal>? parentGoalId;
+
+  abstract final String title;
 }
 ''';
 
