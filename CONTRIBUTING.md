@@ -47,9 +47,9 @@ Tests that need the Flutter engine carry `@Tags(['flutter'])` so the pure Dart
 suite stays fast. Tag any new test that imports Flutter.
 
 Generating a Supabase migration in the example (`dart run nodus migrate ...`)
-runs `supabase db diff`, so it needs the
-[Supabase CLI](https://supabase.com/docs/guides/local-development) and a
-running Docker daemon.
+runs `supabase db schema declarative sync`, so it needs
+[Supabase CLI](https://supabase.com/docs/guides/local-development) 2.121 or
+newer and its database runtime (Docker, or the native runtime).
 
 ## Pull requests
 

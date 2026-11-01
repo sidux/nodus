@@ -22,8 +22,8 @@ entity graph, and sync targets in a few minutes.
 - Flutter stable with Dart `3.10` or newer.
 - An existing Flutter application package (`flutter create my_app`).
 - For steps 6 and 8 only: the
-  [Supabase CLI](https://supabase.com/docs/guides/local-development), Docker,
-  and a Supabase project (local or hosted). Steps 1–5 and 7 need no backend.
+  [Supabase CLI](https://supabase.com/docs/guides/local-development) 2.121 or
+  newer, Docker (or the CLI's native runtime), and a Supabase project (local or hosted). Steps 1–5 and 7 need no backend.
 
 ## 1. Add the dependencies
 
@@ -337,7 +337,8 @@ dart run nodus migrate add_task_due_date
 name, so the version can never be forgotten. `migrate` advances `nodus.lock`
 and writes, for review, the Drift migration, the updated canonical Supabase
 schema, and the Supabase SQL migration. The SQL diff comes from
-`supabase db diff`, which needs the Supabase CLI and a running Docker daemon.
+`supabase db schema declarative sync`, which needs Supabase CLI 2.121 or newer
+and its database runtime (Docker, or the native runtime).
 It also writes migration tests under `test/drift/`; run them with
 `flutter test`.
 
@@ -351,7 +352,7 @@ stale. Add it to CI.
 | `init` says `build.yaml` contains handwritten configuration | Nodus owns `build.yaml`. Move or remove the custom settings, then rerun `init`. |
 | `init` finds no entities | Entities must be `@Entity()` classes inside a `domain/` directory under `lib/`. |
 | `generate` says the schema changed without a named migration | Run `dart run nodus migrate <name>`. |
-| `migrate` fails while running `supabase db diff` | Install the Supabase CLI and start Docker. |
+| `migrate` fails while running `supabase db schema declarative sync` | Install Supabase CLI 2.121 or newer and start its database runtime (Docker, unless you use the native runtime). |
 | A migration test fails with "requires an explicit manual migration plan" | The schema change adds a constraint or needs data changes. Decide how existing rows migrate with a [migration plan](capabilities.md#migrations), and pass the same strategy in `test/drift/<database>/migration_test.dart`. |
 | Typed routes are not generated | Add the root `not_found.dart` page; see [typed routes](capabilities.md#typed-route-generation). |
 | The web build cannot open the database | Serve Drift's `sqlite3.wasm` and `drift_worker.js` from `web/`; see [Web](capabilities.md#web). |

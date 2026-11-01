@@ -68,13 +68,16 @@ Records a schema change under a `lower_snake_case` name. In one step it:
 2. regenerates the code;
 3. writes the Drift schema snapshot, migration steps, and migration tests;
 4. rewrites the canonical Supabase schema `supabase/schemas/public.sql`;
-5. for a Supabase target, runs `supabase db diff -f NAME` to write the SQL
-   migration into `supabase/migrations/`.
+5. for a Supabase target, runs
+   `supabase db schema declarative sync --schema public --name NAME --no-apply`
+   to write the SQL migration into `supabase/migrations/`.
 
-Step 5 needs the [Supabase CLI](https://supabase.com/docs/guides/local-development)
-and a running Docker daemon: the CLI diffs the migration history against the
-canonical schema in a temporary shadow database. The local Supabase stack
-itself does not need to be running. Review all generated migrations together
+Step 5 needs [Supabase CLI](https://supabase.com/docs/guides/local-development)
+2.121 or newer and its database runtime (Docker, or the native runtime): the
+CLI diffs the migration history against the canonical schema in a temporary
+shadow database. The local Supabase stack itself does not need to be running.
+Nodus does not use `supabase db diff`: since CLI 2.121 it ignores the
+declarative schema and reports no changes. Review all generated migrations together
 before committing; the CLI's diff can include unrelated drift.
 
 `migrate` also runs `dart format`, like every full generation (`init` and the

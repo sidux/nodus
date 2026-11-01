@@ -476,8 +476,10 @@ void main() {
       final output = fixture.file(
         'supabase/migrations/20260711000000_add_index.sql',
       );
+      final commands = <String>[];
       final generator = fixture.generator(
         runCommand: (executable, arguments, {required workingDirectory}) async {
+          commands.add('$executable ${arguments.join(' ')}');
           output
             ..createSync(recursive: true)
             ..writeAsStringSync('create index example_idx on example(id);\n');
@@ -486,6 +488,10 @@ void main() {
 
       await generator.generateSupabaseMigration('add_index');
 
+      expect(commands, [
+        'supabase db schema declarative sync --schema public '
+            '--name add_index --no-apply',
+      ]);
       final source = output.readAsStringSync();
       expect(source, contains('create index example_idx'));
       expect(source, contains('Reviewed manual migration extension'));

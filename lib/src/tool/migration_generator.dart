@@ -1168,7 +1168,19 @@ final class NodusGenerator {
       return;
     }
 
-    await _run('supabase', ['db', 'diff', '-f', name]);
+    // `supabase db diff` ignores the declarative schema since CLI 2.121; the
+    // declarative sync diffs the migration history against it.
+    await _run('supabase', [
+      'db',
+      'schema',
+      'declarative',
+      'sync',
+      '--schema',
+      'public',
+      '--name',
+      name,
+      '--no-apply',
+    ]);
     final candidates = _namedMigrations(migrations, name);
     if (candidates.isEmpty) {
       if (!fragment.existsSync()) {
