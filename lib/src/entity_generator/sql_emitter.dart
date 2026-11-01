@@ -808,7 +808,10 @@ String _ownershipReferenceAccessExpression(
   required String Function(FieldSpec field) idFor,
   bool write = false,
 }) {
-  final references = spec.ownershipReferenceFields;
+  final references = [
+    for (final field in spec.ownershipReferenceFields)
+      if (!write || field.ownerReferenceWritesThrough) field,
+  ];
   if (references.isEmpty) return 'false';
   final expression = references
       .map((field) {

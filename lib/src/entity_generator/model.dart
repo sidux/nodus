@@ -1472,6 +1472,7 @@ final class FieldSpec {
     this.accessTargetActiveStateEnumType,
     this.accessTargetActiveStateEnumImport,
     this.isOwnerReference = false,
+    this.ownerReferenceWritesThrough = true,
     this.isRelationshipEditorAccess = false,
     this.relationshipEditorTargetClassName,
     this.relationshipEditorTargetTableName,
@@ -1530,6 +1531,10 @@ final class FieldSpec {
   final String? accessTargetActiveStateEnumType;
   final String? accessTargetActiveStateEnumImport;
   final bool isOwnerReference;
+
+  /// Whether editors of the owner reference's target may create the row for
+  /// its owner (see `OwnerReference.writeThrough`).
+  final bool ownerReferenceWritesThrough;
 
   /// Whether relationship editors of the referenced entity act for this row's
   /// owner (see `RelationshipEditorAccess`).
@@ -1603,6 +1608,7 @@ final class FieldSpec {
     accessTargetActiveStateEnumType: accessTargetActiveStateEnumType,
     accessTargetActiveStateEnumImport: accessTargetActiveStateEnumImport,
     isOwnerReference: isOwnerReference,
+    ownerReferenceWritesThrough: ownerReferenceWritesThrough,
     isRelationshipEditorAccess: isRelationshipEditorAccess,
     relationshipEditorTargetClassName: relationshipEditorTargetClassName,
     relationshipEditorTargetTableName: relationshipEditorTargetTableName,

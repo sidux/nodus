@@ -486,6 +486,9 @@ Future<EntitySpec?> parseEntityAsset(
         ownerReferenceTargetReader == null || ownerReferenceTargetReader.isNull
         ? null
         : ownerReferenceTargetReader.objectValue.toSymbolValue();
+    final ownerReferenceWritesThrough = _ownerReferenceWritesThrough(
+      ownerReferenceObject,
+    );
 
     final persisted = persistedAnnotation == null
         ? null
@@ -720,6 +723,7 @@ Future<EntitySpec?> parseEntityAsset(
         accessTargetActiveStateEnumType: accessTargetStates.enumType,
         accessTargetActiveStateEnumImport: accessTargetStates.enumImport,
         isOwnerReference: isOwnerReference,
+        ownerReferenceWritesThrough: ownerReferenceWritesThrough,
         isRelationshipEditorAccess: isRelationshipEditorAccess,
         relationshipEditorTargetClassName:
             relationshipEditor?.reference.targetClassName,
@@ -2221,6 +2225,12 @@ void _validateAccessTargetFields(
   }
 }
 
+bool _ownerReferenceWritesThrough(DartObject? ownerReference) {
+  if (ownerReference == null) return true;
+  final reader = ConstantReader(ownerReference).peek('writeThrough');
+  return reader == null || reader.isNull || reader.boolValue;
+}
+
 void _validateOwnerReferenceField(
   FieldElement field, {
   required ReferenceSpec? reference,
@@ -2779,6 +2789,9 @@ FieldSpec _parsePersistedVariantComponent(
       ownerReferenceReader == null || ownerReferenceReader.isNull
       ? null
       : ownerReferenceReader.objectValue.toSymbolValue();
+  final ownerReferenceWritesThrough = _ownerReferenceWritesThrough(
+    ownerReferenceObject,
+  );
   final reference = referenceObject == null
       ? null
       : _parseReference(
@@ -2957,6 +2970,7 @@ FieldSpec _parsePersistedVariantComponent(
     accessTargetActiveStateEnumType: accessTargetStates.enumType,
     accessTargetActiveStateEnumImport: accessTargetStates.enumImport,
     isOwnerReference: ownerReferenceObject != null,
+    ownerReferenceWritesThrough: ownerReferenceWritesThrough,
     isRelationshipEditorAccess: relationshipEditor != null,
     relationshipEditorTargetClassName:
         relationshipEditor?.reference.targetClassName,

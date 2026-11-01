@@ -879,7 +879,7 @@ final class RelationshipEditorAccess {
 /// This is independent from [AccessReference]: an invitation may inherit its
 /// owner from a target while remaining visible through participant grants.
 final class OwnerReference {
-  const OwnerReference({this.targetField});
+  const OwnerReference({this.targetField, this.writeThrough = true});
 
   /// Optional identity field on the referenced entity from which ownership is
   /// derived. Omitting it uses the referenced entity's conventional owner.
@@ -888,6 +888,14 @@ final class OwnerReference {
   /// relationship owner, owns the child record. The referenced field must be
   /// immutable, non-null, and have the same nominal owner type.
   final Symbol? targetField;
+
+  /// Whether principals who may edit the referenced entity may also create
+  /// this row for its owner through an `RlsPrincipal.reference` insert grant.
+  ///
+  /// Set it to false when only the derived owner may decide the row, for
+  /// example who checks the owner's work: an editor of the owner's goal must
+  /// not appoint themselves as its checker.
+  final bool writeThrough;
 }
 
 /// Declares one atomic, generated domain mutation.

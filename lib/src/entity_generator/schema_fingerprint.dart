@@ -95,6 +95,8 @@ Map<String, Object?> _entitySchema(EntitySpec entity) => {
         'accessTarget': field.isAccessTarget,
         'composition': field.isComposition,
         'ownerReference': field.isOwnerReference,
+        if (!field.ownerReferenceWritesThrough)
+          'ownerReferenceWriteThrough': false,
         if (field.isRelationshipEditorAccess)
           'relationshipEditorAccess': {
             'target': field.relationshipEditorTargetClassName,

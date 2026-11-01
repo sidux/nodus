@@ -4033,6 +4033,27 @@ abstract class Task implements OwnedBy<Task, Account> {
       );
     });
 
+    test('only the task owner picks who checks it', () async {
+      const policy =
+          'create policy reviews_insert_reference on public.reviews for '
+          'insert to authenticated with check ';
+      await expectSql(
+        _reviewedTaskSources(referenceInsert: true),
+        contains(
+          '$policy((((public.is_tasks_owner(reviews.task_id) or '
+          'public.is_tasks_relationship_update(reviews.task_id))) and '
+          '(auth.uid() = reviews.reviewer_id))',
+        ),
+      );
+      await expectSql(
+        _reviewedTaskSources(referenceInsert: true, ownerWritesThrough: false),
+        allOf([
+          contains('$policy(((false) and (auth.uid() = reviews.reviewer_id))'),
+          isNot(contains('public.is_tasks_owner(reviews.task_id)')),
+        ]),
+      );
+    });
+
     test('read the task\'s review and ask its reviewer for a check', () async {
       await expectSql(
         _reviewedTaskSources(),
@@ -9101,6 +9122,8 @@ abstract class Task implements OwnedBy<Task, Account>, SoftDeletable {
 Map<String, String> _reviewedTaskSources({
   bool withGoalLink = true,
   bool editorAccess = true,
+  bool referenceInsert = false,
+  bool ownerWritesThrough = true,
   String? blockedTransition =
       'AllowedTransition(TaskStatus.todo, TaskStatus.done, '
       'relationshipBlockedBy: [_checked])',
@@ -9157,11 +9180,12 @@ enum ReviewStatus { pending, accepted }
     RlsGrant(RlsOperation.select, RlsPrincipal.owner),
     RlsGrant(RlsOperation.select, RlsPrincipal.participant),
     RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    ${referenceInsert ? 'RlsGrant(RlsOperation.insert, RlsPrincipal.reference),' : ''}
     RlsGrant(RlsOperation.update, RlsPrincipal.participant),
   ],
 )
 abstract class Review implements OwnedBy<Review, Account> {
-  @OwnerReference()
+  @OwnerReference(${ownerWritesThrough ? '' : 'writeThrough: false'})
   @AccessTarget(operations: [RlsOperation.select])
   ${editorAccess ? '@RelationshipEditorAccess()' : ''}
   @Reference(onDelete: ReferenceDeleteAction.cascade)
