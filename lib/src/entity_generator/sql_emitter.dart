@@ -3329,10 +3329,18 @@ String _transitionValidationSql(EntitySpec spec) {
     final next = '(${_jsonCast("p_patch -> '${field.name}'", field)})';
     final allowed = field.transitions
         .map((transition) {
+          // An unrestricted edge inherits every update grant, including the
+          // one a relationship elsewhere in the graph gives on this entity.
           final principals = transition.principals.isEmpty
-              ? spec.security.grants
-                    .where((grant) => grant.operation == RlsOperation.update)
-                    .map((grant) => grant.principal)
+              ? {
+                  ...spec.security.grants
+                      .where((grant) => grant.operation == RlsOperation.update)
+                      .map((grant) => grant.principal),
+                  if (spec.relationshipAccessOperations.contains(
+                    RlsOperation.update,
+                  ))
+                    RlsPrincipal.relationship,
+                }
               : transition.principals;
           final actor = principals
               .map(

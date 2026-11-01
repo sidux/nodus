@@ -3905,6 +3905,79 @@ abstract class TaskEvent implements OwnedBy<TaskEvent, Account> {
     );
   });
 
+  test('lets a relationship editor take an unrestricted transition', () async {
+    final sources =
+        _sources(r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/goal.dart';
+import 'package:nodus/task.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class GoalTaskLink implements OwnedBy<GoalTaskLink, Account> {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> goalId;
+
+  @AccessTarget()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+}
+''', fileName: 'goal_task_link.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}'
+          ..['nodus|lib/goal.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Goal implements OwnedBy<Goal, Account> {}
+'''
+          ..['nodus|lib/task.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+enum TaskStatus { todo, done }
+
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Task implements OwnedBy<Task, Account> {
+  abstract final String title;
+
+  @Persisted(
+    defaultValue: TaskStatus.todo,
+    transitions: [AllowedTransition(TaskStatus.todo, TaskStatus.done)],
+  )
+  abstract final TaskStatus status;
+
+  @Action(values: [ActionValue(#status, TaskStatus.done)])
+  Future<void> complete();
+}
+''';
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          contains(
+            "(current_row.status = 'todo' and (p_patch -> 'status' #>> '{}') "
+            "= 'done' and (public.is_tasks_owner(p_id) or "
+            'public.is_tasks_relationship_update(p_id)))',
+          ),
+        ),
+      },
+    );
+  });
+
   test(
     'derives workflow target access from a finite participant audience',
     () async {
