@@ -793,6 +793,7 @@ String _accessReferenceExpression(
                 reference,
                 id,
                 write: write,
+                actsThrough: true,
               );
               return '($allowed)';
             })
@@ -829,6 +830,7 @@ String _targetReadableByIdExpression(
   ReferenceSpec reference,
   String idExpression, {
   bool write = false,
+  bool actsThrough = false,
 }) {
   // Seeing a target through a relationship never grants writing through it;
   // a write needs the relationship's update access.
@@ -859,6 +861,13 @@ String _targetReadableByIdExpression(
     expressions.add(
       'public.is_${reference.targetTableName}_relationship_'
       '${relationshipOperation.name}($idExpression)',
+    );
+  }
+  // Relationship editors acting for the target's owner write through it.
+  if (write && actsThrough && reference.targetActsThroughRelationship) {
+    expressions.add(
+      'public.is_${reference.targetTableName}_relationship_select('
+      '$idExpression)',
     );
   }
   return expressions.isEmpty ? 'false' : expressions.join(' or ');
@@ -3342,15 +3351,24 @@ String _transitionValidationSql(EntitySpec spec) {
                     RlsPrincipal.relationship,
                 }
               : transition.principals;
+          final blockers = transition.relationshipBlockers;
           final actor = principals
-              .map(
-                (principal) => _principalByIdExpression(
+              .map((principal) {
+                final granted = _principalByIdExpression(
                   spec,
                   principal,
                   'p_id',
                   operation: RlsOperation.update,
-                ),
-              )
+                );
+                if (blockers.isEmpty ||
+                    principal != RlsPrincipal.relationship) {
+                  return granted;
+                }
+                final blocked = blockers
+                    .map((blocker) => _activeReferrerExists(blocker, 'p_id'))
+                    .join(' or ');
+                return '($granted and not ($blocked))';
+              })
               .toSet()
               .join(' or ');
           return '(current_row.${field.columnName} = '
@@ -3366,6 +3384,47 @@ String _transitionValidationSql(EntitySpec spec) {
   end if;''');
   }
   return sections.join('\n');
+}
+
+/// Whether a row [referrer] describes references the row [id].
+String _activeReferrerExists(
+  ActiveReferrerSpec referrer,
+  String id, {
+  int depth = 0,
+}) {
+  final alias = 'blocker${depth == 0 ? '' : '_$depth'}';
+  final exists =
+      'exists (select 1 from public.${referrer.tableName} $alias where '
+      '${_activeReferrerConditions(referrer, id, alias, depth)})';
+  final unless = referrer.unless;
+  return unless == null
+      ? exists
+      : '($exists and not '
+            '${_activeReferrerExists(unless, id, depth: depth + 1)})';
+}
+
+String _activeReferrerConditions(
+  ActiveReferrerSpec referrer,
+  String id,
+  String alias,
+  int depth,
+) {
+  final through = referrer.through;
+  final throughAlias = 'blocker_${depth + 1}';
+  return [
+    if (through == null)
+      '$alias.${referrer.columnName} = $id'
+    else
+      '$alias.${referrer.columnName} in (select '
+          '$throughAlias.${through.idColumnName} from '
+          'public.${through.tableName} $throughAlias where '
+          '${_activeReferrerConditions(through, id, throughAlias, depth + 1)})',
+    if (referrer.statusColumnName case final status?)
+      '$alias.$status in '
+          '(${referrer.activeWireStates.map(_sqlLiteral).join(', ')})',
+    if (referrer.deletedAtColumnName case final deletedAt?)
+      '$alias.$deletedAt is null',
+  ].join(' and ');
 }
 
 String _fieldUpdateAuthorizationSql(EntitySpec spec) {

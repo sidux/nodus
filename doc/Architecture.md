@@ -2563,7 +2563,10 @@ remote policy grants. Owner grants are checked locally. Collaborator,
 reference, and relationship grants, including operations that an access
 target elsewhere in the graph grants on an entity, are revocable projections:
 the remote policy authorizes them, and a local link that may be stale MUST NOT
-reject an offline mutation.
+reject an offline mutation. A condition that narrows such a grant, such as a
+transition refused to relationship editors while a referrer is active, is
+likewise decided remotely; the application flow reads the same projection to
+take the allowed path, and the server refuses a stale one.
 
 Direct table writes that bypass optimistic concurrency, idempotency, capture,
 or authorization are forbidden for ordinary clients.

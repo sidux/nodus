@@ -3429,8 +3429,12 @@ abstract class Project implements OwnedBy<Project, Account> {}
             ),
             contains("changes.entity_type = 'ProjectDependency'"),
             contains(
-              'not (entity.owner_id = p_user_id or '
+              'cross join lateral (select (entity.owner_id = p_user_id or '
               '(exists (select 1 from public.projects access_project_id',
+            ),
+            contains(
+              'case when dependent_access.readable then to_jsonb(entity) '
+              "else jsonb_build_object('id', entity.id) end",
             ),
             contains('create trigger project_members_publish_reference_access'),
           ]),
@@ -3976,6 +3980,270 @@ abstract class Task implements OwnedBy<Task, Account> {
         ),
       },
     );
+  });
+
+  group('relationship editors of a reviewed task', () {
+    Future<void> expectSql(Map<String, String> sources, Matcher sql) =>
+        testBuilder(
+          inferredEntityGraphBuilder(BuilderOptions.empty),
+          sources,
+          rootPackage: 'nodus',
+          outputs: {
+            'nodus|lib/nodus.g.dart': decodedMatches(anything),
+            'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+              anything,
+            ),
+            'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+            'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+              anything,
+            ),
+            'nodus|supabase/nodus/schema.sql': decodedMatches(sql),
+          },
+        );
+
+    Future<String> generationErrors(Map<String, String> sources) async {
+      final result = await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources,
+        rootPackage: 'nodus',
+      );
+      expect(result.succeeded, isFalse);
+      return result.errors.join('\n');
+    }
+
+    test('finish the task only while no accepted reviewer checks it', () async {
+      await expectSql(
+        _reviewedTaskSources(),
+        allOf([
+          contains(
+            "(current_row.status = 'todo' and (p_patch -> 'status' #>> '{}') "
+            "= 'done' and (public.is_tasks_owner(p_id) or "
+            '(public.is_tasks_relationship_update(p_id) and not (exists '
+            '(select 1 from public.reviews blocker where blocker.task_id = '
+            "p_id and blocker.status in ('accepted') and "
+            'blocker.deleted_at is null)))))',
+          ),
+          // Edges without a blocker keep the plain relationship grant.
+          contains(
+            "(current_row.status = 'done' and (p_patch -> 'status' #>> '{}') "
+            "= 'todo' and (public.is_tasks_owner(p_id) or "
+            'public.is_tasks_relationship_update(p_id)))',
+          ),
+        ]),
+      );
+    });
+
+    test('read the task\'s review and ask its reviewer for a check', () async {
+      await expectSql(
+        _reviewedTaskSources(),
+        allOf([
+          // Editors read the review through the task's update relationship.
+          contains(
+            'select exists (select 1 from public.reviews access_path_0 where '
+            'access_path_0.id = p_id and access_path_0.task_id is not null '
+            'and (exists (select 1 from public.goal_task_links '
+            'access_path_0_editor_path_0 where '
+            'access_path_0_editor_path_0.task_id = access_path_0.task_id',
+          ),
+          contains(
+            'create policy reviews_select_relationship on public.reviews for '
+            'select to authenticated using '
+            '(public.is_reviews_relationship_select(reviews.id));',
+          ),
+          // They act for its owner on the requests that inherit from it.
+          contains(
+            'create policy review_requests_insert_reference on '
+            'public.review_requests for insert to authenticated with check '
+            '(((public.is_reviews_owner(review_requests.review_id) or '
+            'public.is_reviews_participant(review_requests.review_id) or '
+            'public.is_reviews_relationship_select(review_requests.review_id)))',
+          ),
+          // A change of access to the task republishes its reviews.
+          contains(
+            '  perform public.publish_reviews_relationship_access(\n'
+            '    dependent.id, p_user_id\n'
+            '  )\n'
+            '  from public.reviews dependent\n'
+            '  where dependent.task_id = p_target_id;',
+          ),
+          // So does a change of the member's edit permission.
+          contains(
+            'after insert or update of status, deleted_at, can_edit\n'
+            'on public.goal_members',
+          ),
+          // A revocation names the row without disclosing it.
+          contains(
+            'case when target_readable then to_jsonb(target_row) else '
+            "jsonb_build_object('id', target_row.id) end",
+          ),
+        ]),
+      );
+    });
+
+    test('ask the helper\'s reviewer once a helper joined, the owner\'s '
+        'otherwise', () async {
+      final sources =
+          _reviewedTaskSources(
+              blockedTransition:
+                  'AllowedTransition(TaskStatus.todo, TaskStatus.done, '
+                  'relationshipBlockedBy: [_helperChecked, _ownerChecked])',
+            )
+            ..['nodus|lib/helper.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/task.dart';
+
+enum HelperStatus { invited, joined }
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Helper implements OwnedBy<Helper, Account> {
+  @OwnerReference()
+  @RelationshipEditorAccess()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+
+  @Persisted(defaultValue: HelperStatus.invited)
+  abstract final HelperStatus status;
+}
+'''
+            ..['nodus|lib/helper_review.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/helper.dart';
+import 'package:nodus/review.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class HelperReview implements OwnedBy<HelperReview, Account> {
+  @RelationshipEditorAccess(targetField: #taskId, includeOwner: true)
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Helper> helperId;
+
+  @Persisted(defaultValue: ReviewStatus.pending)
+  abstract final ReviewStatus status;
+}
+''';
+      sources['nodus|lib/task.dart'] = sources['nodus|lib/task.dart']!
+          .replaceFirst(
+            "import 'package:nodus/review.dart';",
+            "import 'package:nodus/review.dart';\n"
+                "import 'package:nodus/helper.dart';\n"
+                "import 'package:nodus/helper_review.dart';\n\n"
+                'const _joined = ActiveReferrer(Helper, #taskId, '
+                'activeStates: [HelperStatus.joined]);\n'
+                'const _helperChecked = ActiveReferrer(HelperReview, '
+                '#helperId, activeStates: [ReviewStatus.accepted], '
+                'through: _joined);\n'
+                'const _ownerChecked = ActiveReferrer(Review, #taskId, '
+                'activeStates: [ReviewStatus.accepted], unless: _joined);',
+          );
+
+      await expectSql(
+        sources,
+        allOf([
+          contains(
+            '(public.is_tasks_relationship_update(p_id) and not ('
+            'exists (select 1 from public.helper_reviews blocker where '
+            'blocker.helper_id in (select blocker_1.id from public.helpers '
+            'blocker_1 where blocker_1.task_id = p_id and blocker_1.status '
+            "in ('joined') and blocker_1.deleted_at is null) and "
+            "blocker.status in ('accepted') and blocker.deleted_at is null) "
+            'or (exists (select 1 from public.reviews blocker where '
+            "blocker.task_id = p_id and blocker.status in ('accepted') and "
+            'blocker.deleted_at is null) and not exists (select 1 from '
+            'public.helpers blocker_1 where blocker_1.task_id = p_id and '
+            "blocker_1.status in ('joined') and blocker_1.deleted_at is "
+            'null))))',
+          ),
+          // Editors see who helps and the helper's review; so does the owner.
+          contains(
+            'create policy helpers_select_relationship on public.helpers',
+          ),
+          contains(
+            'access_path_0.helper_id is not null and ((select '
+            'owner_row.owner_id from public.tasks owner_row where '
+            'owner_row.id = (select bridge.task_id from public.helpers bridge '
+            'where bridge.id = access_path_0.helper_id)) = auth.uid() or ',
+          ),
+          contains(
+            '  from public.helper_reviews dependent\n'
+            '  where dependent.helper_id in (select bridge.id from '
+            'public.helpers bridge where bridge.task_id = p_target_id);',
+          ),
+        ]),
+      );
+    });
+
+    test('reject a blocker on an edge that names its principals', () async {
+      final errors = await generationErrors(
+        _reviewedTaskSources(
+          blockedTransition:
+              'AllowedTransition(TaskStatus.todo, TaskStatus.done, '
+              'by: [RlsPrincipal.owner], relationshipBlockedBy: [_checked])',
+        ),
+      );
+
+      expect(errors, contains('must leave `by` empty'));
+    });
+
+    test('reject a blocker no relationship could trip', () async {
+      final errors = await generationErrors(
+        _reviewedTaskSources(withGoalLink: false, editorAccess: false),
+      );
+
+      expect(
+        errors,
+        contains(
+          'declares `relationshipBlockedBy`, but no @AccessTarget in the '
+          'graph grants relationship update access on `Task`.',
+        ),
+      );
+    });
+
+    test('reject editor access without a relationship editor', () async {
+      final errors = await generationErrors(
+        _reviewedTaskSources(withGoalLink: false, blockedTransition: null),
+      );
+
+      expect(
+        errors,
+        contains(
+          '@RelationshipEditorAccess on `Review.taskId` requires a '
+          'non-Component entity whose `Task` gains relationship update access',
+        ),
+      );
+    });
+
+    test('reject a cycle through the editors\' read access', () async {
+      final sources = _reviewedTaskSources()
+        ..['nodus|lib/review_task_link.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/review.dart';
+import 'package:nodus/task.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class ReviewTaskLink implements OwnedBy<ReviewTaskLink, Account> {
+  @AccessReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Review> reviewId;
+
+  @AccessTarget()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+}
+''';
+
+      final errors = await generationErrors(sources);
+
+      expect(
+        errors,
+        allOf([
+          contains('Relationship-derived access graph is cyclic:'),
+          contains('Review'),
+          contains('Task'),
+        ]),
+      );
+    });
   });
 
   test(
@@ -8699,6 +8967,204 @@ String _sqlPolicy(String sql, String name) {
   final start = sql.indexOf('create policy $name ');
   if (start < 0) return '';
   return sql.substring(start, sql.indexOf('\n', start));
+}
+
+/// A goal shared with editors, a task linked into it, the task's review by a
+/// chosen reviewer, and the review's check requests.
+Map<String, String> _reviewedTaskSources({
+  bool withGoalLink = true,
+  bool editorAccess = true,
+  String? blockedTransition =
+      'AllowedTransition(TaskStatus.todo, TaskStatus.done, '
+      'relationshipBlockedBy: [_checked])',
+}) {
+  final sources =
+      _sources(
+          '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/review.dart';
+
+enum TaskStatus { todo, done }
+
+const _checked = ActiveReferrer(
+  Review,
+  #taskId,
+  activeStates: [ReviewStatus.accepted],
+);
+
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Task implements OwnedBy<Task, Account> {
+  abstract final String title;
+
+  @Persisted(
+    defaultValue: TaskStatus.todo,
+    transitions: [
+      ${blockedTransition ?? 'AllowedTransition(TaskStatus.todo, TaskStatus.done)'},
+      AllowedTransition(TaskStatus.done, TaskStatus.todo),
+    ],
+  )
+  abstract final TaskStatus status;
+
+  @Action(values: [ActionValue(#status, TaskStatus.done)])
+  Future<void> complete();
+
+  @Action(values: [ActionValue(#status, TaskStatus.todo)])
+  Future<void> reopen();
+}
+''',
+          fileName: 'task.dart',
+        )
+        ..['nodus|lib/account.dart'] = 'final class Account {}'
+        ..['nodus|lib/review.dart'] =
+            '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/task.dart';
+
+enum ReviewStatus { pending, accepted }
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.select, RlsPrincipal.participant),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.participant),
+  ],
+)
+abstract class Review implements OwnedBy<Review, Account> {
+  @OwnerReference()
+  @AccessTarget(operations: [RlsOperation.select])
+  ${editorAccess ? '@RelationshipEditorAccess()' : ''}
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+
+  @AccessParticipant()
+  abstract final LocalId<Account> reviewerId;
+
+  @Persisted(
+    defaultValue: ReviewStatus.pending,
+    transitions: [
+      AllowedTransition(
+        ReviewStatus.pending,
+        ReviewStatus.accepted,
+        by: [RlsPrincipal.participant],
+      ),
+    ],
+  )
+  abstract final ReviewStatus status;
+
+  @Action(values: [ActionValue(#status, ReviewStatus.accepted)])
+  Future<void> accept();
+}
+'''
+        ..['nodus|lib/review_request.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/review.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.reference),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.reference),
+  ],
+)
+abstract class ReviewRequest implements OwnedBy<ReviewRequest, Account> {
+  @OwnerReference(targetField: #reviewerId)
+  @AccessReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Review> reviewId;
+}
+''';
+  if (withGoalLink) {
+    sources
+      ..['nodus|lib/membership_status.dart'] =
+          'enum MembershipStatus { pending, accepted, revoked }'
+      ..['nodus|lib/goal.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  collaboration: CollaborationAccess.workflow(editPermissionField: 'can_edit'),
+)
+abstract class Goal implements OwnedBy<Goal, Account> {
+  abstract final String title;
+}
+'''
+      ..['nodus|lib/goal_member.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/goal.dart';
+import 'package:nodus/membership_status.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.select, RlsPrincipal.participant),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.participant),
+  ],
+)
+abstract class GoalMember implements OwnedBy<GoalMember, Account> {
+  @OwnerReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> goalId;
+
+  @AccessParticipant()
+  abstract final LocalId<Account> memberId;
+
+  @Persisted(defaultValue: MembershipStatus.pending, transitions: [
+    AllowedTransition(
+      MembershipStatus.pending,
+      MembershipStatus.accepted,
+      by: [RlsPrincipal.participant],
+    ),
+    AllowedTransition(
+      MembershipStatus.accepted,
+      MembershipStatus.revoked,
+      by: [RlsPrincipal.owner],
+    ),
+  ])
+  abstract final MembershipStatus status;
+
+  @Persisted(defaultValue: false, updateBy: [RlsPrincipal.owner])
+  abstract final bool canEdit;
+
+  @Action(values: [ActionValue(#status, MembershipStatus.accepted)])
+  Future<void> accept();
+
+  @Action(values: [ActionValue(#status, MembershipStatus.revoked)])
+  Future<void> revoke();
+
+  @Action()
+  Future<void> setCanEdit({required bool canEdit});
+}
+'''
+      ..['nodus|lib/goal_task_link.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/goal.dart';
+import 'package:nodus/task.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class GoalTaskLink implements OwnedBy<GoalTaskLink, Account> {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> goalId;
+
+  @AccessTarget()
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+}
+''';
+  }
+  return sources;
 }
 
 Map<String, String> _sources(

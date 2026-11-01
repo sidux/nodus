@@ -646,14 +646,16 @@ String? _edgeRetirementSql(
       : 'edge.${entity.deletedAtField!.columnName} is null\n    and ';
   final retired = '$live(\n      ${connections.join('\n      or ')}\n    )';
 
-  final audience = entity.accessTargetFields.isEmpty
-      ? entity.participantFields
-            .map(
-              (participant) =>
-                  'select edge.${participant.columnName} as user_id',
-            )
-            .join(' union ')
-      : _relationshipAudienceSelect(graph, entity, rowAlias: 'edge');
+  final audience = [
+    if (entity.accessTargetFields.isEmpty)
+      ...entity.participantFields.map(
+        (participant) => 'select edge.${participant.columnName} as user_id',
+      )
+    else
+      _relationshipAudienceSelect(graph, entity, rowAlias: 'edge'),
+    if (entity.relationshipEditorAccessFields.isNotEmpty)
+      _relationshipEditorAudienceSelect(graph, entity, rowAlias: 'edge'),
+  ].join(' union ');
   final revocation =
       '''  with revoked as (
     select edge.${entity.idField.columnName} as entity_id,
@@ -923,6 +925,7 @@ grant execute on function public.is_${target.tableName}_relationship_${operation
       graph,
       target,
     );
+    final editorRows = _relationshipEditorPublicationSql(graph, target);
     final publishFunction = 'publish_${target.tableName}_relationship_access';
     sections.add(
       '''-- Ordered snapshots and revocations for relationship-derived ${target.className} access.
@@ -937,10 +940,12 @@ set search_path = ''
 as \$\$
 declare
   target_row public.${target.tableName};
+  target_readable boolean;
 begin
   select * into target_row from public.${target.tableName}
   where ${target.idField.columnName} = p_target_id;
   if not found then return; end if;
+  target_readable := $readable;
 
 ${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression: 'p_user_id', indent: '  ')}  delete from public.local_entity_changes
   where entity_type = '${target.className}'
@@ -956,10 +961,10 @@ ${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression
     target_row.${target.serverVersionField.columnName},
     nullif(current_setting('app.operation_id', true), '')::uuid,
     p_user_id,
-    not ($readable),
-    to_jsonb(target_row)
+    not target_readable,
+    ${_publishedRecord(target, 'target_row', readable: 'target_readable')}
   );
-${propagatesReferenceAccess ? '  perform public.publish_${target.tableName}_reference_access(\n    p_target_id,\n    p_user_id\n  );' : ''}
+$editorRows${propagatesReferenceAccess ? '  perform public.publish_${target.tableName}_reference_access(\n    p_target_id,\n    p_user_id\n  );' : ''}
   return;
 end;
 \$\$;
@@ -1042,6 +1047,87 @@ for each row execute function public.$functionName();''',
   }
   return sections.join('\n\n');
 }
+
+/// The record a user receives: the row while they may read it, otherwise only
+/// its identity, so a revocation tells an account that never read the row
+/// nothing about it.
+String _publishedRecord(
+  EntitySpec entity,
+  String rowAlias, {
+  required String readable,
+}) =>
+    'case when $readable then to_jsonb($rowAlias) else '
+    "jsonb_build_object('${entity.idField.columnName}', "
+    '$rowAlias.${entity.idField.columnName}) end';
+
+/// Publishes the rows whose relationship editors act for their owner through
+/// a reference to [target] after the user's access to [target] changed. They
+/// follow [target], whose row they reference.
+String _relationshipEditorPublicationSql(
+  EntityGraphSpec graph,
+  EntitySpec target,
+) {
+  final buffer = StringBuffer();
+  for (final dependent in graph.entities) {
+    for (final field in dependent.relationshipEditorAccessFields) {
+      if (field.relationshipEditorTargetClassName != target.className) {
+        continue;
+      }
+      final match = switch (field.relationshipEditorThroughColumnName) {
+        null => 'dependent.${field.columnName} = p_target_id',
+        final through =>
+          'dependent.${field.columnName} in (select bridge.id from '
+              'public.${field.reference!.targetTableName} bridge where '
+              'bridge.$through = p_target_id)',
+      };
+      buffer
+        ..writeln(
+          '  perform public.publish_${dependent.tableName}_relationship_access(',
+        )
+        ..writeln('    dependent.${dependent.idField.columnName}, p_user_id')
+        ..writeln('  )')
+        ..writeln('  from public.${dependent.tableName} dependent')
+        ..writeln('  where $match;');
+    }
+  }
+  return buffer.toString();
+}
+
+/// The identity of the entity whose relationship editors act for the row
+/// [rowAlias] through [field].
+String _editorTargetIdExpression(FieldSpec field, String rowAlias) =>
+    switch (field.relationshipEditorThroughColumnName) {
+      null => '$rowAlias.${field.columnName}',
+      final through =>
+        '(select bridge.$through from '
+            'public.${field.reference!.targetTableName} bridge where '
+            'bridge.id = $rowAlias.${field.columnName})',
+    };
+
+/// Users who act for a row through [field]: the editors of its entity, whose
+/// identity is [targetId], and that entity's owner when the field says so.
+List<String> _editorCandidates(
+  EntityGraphSpec graph,
+  FieldSpec field, {
+  required String targetId,
+  required String aliasPrefix,
+  required bool followReferences,
+}) => [
+  ..._relationshipPathCandidates(
+    graph,
+    _entityNamed(graph, field.relationshipEditorTargetClassName!),
+    entityId: targetId,
+    aliasPrefix: aliasPrefix,
+    followReferences: followReferences,
+  ),
+  if (field.relationshipEditorIncludesOwner)
+    'select owner_row.${_entityNamed(graph, field.relationshipEditorTargetClassName!).ownerField.columnName} '
+        'as user_id from public.${field.relationshipEditorTargetTableName} '
+        'owner_row where owner_row.id = $targetId',
+];
+
+EntitySpec _entityNamed(EntityGraphSpec graph, String className) =>
+    graph.entities.singleWhere((entity) => entity.className == className);
 
 typedef _AccessTargetDestination = ({
   EntitySpec target,
@@ -1155,6 +1241,37 @@ String _relationshipAudienceSelect(
     relationship,
     rowAlias: rowAlias,
     userExpression: 'candidate.user_id',
+  );
+  return '''select distinct candidate.user_id
+    from (${candidates.join(' union ')}) candidate
+    where candidate.user_id is not null and ($readable)''';
+}
+
+/// Relationship editors reading [entity] through its referenced entities.
+String _relationshipEditorAudienceSelect(
+  EntityGraphSpec graph,
+  EntitySpec entity, {
+  required String rowAlias,
+}) {
+  final candidates = [
+    for (final (index, field) in entity.relationshipEditorAccessFields.indexed)
+      ..._editorCandidates(
+        graph,
+        field,
+        targetId: _editorTargetIdExpression(field, rowAlias),
+        aliasPrefix: _sqlAlias(
+          'audience_${entity.tableName}_editor_${index + 1}',
+        ),
+        followReferences: false,
+      ),
+  ];
+  final readable = _relationshipAccessByUserExpression(
+    graph,
+    entity,
+    operation: RlsOperation.select,
+    entityId: '$rowAlias.${entity.idField.columnName}',
+    userExpression: 'candidate.user_id',
+    aliasPrefix: _sqlAlias('audience_${entity.tableName}_editor'),
   );
   return '''select distinct candidate.user_id
     from (${candidates.join(' union ')}) candidate
@@ -1306,6 +1423,43 @@ List<String> _entityAudienceCandidates(
     }
   }
 
+  candidates.addAll(
+    _relationshipPathCandidates(
+      graph,
+      target,
+      entityId: entityId,
+      aliasPrefix: aliasPrefix,
+      followReferences: followReferences,
+    ),
+  );
+  // Relationship editors of a referenced entity read the row itself.
+  for (final (index, field) in target.relationshipEditorAccessFields.indexed) {
+    final editorAlias = _sqlAlias('${aliasPrefix}_editor_${index + 1}');
+    candidates.addAll(
+      _editorCandidates(
+        graph,
+        field,
+        targetId:
+            '(select ${_editorTargetIdExpression(field, editorAlias)} from '
+            'public.${target.tableName} $editorAlias where '
+            '$editorAlias.${target.idField.columnName} = $entityId)',
+        aliasPrefix: editorAlias,
+        followReferences: followReferences,
+      ),
+    );
+  }
+  return candidates;
+}
+
+/// Users who may reach [target] through a relationship elsewhere in the graph.
+List<String> _relationshipPathCandidates(
+  EntityGraphSpec graph,
+  EntitySpec target, {
+  required String entityId,
+  required String aliasPrefix,
+  required bool followReferences,
+}) {
+  final candidates = <String>[];
   var pathIndex = 0;
   for (final relationship in graph.entities) {
     for (final accessTarget in relationship.accessTargetFields) {
@@ -1458,6 +1612,35 @@ String _relationshipAccessByUserExpression(
       }
     }
   }
+  if (operation == RlsOperation.select) {
+    for (final field in target.relationshipEditorAccessFields) {
+      final referenced = _entityNamed(
+        graph,
+        field.relationshipEditorTargetClassName!,
+      );
+      final alias = _sqlAlias('${aliasPrefix}_path_${index++}');
+      final targetId = _editorTargetIdExpression(field, alias);
+      final relationshipEditor = _relationshipAccessByUserExpression(
+        graph,
+        referenced,
+        operation: RlsOperation.update,
+        entityId: targetId,
+        userExpression: userExpression,
+        aliasPrefix: _sqlAlias('${alias}_editor'),
+      );
+      final editor = field.relationshipEditorIncludesOwner
+          ? '(select owner_row.${referenced.ownerField.columnName} from '
+                'public.${referenced.tableName} owner_row where '
+                'owner_row.id = $targetId) = $userExpression or '
+                '$relationshipEditor'
+          : relationshipEditor;
+      paths.add(
+        'exists (select 1 from public.${target.tableName} $alias '
+        'where $alias.${target.idField.columnName} = $entityId '
+        'and $alias.${field.columnName} is not null and ($editor))',
+      );
+    }
+  }
   if (paths.isEmpty) {
     throw StateError(
       'Missing relationship access path for ${target.className} '
@@ -1487,8 +1670,37 @@ String _emitWorkflowCollaborationSql(EntityGraphSpec graph) {
         (field) => field.reference!.targetClassName == target.className,
       ),
     );
+    // Rows shared with relationship editors depend on the member's edit
+    // permission, so a change of it is propagated like a change of access.
+    final editPermission =
+        propagatesReferenceAccess &&
+            graph.entities.any(
+              (entity) => entity.relationshipEditorAccessFields.isNotEmpty,
+            )
+        ? collaboration.editPermissionField
+        : null;
+    final editorDeclarations = editPermission == null
+        ? ''
+        : '\n  was_editor boolean := false;\n  is_editor boolean;';
+    final previousEditor = editPermission == null
+        ? ''
+        : '\n    was_editor := was_active and old.$editPermission;';
+    final currentEditor = editPermission == null
+        ? ''
+        : '\n  is_editor := is_active and new.$editPermission;';
+    final editorUnchanged = editPermission == null
+        ? ''
+        : ' and was_editor = is_editor';
+    final editorChanged = editPermission == null
+        ? ''
+        : ' or was_editor is distinct from is_editor';
+    final watchedColumns = [
+      workflow.status.columnName,
+      deletedAt.columnName,
+      ?editPermission,
+    ].join(', ');
     final conditionalReferencePropagation = propagatesReferenceAccess
-        ? '''  if was_active is distinct from is_active then
+        ? '''  if was_active is distinct from is_active$editorChanged then
     perform public.publish_${target.tableName}_reference_access(
       new.${workflow.targetReference.columnName},
       new.${workflow.participant.columnName}
@@ -1560,19 +1772,19 @@ declare
   was_active boolean := false;
   is_active boolean;
   was_visible boolean := false;
-  is_visible boolean;
+  is_visible boolean;$editorDeclarations
 begin
   if tg_op = 'UPDATE' then
     was_active := old.${workflow.status.columnName} = $accepted
       and old.${deletedAt.columnName} is null;
     was_visible := old.${workflow.status.columnName} in ($readable)
-      and old.${deletedAt.columnName} is null;
+      and old.${deletedAt.columnName} is null;$previousEditor
   end if;
   is_active := new.${workflow.status.columnName} = $accepted
     and new.${deletedAt.columnName} is null;
   is_visible := new.${workflow.status.columnName} in ($readable)
-    and new.${deletedAt.columnName} is null;
-  if was_active = is_active and was_visible = is_visible then
+    and new.${deletedAt.columnName} is null;$currentEditor
+  if was_active = is_active and was_visible = is_visible$editorUnchanged then
     return new;
   end if;
 
@@ -1615,7 +1827,7 @@ end;
 revoke all on function public.$functionName() from $supabaseApiRoles;
 drop trigger if exists ${membership.tableName}_publish_access on public.${membership.tableName};
 create trigger ${membership.tableName}_publish_access
-after insert or update of ${workflow.status.columnName}, ${deletedAt.columnName}
+after insert or update of $watchedColumns
 on public.${membership.tableName}
 for each row execute function public.$functionName();''');
       continue;
@@ -1646,15 +1858,15 @@ as \$\$
 declare
   target_row public.${target.tableName};
   was_active boolean := false;
-  is_active boolean;
+  is_active boolean;$editorDeclarations
 begin
   if tg_op = 'UPDATE' then
     was_active := old.${workflow.status.columnName} = $accepted
-      and old.${deletedAt.columnName} is null;
+      and old.${deletedAt.columnName} is null;$previousEditor
   end if;
   is_active := new.${workflow.status.columnName} = $accepted
-    and new.${deletedAt.columnName} is null;
-  if was_active = is_active then
+    and new.${deletedAt.columnName} is null;$currentEditor
+  if was_active = is_active$editorUnchanged then
     return new;
   end if;
 
@@ -1695,7 +1907,7 @@ end;
 revoke all on function public.$functionName() from $supabaseApiRoles;
 drop trigger if exists ${membership.tableName}_publish_access on public.${membership.tableName};
 create trigger ${membership.tableName}_publish_access
-after insert or update of ${workflow.status.columnName}, ${deletedAt.columnName}
+after insert or update of $watchedColumns
 on public.${membership.tableName}
 for each row execute function public.$functionName();''');
   }
@@ -1767,9 +1979,14 @@ String _emitReferenceAccessPropagationSql(EntityGraphSpec graph) {
           "    nullif(current_setting('app.operation_id', true), '')::uuid,",
         )
         ..writeln('    p_user_id,')
-        ..writeln('    not ($readable),')
-        ..writeln('    to_jsonb(entity)')
+        ..writeln('    not dependent_access.readable,')
+        ..writeln(
+          '    ${_publishedRecord(dependent, 'entity', readable: 'dependent_access.readable')}',
+        )
         ..writeln('  from public.${dependent.tableName} entity')
+        ..writeln(
+          '  cross join lateral (select ($readable) as readable) dependent_access',
+        )
         ..writeln('  where $affected;');
       for (final accessTarget in dependent.accessTargetFields) {
         for (final destination in _accessTargetDestinations(
@@ -1947,6 +2164,21 @@ String _readableByUserExpression(
           '${relationshipOperation.name}',
         ),
         write: write,
+      ),
+    );
+  }
+  // Relationship editors acting for the owner write through the entity.
+  if (write && entity.relationshipEditorAccessFields.isNotEmpty) {
+    expressions.add(
+      _relationshipAccessByUserExpression(
+        graph,
+        entity,
+        operation: RlsOperation.select,
+        entityId: '$rowAlias.${entity.idField.columnName}',
+        userExpression: userExpression,
+        aliasPrefix: _sqlAlias(
+          '${rowAlias}_${entity.tableName}_relationship_editor',
+        ),
       ),
     );
   }

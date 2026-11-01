@@ -484,23 +484,27 @@ final class EntitySpec {
   FieldSpec? get hierarchyParentField =>
       fields.where((field) => field.reference?.hierarchy == true).firstOrNull;
 
+  /// Resolves what the whole graph decides about this entity: the access
+  /// relationships elsewhere grant on it and on its references, which
+  /// referenced entities' relationship readers act for their owner, and the
+  /// storage of transition blockers by field name.
   EntitySpec withGraphAccess(
-    Map<String, Set<RlsOperation>> relationshipOperations,
-  ) {
+    Map<String, Set<RlsOperation>> relationshipOperations, {
+    Set<String> actingThroughRelationship = const {},
+    Map<String, List<ValueTransitionSpec>> resolvedTransitions = const {},
+  }) {
     final normalized = <RlsOperation>{
       ...relationshipAccessOperations,
       ...?relationshipOperations[className],
     }.toList()..sort((left, right) => left.index.compareTo(right.index));
     final resolvedFields = [
       for (final field in fields)
-        if (field.reference case final reference?)
-          field.withReference(
-            reference.withTargetRelationshipAccess(
-              relationshipOperations[reference.targetClassName] ?? const {},
-            ),
-          )
-        else
+        _resolveGraphField(
           field,
+          relationshipOperations,
+          actingThroughRelationship,
+          resolvedTransitions[field.name],
+        ),
     ];
     return EntitySpec(
       className: className,
@@ -554,6 +558,33 @@ final class EntitySpec {
       syncTargetOverride: syncTargetOverride,
     );
   }
+
+  static FieldSpec _resolveGraphField(
+    FieldSpec field,
+    Map<String, Set<RlsOperation>> relationshipOperations,
+    Set<String> actingThroughRelationship,
+    List<ValueTransitionSpec>? transitions,
+  ) {
+    var resolved = field;
+    if (field.reference case final reference?) {
+      resolved = resolved.withReference(
+        reference.withTargetRelationshipAccess(
+          relationshipOperations[reference.targetClassName] ?? const {},
+          actsThroughRelationship: actingThroughRelationship.contains(
+            reference.targetClassName,
+          ),
+        ),
+      );
+    }
+    return transitions == null
+        ? resolved
+        : resolved.withTransitions(transitions);
+  }
+
+  /// References whose relationship editors act for this row's owner.
+  List<FieldSpec> get relationshipEditorAccessFields => fields
+      .where((field) => field.isRelationshipEditorAccess)
+      .toList(growable: false);
 
   List<FieldSpec> get ownershipReferenceFields =>
       fields.where((field) => field.isOwnerReference).toList(growable: false);
@@ -1432,6 +1463,11 @@ final class FieldSpec {
     this.accessTargetActiveStateEnumType,
     this.accessTargetActiveStateEnumImport,
     this.isOwnerReference = false,
+    this.isRelationshipEditorAccess = false,
+    this.relationshipEditorTargetClassName,
+    this.relationshipEditorTargetTableName,
+    this.relationshipEditorThroughColumnName,
+    this.relationshipEditorIncludesOwner = false,
     this.transitions = const [],
     this.updatePrincipals = const [],
     this.enumTypeImport,
@@ -1485,6 +1521,21 @@ final class FieldSpec {
   final String? accessTargetActiveStateEnumType;
   final String? accessTargetActiveStateEnumImport;
   final bool isOwnerReference;
+
+  /// Whether relationship editors of the referenced entity act for this row's
+  /// owner (see `RelationshipEditorAccess`).
+  final bool isRelationshipEditorAccess;
+
+  /// The entity whose relationship editors act for this row: the referenced
+  /// one, or the target of [relationshipEditorThroughColumnName] on it.
+  final String? relationshipEditorTargetClassName;
+  final String? relationshipEditorTargetTableName;
+
+  /// Column on the referenced bridge holding the editors' entity identity.
+  final String? relationshipEditorThroughColumnName;
+
+  /// Whether the editors' entity's owner acts for this row as well.
+  final bool relationshipEditorIncludesOwner;
   final List<ValueTransitionSpec> transitions;
   final List<RlsPrincipal> updatePrincipals;
   final String? enumTypeImport;
@@ -1494,7 +1545,15 @@ final class FieldSpec {
   final String? persistedVariantName;
   final bool? persistedVariantComponentNullable;
 
-  FieldSpec withReference(ReferenceSpec value) => FieldSpec(
+  FieldSpec withReference(ReferenceSpec value) => _copy(reference: value);
+
+  FieldSpec withTransitions(List<ValueTransitionSpec> value) =>
+      _copy(transitions: value);
+
+  FieldSpec _copy({
+    ReferenceSpec? reference,
+    List<ValueTransitionSpec>? transitions,
+  }) => FieldSpec(
     name: name,
     columnName: columnName,
     dartType: dartType,
@@ -1519,7 +1578,7 @@ final class FieldSpec {
     unique: unique,
     indexScope: indexScope,
     enumValues: enumValues,
-    reference: value,
+    reference: reference ?? this.reference,
     sinceProtocolVersion: sinceProtocolVersion,
     renamedFrom: renamedFrom,
     isParticipant: isParticipant,
@@ -1535,7 +1594,12 @@ final class FieldSpec {
     accessTargetActiveStateEnumType: accessTargetActiveStateEnumType,
     accessTargetActiveStateEnumImport: accessTargetActiveStateEnumImport,
     isOwnerReference: isOwnerReference,
-    transitions: transitions,
+    isRelationshipEditorAccess: isRelationshipEditorAccess,
+    relationshipEditorTargetClassName: relationshipEditorTargetClassName,
+    relationshipEditorTargetTableName: relationshipEditorTargetTableName,
+    relationshipEditorThroughColumnName: relationshipEditorThroughColumnName,
+    relationshipEditorIncludesOwner: relationshipEditorIncludesOwner,
+    transitions: transitions ?? this.transitions,
     updatePrincipals: updatePrincipals,
     enumTypeImport: enumTypeImport,
     scalarValue: scalarValue,
@@ -1596,14 +1660,93 @@ final class ValueTransitionSpec {
     required this.from,
     required this.to,
     this.principals = const [],
+    this.relationshipBlockers = const [],
   });
 
   final String from;
   final String to;
   final List<RlsPrincipal> principals;
 
+  /// Referrers any of which refuses this edge to relationship-derived updates.
+  final List<ActiveReferrerSpec> relationshipBlockers;
+
   String get fromWire => snakeCase(from);
   String get toWire => snakeCase(to);
+
+  ValueTransitionSpec withRelationshipBlockers(
+    List<ActiveReferrerSpec> value,
+  ) => ValueTransitionSpec(
+    from: from,
+    to: to,
+    principals: principals,
+    relationshipBlockers: value,
+  );
+}
+
+/// Rows of [className] referencing a guarded row through [fieldName] while
+/// their `status` is one of [activeStates] (enum constant names).
+///
+/// The storage names are resolved against the referrer once the whole graph
+/// is known.
+final class ActiveReferrerSpec {
+  const ActiveReferrerSpec({
+    required this.className,
+    required this.fieldName,
+    this.activeStates = const [],
+    this.activeStateEnumType,
+    this.activeStateEnumImport,
+    this.through,
+    this.unless,
+    this.tableName,
+    this.idColumnName,
+    this.columnName,
+    this.statusColumnName,
+    this.deletedAtColumnName,
+  });
+
+  final String className;
+  final String fieldName;
+  final List<String> activeStates;
+  final String? activeStateEnumType;
+  final String? activeStateEnumImport;
+
+  /// Bridge rows referencing the guarded row that [fieldName] points at.
+  final ActiveReferrerSpec? through;
+
+  /// Referrers of the guarded row whose existence disables this one.
+  final ActiveReferrerSpec? unless;
+  final String? tableName;
+  final String? idColumnName;
+  final String? columnName;
+  final String? statusColumnName;
+  final String? deletedAtColumnName;
+
+  List<String> get activeWireStates => [
+    for (final state in activeStates) snakeCase(state),
+  ];
+
+  ActiveReferrerSpec resolve({
+    required ActiveReferrerSpec? through,
+    required ActiveReferrerSpec? unless,
+    required String tableName,
+    required String idColumnName,
+    required String columnName,
+    required String? statusColumnName,
+    required String? deletedAtColumnName,
+  }) => ActiveReferrerSpec(
+    className: className,
+    fieldName: fieldName,
+    activeStates: activeStates,
+    activeStateEnumType: activeStateEnumType,
+    activeStateEnumImport: activeStateEnumImport,
+    through: through,
+    unless: unless,
+    tableName: tableName,
+    idColumnName: idColumnName,
+    columnName: columnName,
+    statusColumnName: statusColumnName,
+    deletedAtColumnName: deletedAtColumnName,
+  );
 }
 
 final class ReferenceSpec {
@@ -1626,6 +1769,7 @@ final class ReferenceSpec {
     required this.ownershipSourceDartType,
     required this.targetCollaboration,
     this.targetRelationshipAccessOperations = const [],
+    this.targetActsThroughRelationship = false,
   });
 
   final String targetClassName;
@@ -1647,12 +1791,17 @@ final class ReferenceSpec {
   final CollaborationSpec? targetCollaboration;
   final List<RlsOperation> targetRelationshipAccessOperations;
 
+  /// Whether the target's relationship readers act for its owner, so they
+  /// also write through this reference (see `RelationshipEditorAccess`).
+  final bool targetActsThroughRelationship;
+
   bool get targetReadableByRelationship =>
       targetRelationshipAccessOperations.contains(RlsOperation.select);
 
   ReferenceSpec withTargetRelationshipAccess(
-    Iterable<RlsOperation> operations,
-  ) {
+    Iterable<RlsOperation> operations, {
+    bool actsThroughRelationship = false,
+  }) {
     final normalized = <RlsOperation>{
       ...targetRelationshipAccessOperations,
       ...operations,
@@ -1676,6 +1825,8 @@ final class ReferenceSpec {
       ownershipSourceDartType: ownershipSourceDartType,
       targetCollaboration: targetCollaboration,
       targetRelationshipAccessOperations: List.unmodifiable(normalized),
+      targetActsThroughRelationship:
+          targetActsThroughRelationship || actsThroughRelationship,
     );
   }
 }

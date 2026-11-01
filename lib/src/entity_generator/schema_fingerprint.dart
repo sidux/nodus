@@ -95,6 +95,12 @@ Map<String, Object?> _entitySchema(EntitySpec entity) => {
         'accessTarget': field.isAccessTarget,
         'composition': field.isComposition,
         'ownerReference': field.isOwnerReference,
+        if (field.isRelationshipEditorAccess)
+          'relationshipEditorAccess': {
+            'target': field.relationshipEditorTargetClassName,
+            'through': field.relationshipEditorThroughColumnName,
+            'includeOwner': field.relationshipEditorIncludesOwner,
+          },
         'reference': switch (field.reference) {
           final reference? => {
             'targetType': reference.targetClassName,
@@ -126,6 +132,11 @@ Map<String, Object?> _entitySchema(EntitySpec entity) => {
               'principals': [
                 for (final principal in transition.principals) principal.name,
               ],
+              if (transition.relationshipBlockers.isNotEmpty)
+                'relationshipBlockedBy': [
+                  for (final blocker in transition.relationshipBlockers)
+                    _activeReferrerSchema(blocker),
+                ],
             },
         ],
         'updatePrincipals': [
@@ -182,4 +193,14 @@ Map<String, Object?> _indexSchema(EntitySpec entity, IndexSpec index) => {
     final condition? => {'field': condition.field, 'values': condition.values},
     null => null,
   },
+};
+
+Map<String, Object?> _activeReferrerSchema(ActiveReferrerSpec referrer) => {
+  'table': referrer.tableName,
+  'column': referrer.columnName,
+  'activeStates': referrer.activeWireStates,
+  if (referrer.through case final through?)
+    'through': _activeReferrerSchema(through),
+  if (referrer.unless case final unless?)
+    'unless': _activeReferrerSchema(unless),
 };

@@ -39,6 +39,10 @@ const _ownerReferenceChecker = TypeChecker.typeNamed(
   OwnerReference,
   inPackage: 'nodus',
 );
+const _relationshipEditorAccessChecker = TypeChecker.typeNamed(
+  RelationshipEditorAccess,
+  inPackage: 'nodus',
+);
 const _syncCommandChecker = TypeChecker.typeNamed(
   SyncCommand,
   inPackage: 'nodus',
@@ -461,6 +465,9 @@ Future<EntitySpec?> parseEntityAsset(
       field,
     );
     final accessTargetObject = _accessTargetChecker.firstAnnotationOf(field);
+    final relationshipEditorObject = _relationshipEditorAccessChecker
+        .firstAnnotationOf(field);
+    final isRelationshipEditorAccess = relationshipEditorObject != null;
     final accessTargetTargetReader = accessTargetObject == null
         ? null
         : ConstantReader(accessTargetObject).peek('targetField');
@@ -537,14 +544,23 @@ Future<EntitySpec?> parseEntityAsset(
         (indexedObject != null ||
             accessReferenceObject != null ||
             accessTargetObject != null ||
-            ownerReferenceObject != null)) {
+            ownerReferenceObject != null ||
+            isRelationshipEditorAccess)) {
       throw InvalidGenerationSourceError(
         '@Composition derives uniqueness, access propagation, and ownership '
-        'compatibility; remove @Indexed, @AccessReference, @AccessTarget, and '
-        '@OwnerReference from `${field.name}`.',
+        'compatibility; remove @Indexed, @AccessReference, @AccessTarget, '
+        '@OwnerReference, and @RelationshipEditorAccess from `${field.name}`.',
         element: field,
       );
     }
+    final relationshipEditor = relationshipEditorObject == null
+        ? null
+        : _resolveRelationshipEditorAccess(
+            field,
+            classElement,
+            ConstantReader(relationshipEditorObject),
+            reference: reference,
+          );
     if (isParticipant) {
       _validateParticipantField(field, ownerType);
     }
@@ -704,6 +720,15 @@ Future<EntitySpec?> parseEntityAsset(
         accessTargetActiveStateEnumType: accessTargetStates.enumType,
         accessTargetActiveStateEnumImport: accessTargetStates.enumImport,
         isOwnerReference: isOwnerReference,
+        isRelationshipEditorAccess: isRelationshipEditorAccess,
+        relationshipEditorTargetClassName:
+            relationshipEditor?.reference.targetClassName,
+        relationshipEditorTargetTableName:
+            relationshipEditor?.reference.targetTableName,
+        relationshipEditorThroughColumnName:
+            relationshipEditor?.throughColumnName,
+        relationshipEditorIncludesOwner:
+            relationshipEditor?.includeOwner ?? false,
         transitions: transitions,
         updatePrincipals: updatePrincipals,
         draftEditableOverride: persisted?.peek('editable')?.isNull ?? true
@@ -1613,11 +1638,63 @@ List<ValueTransitionSpec> _parseAllowedTransitions(
         element: field,
       );
     }
+    final blockers = transition
+        .read('relationshipBlockedBy')
+        .listValue
+        .map((value) => _parseActiveReferrer(ConstantReader(value), field))
+        .toList(growable: false);
+    if (blockers.isNotEmpty && principals.isNotEmpty) {
+      throw InvalidGenerationSourceError(
+        'Transition `$from -> $to` restricts relationship updates with '
+        '`relationshipBlockedBy`, so it must leave `by` empty to inherit the '
+        'relationship update grant.',
+        element: field,
+      );
+    }
     transitions.add(
-      ValueTransitionSpec(from: from, to: to, principals: principals),
+      ValueTransitionSpec(
+        from: from,
+        to: to,
+        principals: principals,
+        relationshipBlockers: blockers,
+      ),
     );
   }
   return List.unmodifiable(transitions);
+}
+
+ActiveReferrerSpec _parseActiveReferrer(
+  ConstantReader referrer,
+  FieldElement field,
+) {
+  final entity = referrer.read('entity').typeValue.element;
+  if (entity is! ClassElement || !_entityChecker.hasAnnotationOf(entity)) {
+    throw InvalidGenerationSourceError(
+      'ActiveReferrer.entity must be an @Entity class.',
+      element: field,
+    );
+  }
+  final states = _parseAccessTargetStates(
+    referrer,
+    field,
+    annotationName: 'ActiveReferrer',
+  );
+  ActiveReferrerSpec? nested(String name) {
+    final value = referrer.peek(name);
+    return value == null || value.isNull
+        ? null
+        : _parseActiveReferrer(value, field);
+  }
+
+  return ActiveReferrerSpec(
+    className: entity.name!,
+    fieldName: referrer.read('field').objectValue.toSymbolValue()!,
+    activeStates: states.values,
+    activeStateEnumType: states.enumType,
+    activeStateEnumImport: states.enumImport,
+    through: nested('through'),
+    unless: nested('unless'),
+  );
 }
 
 List<RlsPrincipal> _parseFieldUpdatePrincipals(
@@ -1801,6 +1878,42 @@ void _validateAccessReferenceField(
       element: field,
     );
   }
+}
+
+({ReferenceSpec reference, String? throughColumnName, bool includeOwner})
+_resolveRelationshipEditorAccess(
+  FieldElement field,
+  ClassElement owner,
+  ConstantReader annotation, {
+  required ReferenceSpec? reference,
+}) {
+  if (reference == null || !field.isFinal) {
+    throw InvalidGenerationSourceError(
+      '@RelationshipEditorAccess requires an immutable @Reference LocalId<T> '
+      'field.',
+      element: field,
+    );
+  }
+  if (reference.targetClassName == field.enclosingElement.name) {
+    throw InvalidGenerationSourceError(
+      '@RelationshipEditorAccess cannot share a row through a self-reference.',
+      element: field,
+    );
+  }
+  final targetFieldReader = annotation.peek('targetField');
+  final target = _resolveAccessTarget(
+    field,
+    owner,
+    reference: reference,
+    targetField: targetFieldReader == null || targetFieldReader.isNull
+        ? null
+        : targetFieldReader.objectValue.toSymbolValue(),
+  );
+  return (
+    reference: target.reference,
+    throughColumnName: target.throughColumnName,
+    includeOwner: annotation.read('includeOwner').boolValue,
+  );
 }
 
 void _validateAccessReferenceGroups(
@@ -2007,8 +2120,9 @@ final class _AccessTargetStates {
 
 _AccessTargetStates _parseAccessTargetStates(
   ConstantReader annotation,
-  FieldElement field,
-) {
+  FieldElement field, {
+  String annotationName = '@AccessTarget',
+}) {
   final values = annotation.read('activeStates').listValue;
   if (values.isEmpty) return const _AccessTargetStates();
   String? enumType;
@@ -2020,7 +2134,7 @@ _AccessTargetStates _parseAccessTargetStates(
     final name = variable?.name;
     if (declaringEnum is! EnumElement || name == null) {
       throw InvalidGenerationSourceError(
-        '@AccessTarget.activeStates must contain enum constants.',
+        '$annotationName.activeStates must contain enum constants.',
         element: field,
       );
     }
@@ -2030,7 +2144,7 @@ _AccessTargetStates _parseAccessTargetStates(
     enumImport ??= candidateImport;
     if (enumType != candidateType || enumImport != candidateImport) {
       throw InvalidGenerationSourceError(
-        '@AccessTarget.activeStates must use one enum type.',
+        '$annotationName.activeStates must use one enum type.',
         element: field,
       );
     }
@@ -2038,7 +2152,7 @@ _AccessTargetStates _parseAccessTargetStates(
   }
   if (names.toSet().length != names.length) {
     throw InvalidGenerationSourceError(
-      '@AccessTarget.activeStates must be unique.',
+      '$annotationName.activeStates must be unique.',
       element: field,
     );
   }
@@ -2656,6 +2770,8 @@ FieldSpec _parsePersistedVariantComponent(
   );
   final accessTargetObject = _accessTargetChecker.firstAnnotationOf(field);
   final ownerReferenceObject = _ownerReferenceChecker.firstAnnotationOf(field);
+  final relationshipEditorObject = _relationshipEditorAccessChecker
+      .firstAnnotationOf(field);
   final ownerReferenceReader = ownerReferenceObject == null
       ? null
       : ConstantReader(ownerReferenceObject).peek('targetField');
@@ -2692,6 +2808,14 @@ FieldSpec _parsePersistedVariantComponent(
   if (accessReferenceObject != null) {
     _validateAccessReferenceField(field, reference: reference);
   }
+  final relationshipEditor = relationshipEditorObject == null
+      ? null
+      : _resolveRelationshipEditorAccess(
+          field,
+          entityElement,
+          ConstantReader(relationshipEditorObject),
+          reference: reference,
+        );
   if (ownerReferenceObject != null) {
     _validateOwnerReferenceField(
       field,
@@ -2833,6 +2957,13 @@ FieldSpec _parsePersistedVariantComponent(
     accessTargetActiveStateEnumType: accessTargetStates.enumType,
     accessTargetActiveStateEnumImport: accessTargetStates.enumImport,
     isOwnerReference: ownerReferenceObject != null,
+    isRelationshipEditorAccess: relationshipEditor != null,
+    relationshipEditorTargetClassName:
+        relationshipEditor?.reference.targetClassName,
+    relationshipEditorTargetTableName:
+        relationshipEditor?.reference.targetTableName,
+    relationshipEditorThroughColumnName: relationshipEditor?.throughColumnName,
+    relationshipEditorIncludesOwner: relationshipEditor?.includeOwner ?? false,
     transitions: transitions,
     updatePrincipals: _parseFieldUpdatePrincipals(persisted, field),
     persistedVariantName: variantName,
@@ -3151,9 +3282,43 @@ EntityGraphSpec _resolveEntityGraph({
           .addAll(field.accessTargetOperations);
     }
   }
+  final entitiesByClass = {
+    for (final entity in entities) entity.className: entity,
+  };
+  final actingThroughRelationship = <String>{};
+  for (final entity in entities) {
+    for (final field in entity.relationshipEditorAccessFields) {
+      final target = field.relationshipEditorTargetClassName!;
+      if (entity.isComponent ||
+          !(relationshipOperations[target]?.contains(RlsOperation.update) ??
+              false)) {
+        throw InvalidGenerationSourceError(
+          '@RelationshipEditorAccess on `${entity.className}.${field.name}` '
+          'requires a non-Component entity whose `$target` gains relationship '
+          'update access from an @AccessTarget elsewhere in the graph.',
+          element: element,
+        );
+      }
+      actingThroughRelationship.add(entity.className);
+    }
+  }
+  for (final className in actingThroughRelationship) {
+    relationshipOperations
+        .putIfAbsent(className, () => <RlsOperation>{})
+        .add(RlsOperation.select);
+  }
   final resolvedEntities = [
     for (final entity in entities)
-      entity.withGraphAccess(relationshipOperations),
+      entity.withGraphAccess(
+        relationshipOperations,
+        actingThroughRelationship: actingThroughRelationship,
+        resolvedTransitions: _resolveTransitionBlockers(
+          entity,
+          entitiesByClass,
+          relationshipOperations,
+          element,
+        ),
+      ),
   ];
   late final List<SyncBindingSpec> syncBindings;
   try {
@@ -3746,6 +3911,128 @@ Cardinality _resolveInverseCardinality(
   return Cardinality.unbounded;
 }
 
+/// Resolves the storage of every `relationshipBlockedBy` referrer on
+/// [entity]'s transitions, keyed by field name.
+Map<String, List<ValueTransitionSpec>> _resolveTransitionBlockers(
+  EntitySpec entity,
+  Map<String, EntitySpec> entitiesByClass,
+  Map<String, Set<RlsOperation>> relationshipOperations,
+  Element element,
+) {
+  final resolved = <String, List<ValueTransitionSpec>>{};
+  for (final field in entity.fields) {
+    if (field.transitions.every(
+      (transition) => transition.relationshipBlockers.isEmpty,
+    )) {
+      continue;
+    }
+    resolved[field.name] = [
+      for (final transition in field.transitions)
+        if (transition.relationshipBlockers.isEmpty)
+          transition
+        else
+          transition.withRelationshipBlockers([
+            for (final blocker in transition.relationshipBlockers)
+              _resolveActiveReferrer(
+                entity.className,
+                blocker,
+                entitiesByClass,
+                edge: _blockedEdge(
+                  entity,
+                  field,
+                  transition,
+                  relationshipOperations,
+                  element,
+                ),
+                element: element,
+              ),
+          ]),
+    ];
+  }
+  return resolved;
+}
+
+String _blockedEdge(
+  EntitySpec entity,
+  FieldSpec field,
+  ValueTransitionSpec transition,
+  Map<String, Set<RlsOperation>> relationshipOperations,
+  Element element,
+) {
+  final edge =
+      '`${entity.className}.${field.name}` transition '
+      '`${transition.from} -> ${transition.to}`';
+  if (!(relationshipOperations[entity.className]?.contains(
+        RlsOperation.update,
+      ) ??
+      false)) {
+    throw InvalidGenerationSourceError(
+      '$edge declares `relationshipBlockedBy`, but no @AccessTarget in the '
+      'graph grants relationship update access on `${entity.className}`.',
+      element: element,
+    );
+  }
+  return edge;
+}
+
+/// Resolves [referrer] of rows of [guardedClassName], with its bridge and
+/// exception, against the referrer entities in the graph.
+ActiveReferrerSpec _resolveActiveReferrer(
+  String guardedClassName,
+  ActiveReferrerSpec referrer,
+  Map<String, EntitySpec> entitiesByClass, {
+  required String edge,
+  required Element element,
+}) {
+  ActiveReferrerSpec? nested(ActiveReferrerSpec? value) => value == null
+      ? null
+      : _resolveActiveReferrer(
+          guardedClassName,
+          value,
+          entitiesByClass,
+          edge: edge,
+          element: element,
+        );
+  final through = nested(referrer.through);
+  final unless = nested(referrer.unless);
+  final referenced = through?.className ?? guardedClassName;
+  final entity = entitiesByClass[referrer.className];
+  final reference = entity?.fields
+      .where((candidate) => candidate.name == referrer.fieldName)
+      .firstOrNull;
+  if (entity == null || reference?.reference?.targetClassName != referenced) {
+    throw InvalidGenerationSourceError(
+      '$edge is blocked by `${referrer.className}.${referrer.fieldName}`, '
+      'which must be an @Reference to `$referenced` in this graph.',
+      element: element,
+    );
+  }
+  final status = entity.fields
+      .where((candidate) => candidate.name == 'status')
+      .firstOrNull;
+  if (referrer.activeStates.isNotEmpty &&
+      (status == null ||
+          !status.isEnum ||
+          status.dartType != referrer.activeStateEnumType ||
+          status.enumTypeImport != referrer.activeStateEnumImport ||
+          !referrer.activeStates.every(status.enumValues.contains))) {
+    throw InvalidGenerationSourceError(
+      'ActiveReferrer.activeStates for $edge must use constants from '
+      '`${entity.className}`\'s persisted enum `status` field.',
+      element: element,
+    );
+  }
+  return referrer.resolve(
+    through: through,
+    unless: unless,
+    tableName: entity.tableName,
+    idColumnName: entity.idField.columnName,
+    columnName: reference!.columnName,
+    statusColumnName: referrer.activeStates.isEmpty ? null : status!.columnName,
+    deletedAtColumnName: entity.deletedAtField?.columnName,
+  );
+}
+
 void _validateRelationshipAccessGraph(
   List<EntitySpec> entities,
   Element element,
@@ -3770,6 +4057,15 @@ void _validateRelationshipAccessGraph(
         .toSet();
     for (final source in sources) {
       edges.putIfAbsent(source, () => <String>{}).addAll(targets);
+    }
+    // Relationship editors of a referenced entity read the row itself.
+    for (final field in relationship.relationshipEditorAccessFields) {
+      edges
+          .putIfAbsent(
+            field.relationshipEditorTargetClassName!,
+            () => <String>{},
+          )
+          .add(relationship.className);
     }
   }
 

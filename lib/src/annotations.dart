@@ -615,7 +615,12 @@ final class Persisted {
 
 /// One allowed client-originated state transition.
 final class AllowedTransition {
-  const AllowedTransition(this.from, this.to, {this.by = const []});
+  const AllowedTransition(
+    this.from,
+    this.to, {
+    this.by = const [],
+    this.relationshipBlockedBy = const [],
+  });
 
   final Object from;
   final Object to;
@@ -625,6 +630,42 @@ final class AllowedTransition {
   /// An empty list inherits every principal with an update grant. Specify this
   /// only when workflow roles have different authority over the same field.
   final List<RlsPrincipal> by;
+
+  /// Refuses this edge to principals who update the entity only through a
+  /// relationship elsewhere in the graph while any of these referrers exists.
+  ///
+  /// The entity's own principals keep the edge. Relationship grants are
+  /// revocable projections authorized remotely, so the generated server
+  /// guard is the authority for this condition, as it is for the grant.
+  /// The edge must leave [by] empty so that it inherits the relationship
+  /// update grant it restricts.
+  final List<ActiveReferrer> relationshipBlockedBy;
+}
+
+/// Rows of [entity] that reference the guarded row through [field] while
+/// their conventional `status` is one of [activeStates].
+///
+/// Omit [activeStates] to match every live referrer. A soft-deletable
+/// referrer only matches while it is not deleted.
+final class ActiveReferrer {
+  const ActiveReferrer(
+    this.entity,
+    this.field, {
+    this.activeStates = const [],
+    this.through,
+    this.unless,
+  });
+
+  final Type entity;
+  final Symbol field;
+  final List<Object> activeStates;
+
+  /// Reaches the guarded row through a bridge: [field] then references a row
+  /// that [through] matches instead of the guarded row itself.
+  final ActiveReferrer? through;
+
+  /// Matches only while no row that this referrer describes exists.
+  final ActiveReferrer? unless;
 }
 
 enum IndexScope {
@@ -799,6 +840,28 @@ final class AccessTarget {
   /// while granting its reviewer read access to both that membership and the
   /// membership's `taskId`, without persisting a duplicate task identity.
   final Symbol? targetField;
+}
+
+/// Lets principals who may update the referenced entity through a
+/// relationship elsewhere in the graph act for this row's owner.
+///
+/// They read the row and write the rows that inherit access from it through
+/// [AccessReference], as its owner does. They gain no write on the row itself
+/// and do not join the audience of its own [AccessTarget] paths. For example,
+/// an editor of a shared goal reads the reviewer assignment of a task linked
+/// into the goal and asks that reviewer for a check, while the task's own
+/// readers through the assignment remain its reviewer alone.
+final class RelationshipEditorAccess {
+  const RelationshipEditorAccess({this.targetField, this.includeOwner = false});
+
+  /// Immutable reference on the referenced bridge whose target's relationship
+  /// editors act for the row, as in [AccessTarget.targetField].
+  final Symbol? targetField;
+
+  /// Whether that entity's owner acts for the row as well, for a row owned
+  /// by someone else, such as a check an assignee asked for on the owner's
+  /// task.
+  final bool includeOwner;
 }
 
 /// Derives the synchronized row owner from one typed entity reference.

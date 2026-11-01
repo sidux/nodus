@@ -277,6 +277,16 @@ lists the allowed edges of an enum field, optionally restricted by principal
 with `by:`. The same rule is enforced locally, in the test backend, and in the
 generated PostgreSQL push function.
 
+An edge that leaves `by:` empty also admits those who update the entity
+through a relationship elsewhere in the graph. `relationshipBlockedBy:
+[ActiveReferrer(Review, #taskId, activeStates: [ReviewStatus.accepted])]`
+refuses the edge to them alone while any listed referrer exists, for example
+so a goal editor cannot finish a task past the reviewer its owner chose. A
+referrer may reach the row through a bridge (`through:`, such as the review of
+an accepted assignment of the task) or count only while another referrer is
+absent (`unless:`). Like the relationship grant itself, the condition is
+authorized by the generated push function, not by a possibly stale local link.
+
 ### Transactions
 
 Group several mutations into one atomic local commit:
@@ -458,6 +468,7 @@ reference a target the user cannot see; the generated accessor then returns
 | `@AccessParticipant()` | A `LocalId<Account>` field whose account may access the row. |
 | `@AccessReference()` | Access the row whenever you can access the referenced entity. |
 | `@AccessTarget()` | A relationship row grants its audience access to the target it points to. |
+| `@RelationshipEditorAccess()` | Those who may update the referenced entity through a relationship read the row and act through it for its owner, such as asking its reviewer for a check. `targetField:` names that entity on a referenced bridge; `includeOwner: true` lets its owner act too. |
 | `Collaborative<Principal>` with `CollaborationAccess()` | Owner-managed collaborators. |
 | `CollaborationAccess.workflow()` | Invitation and acceptance through a `WorkflowMembership` entity. |
 | `CollaborationAccess.workflow(editPermissionField: ...)` | Same, where a membership bool separates editors from read-only members. |
