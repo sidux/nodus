@@ -4155,4 +4155,7 @@ final class _SyncQueueHost implements SyncQueueHost {
 
   @override
   Future<void> schedulePull() async => pullRequests++;
+
+  @override
+  Future<void> acknowledge(SyncWorkItem item) async => _syncWork.remove(item);
 }

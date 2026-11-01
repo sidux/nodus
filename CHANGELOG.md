@@ -80,3 +80,6 @@
   of failing it.
 - Keeps an observed list's previous results on screen while a changed query
   reloads.
+- Undoes a change that still conflicts after its rebase retries, like a
+  rejected one, keeping the changes queued after it; refused work stays in
+  the sync queue until `SyncQueue.acknowledge` removes it.

@@ -2482,7 +2482,11 @@ Conflict policies MUST be deterministic, typed, and declared once. Automatic
 resolution is allowed only where field semantics make it safe. Rejection must
 restore or rebase the visible projection without losing the accepted base or
 the operations still queued after the rejected one, and must expose typed
-diagnostic state. A pulled page that revokes an entity removes it even when the
+diagnostic state. A conflict that persists through its bounded rebase retries
+is refused the same way. Refused work never contributes to the visible
+projection; it stays queued with its typed failure until the application
+acknowledges it, and the runtime never replays it, since its effect was
+already undone. A pulled page that revokes an entity removes it even when the
 same page lists an earlier change to it.
 
 Imported entities replace their accepted projection from ordered remote input

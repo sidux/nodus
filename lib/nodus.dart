@@ -4860,6 +4860,8 @@ abstract interface class SyncQueueHost {
   Future<void> schedulePull();
 
   Future<void> retryNow();
+
+  Future<void> acknowledge(SyncWorkItem item);
 }
 
 final class SyncQueue {
@@ -4876,6 +4878,26 @@ final class SyncQueue {
   Future<void> requestPull() => _host.schedulePull();
 
   Future<void> retryNow() => _host.retryNow();
+
+  /// Removes work the server refused for good, once the application has told
+  /// the user about it.
+  ///
+  /// Refused work stays queued, with its typed failure, until it is
+  /// acknowledged, so a problem found while nobody was watching is still
+  /// reported later. Only [SyncWorkStatus.rejected] and
+  /// [SyncWorkStatus.conflict] work can be acknowledged; their effect was
+  /// already removed from the local state.
+  Future<void> acknowledge(SyncWorkItem item) async {
+    if (item.status != SyncWorkStatus.rejected &&
+        item.status != SyncWorkStatus.conflict) {
+      throw ArgumentError.value(
+        item.status,
+        'item.status',
+        'Only refused sync work can be acknowledged.',
+      );
+    }
+    await _host.acknowledge(item);
+  }
 
   Future<void> synchronize() async {
     await requestPull();

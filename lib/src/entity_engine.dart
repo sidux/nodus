@@ -2070,7 +2070,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         .customSelect(
           "select 1 from local_entity_sync_work where direction = 'push' "
           "and entity_type = ? and entity_id = ? and status in "
-          "('pending', 'processing', 'retryableFailure', 'conflict') limit 1",
+          "('pending', 'processing', 'retryableFailure') limit 1",
           variables: [
             Variable.withString(descriptor.entityType),
             Variable.withString(id),
@@ -2817,7 +2817,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         .customSelect(
           "select distinct entity_id from local_entity_sync_work "
           "where direction = 'push' and entity_type = ? and status in "
-          "('pending', 'processing', 'retryableFailure', 'conflict')",
+          "('pending', 'processing', 'retryableFailure')",
           variables: [Variable.withString(descriptor.entityType)],
         )
         .get();
@@ -3435,30 +3435,27 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
               message: error.toString(),
             );
       final nextAttemptCount = item.attemptCount + 1;
-      if (typed.kind == SyncFailureKind.rejected) {
-        await _storeTerminalFailure(
-          item,
-          status: SyncWorkStatus.rejected,
-          failure: typed,
-        );
+      final status = _failedSyncWorkStatus(item, typed);
+      if (status != SyncWorkStatus.retryableFailure) {
+        // The server will not apply this operation, so its optimistic effect
+        // leaves the visible state; the work queued after it stays.
+        await _storeTerminalFailure(item, status: status, failure: typed);
         rejectedProjections = await _reconstructAfterRejection(item);
         return const SyncFailureOutcome(continueDraining: true);
       }
       if (typed.kind == SyncFailureKind.conflict) {
-        final conflictAttempt = _syncConflictAttempt(item, typed);
-        if (conflictAttempt >= _maxSyncConflictAttempts) {
-          await _storeTerminalFailure(
-            item,
-            status: SyncWorkStatus.conflict,
-            failure: typed,
-          );
-          return const SyncFailureOutcome(continueDraining: true);
-        }
+        // The pull brings the newer server version and rebases the work on
+        // it before the retry.
         await database.customStatement(
           "update local_entity_sync_work set status = 'retryableFailure', "
           "attempt_count = ?, lease_until = null, next_attempt_at = null, "
           "last_error_code = ?, last_error_detail = ? where id = ?",
-          [conflictAttempt, typed.code, typed.message, item.id],
+          [
+            _syncConflictAttempt(item, typed),
+            typed.code,
+            typed.message,
+            item.id,
+          ],
         );
         if (item.direction == SyncDirection.push) {
           await graphCoordinator._schedulePullInCurrentTransaction(item.target);
@@ -3482,8 +3479,21 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       );
       return SyncFailureOutcome(continueDraining: false, retryAt: retryAt);
     });
+    _publishRejectedProjections(rejectedProjections);
+    if (refreshQueue) await graphCoordinator.refreshSyncWork();
+    return outcome;
+  }
+
+  /// Removes the optimistic effect of [refused] from the visible state.
+  Future<void> _restoreWithoutRefused(PushSyncWorkItem refused) async {
+    _publishRejectedProjections(
+      await database.transaction(() => _reconstructAfterRejection(refused)),
+    );
+  }
+
+  void _publishRejectedProjections(List<_RejectedProjection> projections) {
     EntityProjectionChange<E>? projectionChange;
-    for (final projection in rejectedProjections) {
+    for (final projection in projections) {
       final change =
           projection.fields == null ||
               !_identityMap.containsKey(projection.entityId)
@@ -3499,8 +3509,6 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       }
     }
     if (projectionChange != null) _notifyProjectionChanged(projectionChange);
-    if (refreshQueue) await graphCoordinator.refreshSyncWork();
-    return outcome;
   }
 
   Future<List<_RejectedProjection>> _reconstructAfterRejection(
@@ -3578,7 +3586,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         "next_attempt_at = null, last_error_code = 'dependency_rejected', "
         "last_error_detail = 'The entity create operation was rejected.' "
         "where id <> ? and direction = 'push' and entity_type = ? "
-        "and entity_id = ? and status <> 'rejected'",
+        "and entity_id = ? and status not in ('rejected', 'conflict')",
         [rejected.id, descriptor.entityType, entityId],
       );
       await database.customStatement(
@@ -3598,7 +3606,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           "select kind, entity_id, payload from local_entity_sync_work "
           "where id <> ? and direction = 'push' and entity_type = ? "
           "and (entity_id = ? or kind = 'semanticCommand') and status in "
-          "('pending', 'processing', 'retryableFailure', 'conflict') "
+          "('pending', 'processing', 'retryableFailure') "
           "order by id",
           variables: [
             Variable.withInt(rejected.id),
@@ -3688,7 +3696,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       'last_error_detail = ? where id = ?',
       [
         status.name,
-        item.attemptCount + 1,
+        _failedSyncAttempt(item, failure),
         failure.code,
         failure.message,
         item.id,
@@ -4236,6 +4244,19 @@ final class LocalEntityGraphCoordinator
     );
     await _refreshSyncState();
     await refreshSyncWork();
+    // Refused work never shows in the visible state, including conflicts an
+    // earlier runtime refused without restoring it.
+    final refusedConflicts = _syncWork
+        .whereType<PushSyncWorkItem>()
+        .where((item) => item.status == SyncWorkStatus.conflict)
+        .toList(growable: false);
+    for (final item in refusedConflicts) {
+      await _engineFor(
+        item.operation.identity.entityType,
+      )._restoreWithoutRefused(item);
+    }
+    // Restoring can refuse work that depended on a refused create.
+    if (refusedConflicts.isNotEmpty) await _refreshWorkAndState();
     _queueUpdateSubscription = database
         .tableUpdates(
           const TableUpdateQuery.onTableName('local_entity_sync_work'),
@@ -5254,6 +5275,16 @@ final class LocalEntityGraphCoordinator
   }
 
   @override
+  Future<void> acknowledge(SyncWorkItem item) async {
+    await database.customStatement(
+      'delete from local_entity_sync_work where id = ? and '
+      "status in ('rejected', 'conflict')",
+      [item.id],
+    );
+    await _refreshWorkAndState();
+  }
+
+  @override
   Future<void> retryNow() async {
     await database.customStatement(
       "update local_entity_sync_work set next_attempt_at = null "
@@ -5639,16 +5670,8 @@ final class LocalEntityGraphCoordinator
       )._handleFailureForThisEntity(item, failure, refreshQueue: false),
       PullSyncWorkItem() => await _handlePullFailure(item, failure),
     };
-    final attemptCount = item.attemptCount + 1;
-    final resultingStatus = switch (failure.kind) {
-      SyncFailureKind.rejected => SyncWorkStatus.rejected,
-      SyncFailureKind.conflict
-          when _syncConflictAttempt(item, failure) >=
-              _maxSyncConflictAttempts =>
-        SyncWorkStatus.conflict,
-      SyncFailureKind.retryable ||
-      SyncFailureKind.conflict => SyncWorkStatus.retryableFailure,
-    };
+    final attemptCount = _failedSyncAttempt(item, failure);
+    final resultingStatus = _failedSyncWorkStatus(item, failure);
     _recordDiagnosticSafely(
       diagnostics,
       SyncFailureDiagnostic(
@@ -5682,15 +5705,9 @@ final class LocalEntityGraphCoordinator
             code: 'unexpected_error',
             message: error.toString(),
           );
-    final attemptCount = failure.kind == SyncFailureKind.conflict
-        ? _syncConflictAttempt(item, failure)
-        : item.attemptCount + 1;
-    if (failure.kind == SyncFailureKind.rejected ||
-        (failure.kind == SyncFailureKind.conflict &&
-            attemptCount >= _maxSyncConflictAttempts)) {
-      final status = failure.kind == SyncFailureKind.conflict
-          ? SyncWorkStatus.conflict
-          : SyncWorkStatus.rejected;
+    final attemptCount = _failedSyncAttempt(item, failure);
+    final status = _failedSyncWorkStatus(item, failure);
+    if (status != SyncWorkStatus.retryableFailure) {
       await database.customStatement(
         'update local_entity_sync_work set status = ?, attempt_count = ?, '
         'lease_until = null, next_attempt_at = null, last_error_code = ?, '
@@ -6427,6 +6444,25 @@ bool _expired(int? epochMilliseconds, DateTime now) =>
 /// reconnecting still gets a rebase and retry.
 int _syncConflictAttempt(SyncWorkItem item, SyncBackendException failure) =>
     item.lastFailure?.code == failure.code ? item.attemptCount + 1 : 1;
+
+int _failedSyncAttempt(SyncWorkItem item, SyncBackendException failure) =>
+    failure.kind == SyncFailureKind.conflict
+    ? _syncConflictAttempt(item, failure)
+    : item.attemptCount + 1;
+
+/// Where [failure] leaves [item]: retried, or refused for good once the
+/// server rejects it or every rebase still conflicts.
+SyncWorkStatus _failedSyncWorkStatus(
+  SyncWorkItem item,
+  SyncBackendException failure,
+) => switch (failure.kind) {
+  SyncFailureKind.rejected => SyncWorkStatus.rejected,
+  SyncFailureKind.conflict
+      when _syncConflictAttempt(item, failure) >= _maxSyncConflictAttempts =>
+    SyncWorkStatus.conflict,
+  SyncFailureKind.retryable ||
+  SyncFailureKind.conflict => SyncWorkStatus.retryableFailure,
+};
 
 Duration _syncRetryDelay(int workId, int attemptCount) {
   final exponent = math.min(attemptCount - 1, 8);

@@ -513,6 +513,13 @@ ordering, cursors, and restart recovery, per target. Call
 `entityGraph.sync()` to synchronize now, and observe pending work through
 `entityGraph.syncQueue`.
 
+A version conflict pulls the newer server version, rebases the change on it,
+and retries. When the server rejects a change, or it still conflicts after
+three rebases, its effect is removed from local state while the changes queued
+after it stay, and the work stays in `syncQueue.items` as `rejected` or
+`conflict` with its typed failure. Tell the user, then call
+`syncQueue.acknowledge(item)` to remove it.
+
 ### Supabase
 
 Supabase is the built-in target. Open the graph with the generated factory:
