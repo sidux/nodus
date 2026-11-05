@@ -5564,6 +5564,24 @@ final class LocalEntityGraphCoordinator
           ));
           continue;
         }
+        // Gaining access can address an older aggregate change ahead of the
+        // component copy published for the new audience, possibly on a later
+        // page, or the component may stay unreadable. Every page would then
+        // abort on the local composition constraint, so the aggregate waits
+        // for the newer snapshot that follows its component.
+        if (!await _storesComposedComponents(change)) {
+          resolved.add((
+            engine,
+            change,
+            const _MergedRemoteProjection(
+              fields: <String, Object?>{},
+              inserted: false,
+              changedFieldNames: <String>{},
+              ignored: true,
+            ),
+          ));
+          continue;
+        }
         final sourceOperationId = change.sourceOperationId;
         if (sourceOperationId != null) {
           final acknowledgedWorkId = await _takeAcknowledgedWork(
@@ -5944,6 +5962,34 @@ final class LocalEntityGraphCoordinator
         lease?.release();
       }
     }
+  }
+
+  /// Whether every component a pulled aggregate composes is stored with the
+  /// aggregate's owner, as the local composition constraint requires.
+  Future<bool> _storesComposedComponents(RemoteEntityChange change) async {
+    final compositions =
+        _compositionsByAggregate[change.identity.entityType] ?? const [];
+    if (compositions.isEmpty) return true;
+    final aggregate = _engineFor(change.identity.entityType).descriptor;
+    final ownerId = change.fields[_ownerFieldOf(aggregate).name];
+    for (final composition in compositions) {
+      final componentId = change.fields[composition.fieldName];
+      if (componentId is! String) continue;
+      final component = _engineFor(composition.componentEntityType).descriptor;
+      final stored = await database
+          .customSelect(
+            'select 1 from ${component.tableName} '
+            'where ${EntityConventions.idColumnName} = ? '
+            'and ${_ownerFieldOf(component).columnName} = ?',
+            variables: [
+              Variable.withString(componentId),
+              Variable.withString('$ownerId'),
+            ],
+          )
+          .getSingleOrNull();
+      if (stored == null) return false;
+    }
+    return true;
   }
 
   _ErasedLocalEntityEngine _engineFor(String entityType) {
@@ -6478,6 +6524,15 @@ bool _setEquals<T>(Set<T> left, Set<T> right) =>
 typedef _ErasedGeneratedEntityRecord = TypedGeneratedEntityRecord<dynamic>;
 typedef _ErasedLocalEntityEngine =
     LocalEntityEngine<dynamic, _ErasedGeneratedEntityRecord>;
+
+/// The field holding an entity's owner: its own identity when it owns itself.
+EntityFieldDescriptor _ownerFieldOf(EntityDescriptorBase descriptor) =>
+    descriptor.fields.firstWhere(
+      (field) => field.name == EntityConventions.ownerFieldName,
+      orElse: () => descriptor.fields.singleWhere(
+        (field) => field.name == EntityConventions.idFieldName,
+      ),
+    );
 
 final class _EntityPredicateSqlWriter<
   E,
