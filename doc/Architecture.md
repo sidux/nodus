@@ -2535,7 +2535,10 @@ under an identity not derived this way, such as an older client's random one,
 that holds the unique key of the device's still-queued convergent create is
 the same creation: the pull that brings it moves the local row, its queued
 work, and every local reference to it onto that identity, where the create
-converges. A server refusal of such a create because the key is taken is
+converges. Since a pull brings components before their aggregate, the other
+device's components may already be stored under that identity; a local
+component still queued as a create of the same unique key becomes the stored
+one, and its create converges on that component's accepted version. A server refusal of such a create because the key is taken is
 therefore a conflict the next pull resolves, not a rejection.
 
 An action whose values are relative to the state it was made on, such as a

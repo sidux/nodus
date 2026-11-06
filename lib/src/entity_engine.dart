@@ -4000,6 +4000,12 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         if (field.reference?.targetEntityType != descriptor.entityType) {
           continue;
         }
+        // A pull lists components before their aggregate, so the other
+        // device's rows may already be stored under [to]; a queued create
+        // of the same unique key under [from] is the same creation.
+        await graphCoordinator
+            ._engineFor(referrer.entityType)
+            ._adoptStoredTwinsMoving(field, from: from, to: to);
         final ids = await database
             .customSelect(
               'select ${EntityConventions.idColumnName} as id '
@@ -4048,6 +4054,100 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         await engine._reloadIdentities(ids);
       }
     });
+  }
+
+  /// Before rows referencing [from] through [field] move to [to], adopts
+  /// each one still queued as a convergent create whose unique key, under
+  /// [to], an accepted row from another device already holds: an older
+  /// app's row pulled ahead of its plan, say. The queued row and its work
+  /// take that row's identity and converge on its accepted version, as if
+  /// the twin had arrived after the move.
+  Future<void> _adoptStoredTwinsMoving(
+    EntityFieldDescriptor field, {
+    required String from,
+    required String to,
+  }) async {
+    if (descriptor is! ConvergentCreateDescriptor) return;
+    final constraints = switch (descriptor) {
+      final EntityUniqueConstraintDescriptor value => value.uniqueConstraints,
+      _ => const <EntityUniqueConstraint>[],
+    };
+    final fieldsByName = {
+      for (final candidate in descriptor.fields) candidate.name: candidate,
+    };
+    for (final constraint in constraints) {
+      if (constraint.condition != null ||
+          constraint.unordered ||
+          !constraint.fieldNames.contains(field.name)) {
+        continue;
+      }
+      final others = [
+        for (final name in constraint.fieldNames)
+          if (name != field.name) fieldsByName[name]!,
+      ];
+      final live = constraint.liveOnly ? 'and deleted_at is null ' : '';
+      final queued = await database
+          .customSelect(
+            'select * from ${descriptor.tableName} '
+            'where ${field.columnName} = ? $live'
+            'and accepted_snapshot is null and exists ('
+            "select 1 from local_entity_sync_work work where work.direction = 'push' "
+            'and work.entity_type = ? and work.entity_id = '
+            '${descriptor.tableName}.${EntityConventions.idColumnName})',
+            variables: [
+              Variable.withString(from),
+              Variable.withString(descriptor.entityType),
+            ],
+          )
+          .get();
+      for (final row in queued) {
+        if (others.any((other) => row.data[other.columnName] == null)) {
+          continue;
+        }
+        final stored = await database
+            .customSelect(
+              'select * from ${descriptor.tableName} '
+              'where ${field.columnName} = ? '
+              '${others.map((other) => 'and ${other.columnName} = ? ').join()}'
+              '$live'
+              'and accepted_snapshot is not null limit 1',
+              variables: [
+                Variable.withString(to),
+                for (final other in others)
+                  Variable<Object>(row.data[other.columnName] as Object),
+              ],
+            )
+            .getSingleOrNull();
+        if (stored == null) continue;
+        await _adoptStoredTwin(
+          queuedId: row.read<String>(EntityConventions.idColumnName),
+          stored: stored,
+        );
+      }
+    }
+  }
+
+  Future<void> _adoptStoredTwin({
+    required String queuedId,
+    required QueryRow stored,
+  }) async {
+    final storedId = stored.read<String>(EntityConventions.idColumnName);
+    final accepted = _decodeMap(stored.read<String>('accepted_snapshot'));
+    final version = ServerVersion(
+      stored.read<int>(EntityConventions.serverVersionColumnName),
+    );
+    await database.customStatement(
+      'delete from ${descriptor.tableName} '
+      'where ${EntityConventions.idColumnName} = ?',
+      [storedId],
+    );
+    await _moveIdentity(queuedId, storedId);
+    await _mergeRemoteIntoDatabase(
+      identity: descriptor.parseIdentity(storedId),
+      serverVersion: version,
+      fields: RemoteEntityFields.decode(descriptor, accepted, complete: true),
+    );
+    graphCoordinator._afterCommit.add(() => _reloadIdentities([storedId]));
   }
 
   /// Shows [ids] as stored again, after their references moved underneath.
