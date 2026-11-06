@@ -3468,6 +3468,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     bool refreshQueue = true,
   }) async {
     List<_RejectedProjection> rejectedProjections = const [];
+    var rereadsServerCopy = false;
     final outcome = await database.transaction(() async {
       final reported = error is SyncBackendException
           ? error
@@ -3510,6 +3511,9 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         if (item.direction == SyncDirection.push) {
           await graphCoordinator._schedulePullInCurrentTransaction(item.target);
         }
+        rereadsServerCopy =
+            item.operation is PatchPushOperation ||
+            item.operation is DeletePushOperation;
         return const SyncFailureOutcome(continueDraining: true);
       }
       final retryAt = clock.nowUtc().add(
@@ -3530,8 +3534,27 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       return SyncFailureOutcome(continueDraining: false, retryAt: retryAt);
     });
     _publishRejectedProjections(rejectedProjections);
+    if (rereadsServerCopy) {
+      await _rereadServerCopy(item.operation.identity.rawId);
+    }
     if (refreshQueue) await graphCoordinator.refreshSyncWork();
     return outcome;
+  }
+
+  /// Merges the server's copy of an entity whose push conflicted, which
+  /// rebases the queued work on the newer version.
+  ///
+  /// The pull usually brings that version, but a device that once skipped it
+  /// has pulled past it and would conflict on every retry until the change
+  /// is undone.
+  Future<void> _rereadServerCopy(String entityId) async {
+    if (_backend is! SnapshotSyncAdapter) return;
+    try {
+      (await loadRawId(entityId, refresh: true))?.release();
+    } on Exception {
+      // Offline or refused: the retry still runs, and its next conflict
+      // reads the server copy again.
+    }
   }
 
   /// Removes the optimistic effect of [refused] from the visible state.
