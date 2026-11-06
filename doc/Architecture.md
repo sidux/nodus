@@ -1780,6 +1780,19 @@ named nominal `LocalId` conversions in both directions. Co-identity does not
 merge tables, entities, lifecycle, fields, or permissions. Raw `.value`
 round-trips, a generic ID cast, or an undeclared conversion remain forbidden.
 
+An entity whose identity every device derives from its unique key, such as a
+UUIDv5 of an owner and a date, declares `convergentCreates: true`, so creates
+of one identity on several devices are one creation rather than a collision.
+The compiler requires a separately owned, replicated entity the client creates
+directly and an unconditional unique key. The generated push accepts a create
+meeting the row its identity names, with the same owner and every
+unconditional unique key, as that row: it writes nothing, takes no new version
+or ordered place, and returns that row as a receipt marked converged. Any other
+row under the identity still refuses the create, and a create under an
+identity not derived this way, such as an older client's random one, keeps the
+ordinary semantics. Section 10.5 defines how the device settles a converged
+create.
+
 Generated sets provide:
 
 - synchronous `byId`, tombstone-filtered `byPresentId`, and throwing
@@ -2491,6 +2504,24 @@ server-wins field yields only
 to a newer remote version that changed it since the pending base, so an
 unrelated concurrent edit never discards it. Queued work never merges a
 reference ahead of the queued work that creates or restores its target.
+
+An enum field MAY declare `yieldingValues`: values a device sets only on the
+application's own initiative, such as a placement an automatic planner chose.
+A pending yielding value yields to a concurrent remote change of its field
+whatever the field's policy says; every other value follows the policy.
+
+A device settles its queued convergent create the same way whether the
+converged receipt or a pulled version of the other device's row reaches it
+first. The server's row becomes the accepted base and the create's own values
+yield to it. A local-wins create value that no later work changes and that does
+not yield is the user's intent and stays queued as a patch in the create's
+place. The work queued after the create was made on top of it, so it is
+rebased onto the server's row and applies on top, as after any
+acknowledgement; only its yielding values give way to the server's, a
+first-write-only time keeps the one the server holds, and an action left
+incomplete by that drops whole. Work never coalesces into a queued convergent
+create, so what the user did after creating survives convergence. No
+operation is rejected on this path.
 
 Conflict policies MUST be deterministic, typed, and declared once. Automatic
 resolution is allowed only where field semantics make it safe. Rejection must

@@ -1549,6 +1549,111 @@ void main() {
     );
   });
 
+  test('a convergent create is accepted as the row its identity names', () {
+    final convergent = EntitySpec(
+      className: 'DayPlan',
+      packageName: spec.packageName,
+      inputImport: 'package:example/day_plan.dart',
+      tableName: 'day_plans',
+      ownership: spec.ownership,
+      cardinality: spec.cardinality,
+      authenticatedReadSync: spec.authenticatedReadSync,
+      compoundIndexes: const [
+        CompoundIndexSpec(
+          fields: ['sortOrder'],
+          unique: true,
+          scope: IndexScope.owner,
+        ),
+      ],
+      fields: [
+        for (final field in spec.fields)
+          if (field.name != 'statement') field,
+        const FieldSpec(
+          name: 'placement',
+          columnName: 'placement',
+          dartType: 'Placement',
+          sqlType: SqlType.text,
+          nullable: false,
+          isFinal: true,
+          defaultValue: 'added',
+          conflict: ConflictStrategy.localWins,
+          minLength: null,
+          maxLength: null,
+          indexed: false,
+          unique: false,
+          enumValues: ['auto', 'added'],
+          yieldingValues: ['auto'],
+        ),
+      ],
+      security: const SecuritySpec(
+        grants: [
+          GrantSpec(
+            operation: RlsOperation.select,
+            principal: RlsPrincipal.owner,
+          ),
+          GrantSpec(
+            operation: RlsOperation.insert,
+            principal: RlsPrincipal.owner,
+          ),
+          GrantSpec(
+            operation: RlsOperation.update,
+            principal: RlsPrincipal.owner,
+          ),
+        ],
+        collaboration: null,
+      ),
+      commands: const [],
+      convergentCreates: true,
+    );
+
+    final sql = emitSupabaseSql(convergent);
+    final dart = emitDart(convergent);
+
+    expect(sql, contains('  converged boolean;'));
+    expect(sql, contains('    converged := false;'));
+    expect(
+      sql,
+      contains(
+        "hashtextextended('DayPlan:' || (current_operation ->> 'entityId'), 0)",
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        'converged := found;\n'
+        '      if converged and not (canonical.owner_id is not distinct from '
+        "((current_operation -> 'patch' -> 'ownerId' #>> '{}')::uuid)\n"
+        '          and canonical.sort_order is not distinct from '
+        "((current_operation -> 'patch' -> 'sortOrder' #>> '{}')::bigint)) then\n"
+        "        raise exception 'Create identity is taken' using errcode = '23505';",
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        '      if not converged then\n'
+        '        insert into public.day_plans',
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        "changes.entity_type = 'DayPlan' and changes.entity_id = canonical.id "
+        'and (changes.audience_user_id is null or '
+        'changes.audience_user_id = auth.uid())',
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        "receipt_result := receipt_result || jsonb_build_object('converged', true);",
+      ),
+    );
+    expect(emitSupabaseSql(spec), isNot(contains('converged')));
+    expect(dart, contains('        ConvergentCreateDescriptor {'));
+    expect(dart, contains("yieldingValues: const ['auto'],"));
+  });
+
   test('create-only entities omit unreachable patch infrastructure', () {
     final createOnly = EntitySpec(
       className: 'AppRating',

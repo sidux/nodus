@@ -421,6 +421,7 @@ final class SupabaseSyncBackend
           sourceOperationId: sourceOperationId,
         ),
         relatedChanges: relatedChanges,
+        converged: result['converged'] == true,
       );
       pushResult.validateFor(item);
       return pushResult;

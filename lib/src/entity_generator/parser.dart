@@ -613,6 +613,11 @@ Future<EntitySpec?> parseEntityAsset(
       field,
       scalarEnumElement,
     );
+    final yieldingValues = _parseYieldingValues(
+      persisted,
+      field,
+      scalarEnumElement,
+    );
     final updatePrincipals = _parseFieldUpdatePrincipals(persisted, field);
     if (configuredDefault != null && enumElement == null) {
       _validateConfiguredDefault(
@@ -734,6 +739,7 @@ Future<EntitySpec?> parseEntityAsset(
         relationshipEditorIncludesOwner:
             relationshipEditor?.includeOwner ?? false,
         transitions: transitions,
+        yieldingValues: yieldingValues,
         updatePrincipals: updatePrincipals,
         draftEditableOverride: persisted?.peek('editable')?.isNull ?? true
             ? null
@@ -1269,7 +1275,9 @@ Future<EntitySpec?> parseEntityAsset(
     orderScopeFieldNames: orderScopeFieldNames,
     syncModeOverride: syncMode,
     syncTargetOverride: syncTarget,
+    convergentCreates: annotation.read('convergentCreates').boolValue,
   );
+  _validateConvergentCreates(spec, classElement);
   final invalidDraftOverride = fields
       .where((field) => field.draftEditableOverride == true)
       .where((field) => !spec.isDraftEditable(field))
@@ -1284,6 +1292,37 @@ Future<EntitySpec?> parseEntityAsset(
     );
   }
   return spec;
+}
+
+void _validateConvergentCreates(EntitySpec spec, ClassElement element) {
+  if (!spec.convergentCreates) return;
+  if (!spec.canCreate || spec.isActivityEntry || spec.isComponent) {
+    throw InvalidGenerationSourceError(
+      'Entity.convergentCreates requires an entity the client creates '
+      'directly.',
+      element: element,
+    );
+  }
+  if (spec.ownership != Ownership.separate) {
+    throw InvalidGenerationSourceError(
+      'Entity.convergentCreates requires separate ownership: an identity '
+      'owned entity already has one row per account.',
+      element: element,
+    );
+  }
+  if (spec.syncModeOverride case final mode? when mode != SyncMode.replicated) {
+    throw InvalidGenerationSourceError(
+      'Entity.convergentCreates requires a replicated entity.',
+      element: element,
+    );
+  }
+  if (!spec.indexes.any((index) => index.unique && index.condition == null)) {
+    throw InvalidGenerationSourceError(
+      'Entity.convergentCreates requires an unconditional unique key that '
+      'the identity is derived from.',
+      element: element,
+    );
+  }
 }
 
 List<String>? _parseOrderScope(
@@ -1577,6 +1616,58 @@ void _validateAndInferWorkflowMembership(
       scope: IndexScope.field,
     ),
   );
+}
+
+List<String> _parseYieldingValues(
+  ConstantReader? persisted,
+  FieldElement field,
+  EnumElement? enumElement,
+) {
+  if (persisted == null) return const [];
+  final values = persisted.read('yieldingValues').listValue;
+  if (values.isEmpty) return const [];
+  if (enumElement == null ||
+      field.type.nullabilitySuffix == NullabilitySuffix.question) {
+    throw InvalidGenerationSourceError(
+      'Persisted yieldingValues require a non-null enum field.',
+      element: field,
+    );
+  }
+  final enumValues = enumElement.fields
+      .where((candidate) => candidate.isEnumConstant)
+      .map((candidate) => candidate.name!)
+      .toList(growable: false);
+  final names = <String>[];
+  for (final value in values) {
+    final variable = value.variable;
+    final name = variable?.name;
+    if (name == null ||
+        variable?.enclosingElement != enumElement ||
+        !enumValues.contains(name)) {
+      throw InvalidGenerationSourceError(
+        'Persisted yieldingValues must use values from `${enumElement.name}`.',
+        element: field,
+      );
+    }
+    if (names.contains(name)) {
+      throw InvalidGenerationSourceError(
+        'Persisted yieldingValues may list `$name` only once.',
+        element: field,
+      );
+    }
+    names.add(name);
+  }
+  if (names.length == enumValues.length) {
+    throw InvalidGenerationSourceError(
+      'Persisted yieldingValues must leave at least one value that does not '
+      'yield; otherwise use `conflict: ConflictStrategy.serverWins`.',
+      element: field,
+    );
+  }
+  return [
+    for (final value in enumValues)
+      if (names.contains(value)) value,
+  ];
 }
 
 List<ValueTransitionSpec> _parseAllowedTransitions(

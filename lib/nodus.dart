@@ -5037,6 +5037,7 @@ final class PushResult {
     required this.canonicalChange,
     Iterable<RemoteEntityChange> relatedChanges = const [],
     Iterable<OrderScopeVersionReceipt> orderScopeVersions = const [],
+    this.converged = false,
   }) : relatedChanges = List<RemoteEntityChange>.unmodifiable(relatedChanges),
        orderScopeVersions = List<OrderScopeVersionReceipt>.unmodifiable(
          orderScopeVersions,
@@ -5045,6 +5046,11 @@ final class PushResult {
   final RemoteEntityChange canonicalChange;
   final List<RemoteEntityChange> relatedChanges;
   final List<OrderScopeVersionReceipt> orderScopeVersions;
+
+  /// Whether the server accepted a create as the row another device had
+  /// already created under the same convergent identity, which
+  /// [canonicalChange] carries unchanged.
+  final bool converged;
 
   Iterable<RemoteEntityChange> get canonicalChanges sync* {
     yield canonicalChange;
@@ -6150,7 +6156,8 @@ final class MergeResolution {
 /// Rebases [pendingPatch] over [remoteFields].
 ///
 /// A server-wins field yields only to a remote version newer than the pending
-/// base that changed it. [baseFields], the record at the pending base when
+/// base that changed it. A pending value listed in [yieldingValues] yields
+/// the same way whatever its field's policy says. [baseFields], the record at the pending base when
 /// known, tells which fields the remote changed; without it every field of a
 /// newer remote version counts as changed.
 MergeResolution mergeRemoteFields({
@@ -6158,6 +6165,7 @@ MergeResolution mergeRemoteFields({
   required JsonMap pendingPatch,
   required JsonMap remoteFields,
   required Map<String, FieldConflictPolicy> policies,
+  Map<String, List<Object?>> yieldingValues = const {},
   required ServerVersion remoteVersion,
   required ServerVersion pendingBaseVersion,
   JsonMap? baseFields,
@@ -6175,18 +6183,22 @@ MergeResolution mergeRemoteFields({
       continue;
     }
 
-    switch (policies[entry.key] ?? FieldConflictPolicy.serverWins) {
-      case FieldConflictPolicy.localWins:
-        break;
-      case FieldConflictPolicy.serverWins:
-        final remoteChangedField =
-            baseFields == null ||
+    final remoteChangedField =
+        remoteIsNewerThanPendingBase &&
+        (baseFields == null ||
             !baseFields.containsKey(entry.key) ||
-            !_sameWireValue(baseFields[entry.key], entry.value);
-        if (remoteIsNewerThanPendingBase && remoteChangedField) {
-          visible[entry.key] = entry.value;
-          pending.remove(entry.key);
-        }
+            !_sameWireValue(baseFields[entry.key], entry.value));
+    final pendingYields =
+        yieldingValues[entry.key]?.any(
+          (value) => _sameWireValue(value, pending[entry.key]),
+        ) ??
+        false;
+    final policy = pendingYields
+        ? FieldConflictPolicy.serverWins
+        : policies[entry.key] ?? FieldConflictPolicy.serverWins;
+    if (policy == FieldConflictPolicy.serverWins && remoteChangedField) {
+      visible[entry.key] = entry.value;
+      pending.remove(entry.key);
     }
   }
 

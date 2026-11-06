@@ -148,6 +148,7 @@ final class EntityFieldDescriptor {
     this.inCreatePayload = true,
     this.reference,
     this.allowedTransitions = const [],
+    this.yieldingValues = const [],
     this.constraints = const EntityFieldConstraints(),
     this.normalization = FieldNormalization.none,
   });
@@ -165,6 +166,10 @@ final class EntityFieldDescriptor {
   final bool inCreatePayload;
   final EntityReferenceDescriptor? reference;
   final List<EntityValueTransition> allowedTransitions;
+
+  /// Wire values that yield to a concurrent value from elsewhere whatever
+  /// [conflictPolicy] says.
+  final List<Object?> yieldingValues;
   final EntityFieldConstraints constraints;
   final FieldNormalization normalization;
 
@@ -678,6 +683,11 @@ final class EntityUniqueConstraintCondition {
   bool matches(JsonMap record) =>
       values.any((value) => entityValuesEqual(record[fieldName], value));
 }
+
+/// Generated marker for an entity whose creates converge: a create meeting
+/// the row its identity already names, with the same owner and unique key,
+/// is accepted as that row.
+abstract interface class ConvergentCreateDescriptor {}
 
 /// Optional descriptor capability used by schema-less local transports.
 abstract interface class EntityUniqueConstraintDescriptor {
@@ -3210,6 +3220,13 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       ),
       definition: graphCoordinator.definition,
     );
+    // A convergent create may meet another device's row, where its own
+    // values yield and only the work queued after it still applies.
+    if (existingOperation is CreatePushOperation &&
+        descriptor is ConvergentCreateDescriptor) {
+      await _insertPushWork(target, mutation, operation);
+      return;
+    }
     final mergedPatch = <String, Object?>{
       ...existingOperation.patch.toWire(),
       ...(mutation.syncPatch ?? mutation.patch).toWire(),
@@ -3715,6 +3732,13 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           variables: [Variable.withString(identity.rawId)],
         )
         .getSingleOrNull();
+    if (row != null && row.readNullable<String>('accepted_snapshot') == null) {
+      await _convergeQueuedCreate(
+        entityId: identity.rawId,
+        remote: fields.toWire(),
+        remoteVersion: serverVersion,
+      );
+    }
     final pendingRows = await database
         .customSelect(
           "select * from local_entity_sync_work where direction = 'push' "
@@ -3756,6 +3780,10 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     final policies = {
       for (final field in descriptor.fields) field.name: field.conflictPolicy,
     };
+    final yieldingValues = {
+      for (final field in descriptor.fields)
+        if (field.yieldingValues.isNotEmpty) field.name: field.yieldingValues,
+    };
     // The accepted record is the base of every queued patch made against its
     // version, so it tells which fields the remote version changed.
     final acceptedJson = row?.readNullable<String>('accepted_snapshot');
@@ -3774,6 +3802,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           pendingPatch: patch,
           remoteFields: fields.toWire(),
           policies: policies,
+          yieldingValues: yieldingValues,
           remoteVersion: serverVersion,
           pendingBaseVersion: ServerVersion(pendingBaseVersion),
           baseFields:
@@ -3838,6 +3867,152 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
             },
     );
   }
+
+  /// Settles this device's queued create of a convergent entity that met
+  /// [remote], the row another device created under the same identity.
+  ///
+  /// The server's row is the creation, so the create's own values yield to
+  /// it. A local-wins value that no later work changes and that does not
+  /// yield is the user's intent and stays queued as a patch in the create's
+  /// place. Work queued after the create was made on top of it, so it
+  /// applies on top of [remote]: only values that yield give way to the
+  /// server's, and a first-write-only time keeps the one the server holds.
+  Future<void> _convergeQueuedCreate({
+    required String entityId,
+    required JsonMap remote,
+    required ServerVersion remoteVersion,
+  }) async {
+    if (descriptor is! ConvergentCreateDescriptor) return;
+    final rows = await database
+        .customSelect(
+          "select id, kind, payload from local_entity_sync_work "
+          "where direction = 'push' and entity_type = ? and entity_id = ? "
+          "and status in ('pending', 'processing', 'retryableFailure') "
+          'order by id',
+          variables: [
+            Variable.withString(descriptor.entityType),
+            Variable.withString(entityId),
+          ],
+        )
+        .get();
+    final createIndex = rows.indexWhere(
+      (row) =>
+          _decodeMap(row.read<String>('payload'))['operation'] ==
+          SyncMutationOperation.create.name,
+    );
+    if (createIndex < 0) return;
+    final rolling = JsonMap.of(remote);
+    final changedLater = <String>{};
+    for (final row in rows.skip(createIndex + 1)) {
+      if (row.read<String>('kind') != SyncWorkKind.statePatch.name) continue;
+      final payload = _decodeMap(row.read<String>('payload'));
+      final patch = _decodeMap(payload['patch']);
+      changedLater.addAll(patch.keys);
+      final converged = _convergedPatch(patch, rolling);
+      if (converged == null || converged.isEmpty) {
+        await database.customStatement(
+          'delete from local_entity_sync_work where id = ?',
+          [row.read<int>('id')],
+        );
+        continue;
+      }
+      rolling.addAll(converged);
+      if (!_sameWireValue(converged, patch)) {
+        await database.customStatement(
+          'update local_entity_sync_work set payload = ? where id = ?',
+          [
+            jsonEncode({...payload, 'patch': converged}),
+            row.read<int>('id'),
+          ],
+        );
+      }
+    }
+    final createRow = rows[createIndex];
+    final createPayload = _decodeMap(createRow.read<String>('payload'));
+    final created = _decodeMap(createPayload['patch']);
+    final intent = <String, Object?>{
+      for (final field in descriptor.fields)
+        if (field.conflictPolicy == FieldConflictPolicy.localWins &&
+            created.containsKey(field.name) &&
+            !changedLater.contains(field.name) &&
+            !_yields(field, created[field.name]) &&
+            !entityValuesEqual(created[field.name], remote[field.name]))
+          field.name: created[field.name],
+    };
+    final actionPolicy = switch (descriptor) {
+      final ActionPolicyProvider provider => provider.actionPolicy,
+      _ => null,
+    };
+    if (intent.isEmpty ||
+        !(actionPolicy?.allowsPatch(intent, remote) ?? true)) {
+      await database.customStatement(
+        'delete from local_entity_sync_work where id = ?',
+        [createRow.read<int>('id')],
+      );
+    } else {
+      final operation = PatchPushOperation(
+        operationId: idGenerator.nextOperationId(),
+        identity: descriptor.parseIdentity(entityId),
+        baseServerVersion: remoteVersion,
+        localRevision: createPayload['localRevision']! as int,
+        protocolVersion: descriptor.protocolVersion,
+        patch: EntityPatch.fromWire(intent),
+      );
+      await database.customStatement(
+        'update local_entity_sync_work set operation_id = ?, '
+        "kind = 'statePatch', status = 'pending', base_server_version = ?, "
+        'protocol_version = ?, payload = ?, attempt_count = 0, '
+        'lease_until = null, next_attempt_at = null, last_error_code = null, '
+        'last_error_detail = null where id = ?',
+        [
+          operation.operationId.value,
+          remoteVersion.value,
+          operation.protocolVersion,
+          jsonEncode(operation.toWire()),
+          createRow.read<int>('id'),
+        ],
+      );
+    }
+    await _rebasePendingPushes(entityId, remoteVersion);
+  }
+
+  /// [patch], queued on a convergent create, as it applies on top of
+  /// [current], the server's row with the work queued before it: values that
+  /// yield are dropped and a first-write-only time keeps the one already
+  /// set. Null when what is left no longer matches a declared action.
+  JsonMap? _convergedPatch(JsonMap patch, JsonMap current) {
+    final actionPolicy = switch (descriptor) {
+      final ActionPolicyProvider provider => provider.actionPolicy,
+      _ => null,
+    };
+    final firstWriteOnly = {
+      for (final action in actionPolicy?.actions ?? const <ActionDefinition>[])
+        for (final assignment in action.assignments)
+          if (assignment.kind == ActionValueKind.clockNow &&
+              assignment.firstWriteOnly)
+            assignment.fieldName,
+    };
+    final converged = JsonMap.of(patch);
+    for (final field in descriptor.fields) {
+      if (!converged.containsKey(field.name)) continue;
+      if (_yields(field, converged[field.name])) {
+        converged.remove(field.name);
+      } else if (firstWriteOnly.contains(field.name) &&
+          current[field.name] != null &&
+          converged[field.name] != null) {
+        converged[field.name] = current[field.name];
+      }
+    }
+    if (converged.length != patch.length &&
+        !(actionPolicy?.allowsPatch(converged, current) ?? true)) {
+      return null;
+    }
+    return converged;
+  }
+
+  static bool _yields(EntityFieldDescriptor field, Object? value) => field
+      .yieldingValues
+      .any((candidate) => entityValuesEqual(candidate, value));
 
   JsonMap? _pendingLocalStatePatch({
     required SyncWorkKind kind,
@@ -5373,7 +5548,10 @@ final class LocalEntityGraphCoordinator
           )
           .getSingle();
       final lastSequence = canonicalChanges.last.serverSequence.value;
-      supersededReceipt = lastSequence <= cursorRow.read<int>('cursor');
+      // A converged create's receipt carries the other device's change, which
+      // a pull may have passed already; the create still settles below.
+      supersededReceipt =
+          !result.converged && lastSequence <= cursorRow.read<int>('cursor');
       if (supersededReceipt) {
         final workRow = await database
             .customSelect(
@@ -5427,9 +5605,21 @@ final class LocalEntityGraphCoordinator
         );
         return;
       }
+      if (result.converged) {
+        final change = result.canonicalChange;
+        await _engineForRemoteChange(
+          change,
+          target: item.target,
+          fromPull: false,
+        )._convergeQueuedCreate(
+          entityId: change.identity.rawId,
+          remote: change.fields.toWire(),
+          remoteVersion: change.serverVersion,
+        );
+      }
       await database.customStatement(
-        'delete from local_entity_sync_work where id = ?',
-        [item.id],
+        "delete from local_entity_sync_work where id = ? and operation_id = ?",
+        [item.id, item.operationId.value],
       );
       for (final change in canonicalChanges) {
         final engine = _engineForRemoteChange(

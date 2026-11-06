@@ -61,6 +61,120 @@ abstract class Note {}
     );
   });
 
+  test('convergent creates derive their identity from a unique key', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+enum Placement { auto, added }
+
+@Entity(
+  convergentCreates: true,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+  ],
+  indexes: [
+    CompoundIndex([#ownerId, #day], unique: true),
+  ],
+)
+abstract class DayPlan implements OwnedBy<DayPlan, Account> {
+  abstract final LocalDate day;
+
+  @Persisted(
+    defaultValue: Placement.added,
+    conflict: ConflictStrategy.localWins,
+    yieldingValues: [Placement.auto],
+  )
+  abstract final Placement placement;
+}
+
+final class Account {}
+''';
+
+    await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/note.entity.g.dart': decodedMatches(
+          allOf([
+            contains('ConvergentCreateDescriptor'),
+            contains("yieldingValues: const ['auto'],"),
+          ]),
+        ),
+      },
+    );
+  });
+
+  test('rejects convergent creates without a unique key', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(
+  convergentCreates: true,
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+  ],
+)
+abstract class DayPlan implements OwnedBy<DayPlan, Account> {
+  abstract final LocalDate day;
+}
+
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+    );
+
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains(
+        'Entity.convergentCreates requires an unconditional unique key that '
+        'the identity is derived from.',
+      ),
+    );
+  });
+
+  test('rejects yielding values that leave nothing to win', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+enum Placement { auto, added }
+
+@Entity()
+abstract class DayPlan implements OwnedBy<DayPlan, Account> {
+  @Persisted(
+    defaultValue: Placement.added,
+    yieldingValues: [Placement.auto, Placement.added],
+  )
+  abstract final Placement placement;
+}
+
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+    );
+
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains(
+        'Persisted yieldingValues must leave at least one value that does not '
+        'yield',
+      ),
+    );
+  });
+
   test('recognizes transitive ownership and lifecycle capabilities', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';

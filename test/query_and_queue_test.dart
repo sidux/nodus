@@ -324,6 +324,30 @@ void main() {
     expect(merged.rebasedPendingPatch, {'canEdit': true});
   });
 
+  test('a yielding pending value gives way to a concurrent remote value while '
+      'any other local-wins value stays', () {
+    MergeResolution merge(String pending) => mergeRemoteFields(
+      visibleFields: const {'placement': 'added'},
+      pendingPatch: {'placement': pending},
+      remoteFields: const {'placement': 'pinned'},
+      policies: const {'placement': FieldConflictPolicy.localWins},
+      yieldingValues: const {
+        'placement': ['auto'],
+      },
+      remoteVersion: ServerVersion(3),
+      pendingBaseVersion: ServerVersion(2),
+      baseFields: const {'placement': 'added'},
+    );
+
+    final automatic = merge('auto');
+    expect(automatic.visibleFields['placement'], 'pinned');
+    expect(automatic.rebasedPendingPatch, isEmpty);
+
+    final chosen = merge('skipped');
+    expect(chosen.visibleFields['placement'], 'skipped');
+    expect(chosen.rebasedPendingPatch, {'placement': 'skipped'});
+  });
+
   test('schema transitions are positive and contiguous', () {
     expect(NodusSchemaTransition(from: 2, to: 3).toString(), '2->3');
     expect(() => NodusSchemaTransition(from: 0, to: 1), throwsRangeError);
@@ -1624,6 +1648,78 @@ void main() {
     expect(
       update.canonicalChange.fields['updatedAt'],
       updatedAt.toIso8601String(),
+    );
+  });
+
+  test('in-memory transport accepts a convergent create as the row its '
+      'identity names, and only with the same key', () async {
+    const descriptor = ConvergentTestDescriptor<_Item>(
+      uniqueConstraints: [
+        EntityUniqueConstraint(
+          name: 'notes_is_active_idx',
+          fieldNames: ['isActive'],
+        ),
+      ],
+    );
+    final backend = InMemorySyncBackend(descriptor: descriptor);
+    addTearDown(backend.disposeRemoteChangeSignals);
+    const id = 'a0000000-0000-7000-8000-000000000021';
+
+    PushSyncWorkItem create(String operationId, {required bool isActive}) =>
+        PushSyncWorkItem(
+          target: SyncTargetId.testOnly,
+          id: 1,
+          operation: CreatePushOperation(
+            operationId: parseSyncOperationId(operationId),
+            identity: descriptor.parseIdentity(id),
+            baseServerVersion: ServerVersion.zero,
+            localRevision: 1,
+            protocolVersion: descriptor.protocolVersion,
+            patch: EntityPatch.fromWire({'id': id, 'isActive': isActive}),
+          ),
+          pushKind: PushSyncWorkKind.statePatch,
+          status: SyncWorkStatus.pending,
+          attemptCount: 0,
+          createdAt: DateTime.utc(2026, 11, 6),
+          nextAttemptAt: null,
+        );
+
+    final first = await backend.push(
+      create('a0000000-0000-7000-8000-000000000022', isActive: true),
+    );
+    final second = create(
+      'a0000000-0000-7000-8000-000000000023',
+      isActive: true,
+    );
+    final converged = await backend.push(second);
+    final replayed = await backend.push(second);
+
+    expect(first.converged, isFalse);
+    expect(converged.converged, isTrue);
+    expect(
+      converged.canonicalChange.sourceOperationId,
+      second.operation.operationId,
+    );
+    expect(
+      converged.canonicalChange.serverVersion,
+      first.canonicalChange.serverVersion,
+    );
+    expect(
+      converged.canonicalChange.serverSequence,
+      first.canonicalChange.serverSequence,
+    );
+    expect(replayed.converged, isTrue);
+    await expectLater(
+      backend.push(
+        create('a0000000-0000-7000-8000-000000000024', isActive: false),
+      ),
+      throwsA(
+        isA<RejectedSyncException>().having(
+          (error) => error.code,
+          'code',
+          'unique_violation',
+        ),
+      ),
     );
   });
 

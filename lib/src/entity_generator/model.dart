@@ -33,6 +33,7 @@ final class EntitySpec {
     this.orderScopeFieldNames,
     this.syncModeOverride,
     this.syncTargetOverride,
+    this.convergentCreates = false,
   });
 
   final String className;
@@ -64,6 +65,10 @@ final class EntitySpec {
   final List<String>? orderScopeFieldNames;
   final SyncMode? syncModeOverride;
   final SyncTargetSpec? syncTargetOverride;
+
+  /// Whether a create meeting the row its identity already names is accepted
+  /// as that row; see `Entity.convergentCreates`.
+  final bool convergentCreates;
 
   String get sourceBaseName =>
       inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
@@ -579,6 +584,7 @@ final class EntitySpec {
       orderScopeFieldNames: orderScopeFieldNames,
       syncModeOverride: syncModeOverride,
       syncTargetOverride: syncTargetOverride,
+      convergentCreates: convergentCreates,
     );
   }
 
@@ -1493,6 +1499,7 @@ final class FieldSpec {
     this.relationshipEditorThroughColumnName,
     this.relationshipEditorIncludesOwner = false,
     this.transitions = const [],
+    this.yieldingValues = const [],
     this.updatePrincipals = const [],
     this.enumTypeImport,
     this.scalarValue,
@@ -1565,6 +1572,12 @@ final class FieldSpec {
   /// Whether the editors' entity's owner acts for this row as well.
   final bool relationshipEditorIncludesOwner;
   final List<ValueTransitionSpec> transitions;
+
+  /// Enum constant names that yield to a concurrent value from elsewhere.
+  final List<String> yieldingValues;
+
+  List<String> get yieldingWireValues =>
+      yieldingValues.map(snakeCase).toList(growable: false);
   final List<RlsPrincipal> updatePrincipals;
   final String? enumTypeImport;
   final ScalarValueSpec? scalarValue;
@@ -1629,6 +1642,7 @@ final class FieldSpec {
     relationshipEditorThroughColumnName: relationshipEditorThroughColumnName,
     relationshipEditorIncludesOwner: relationshipEditorIncludesOwner,
     transitions: transitions ?? this.transitions,
+    yieldingValues: yieldingValues,
     updatePrincipals: updatePrincipals,
     enumTypeImport: enumTypeImport,
     scalarValue: scalarValue,

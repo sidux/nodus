@@ -42,6 +42,7 @@ final class InMemorySyncBackend
   final Map<SyncOperationId, List<OrderScopeVersionReceipt>>
   _receiptOrderScopeVersions = {};
   final Map<String, OrderScopeVersion> _orderScopeVersions = {};
+  final Set<SyncOperationId> _convergedReceipts = {};
   final Map<String, Map<String, Map<String, bool>>> _collaborators = {};
   final Set<String> _revokedIdentities = <String>{};
   final StreamController<void> _remoteChanges = StreamController.broadcast();
@@ -129,6 +130,7 @@ final class InMemorySyncBackend
         accepted,
         relatedChanges: _receiptRelatedChanges[operationId] ?? const [],
         orderScopeVersions: _receiptOrderScopeVersions[operationId] ?? const [],
+        converged: _convergedReceipts.contains(operationId),
       );
     }
     final existing = records[entityId] ?? <String, Object?>{};
@@ -610,12 +612,6 @@ final class InMemorySyncBackend
       if (!_disposed) _remoteChanges.add(null);
       return _pushResult(item, change);
     }
-    if (operation is CreatePushOperation && records.containsKey(entityId)) {
-      throw const RejectedSyncException.validation(
-        code: 'unique_violation',
-        message: 'A create cannot replace an existing entity.',
-      );
-    }
     final patch = operation.patch.toWire();
     final actionPolicy = switch (descriptor) {
       ActionPolicyProvider provider => provider.actionPolicy,
@@ -639,6 +635,27 @@ final class InMemorySyncBackend
               '${descriptor.entityType}.${field.name} must start from its declared default.',
         );
       }
+    }
+    if (operation is CreatePushOperation && records.containsKey(entityId)) {
+      if (!_convergesOn(descriptor, operation, records[entityId]!)) {
+        throw const RejectedSyncException.validation(
+          code: 'unique_violation',
+          message: 'A create cannot replace an existing entity.',
+        );
+      }
+      final current =
+          _changes['$entityType\u0000$entityId'] ??
+          (throw StateError('$entityType $entityId has no recorded change.'));
+      final change = RemoteEntityChange(
+        identity: current.identity,
+        serverVersion: current.serverVersion,
+        fields: current.fields,
+        serverSequence: current.serverSequence,
+        sourceOperationId: operationId,
+      );
+      _receipts[operationId] = change;
+      _convergedReceipts.add(operationId);
+      return _pushResult(item, change, converged: true);
     }
     if (operation is! CreatePushOperation && baseVersion != serverVersion) {
       throw const VersionConflictException();
@@ -1146,6 +1163,26 @@ final class InMemorySyncBackend
     return relatedChanges;
   }
 
+  /// Whether [create] of a convergent entity names [existing] itself: the
+  /// same owner and the same value for every unconditional unique key.
+  bool _convergesOn(
+    EntityDescriptorBase descriptor,
+    CreatePushOperation create,
+    JsonMap existing,
+  ) {
+    if (descriptor is! ConvergentCreateDescriptor) return false;
+    final patch = create.patch.toWire();
+    final keyFields = {
+      EntityConventions.ownerFieldName,
+      if (descriptor case final EntityUniqueConstraintDescriptor unique)
+        for (final constraint in unique.uniqueConstraints)
+          if (constraint.condition == null) ...constraint.fieldNames,
+    };
+    return keyFields.every(
+      (field) => entityValuesEqual(existing[field], patch[field]),
+    );
+  }
+
   void _validateUniqueConstraints({
     required EntityDescriptorBase descriptor,
     required Map<String, JsonMap> records,
@@ -1361,11 +1398,13 @@ final class InMemorySyncBackend
     RemoteEntityChange canonicalChange, {
     Iterable<RemoteEntityChange> relatedChanges = const [],
     Iterable<OrderScopeVersionReceipt> orderScopeVersions = const [],
+    bool converged = false,
   }) {
     final result = PushResult(
       canonicalChange: canonicalChange,
       relatedChanges: relatedChanges,
       orderScopeVersions: orderScopeVersions,
+      converged: converged,
     );
     result.validateFor(item);
     return result;

@@ -1,6 +1,6 @@
 import 'package:nodus/nodus.dart';
 
-final class TestDescriptor<E>
+base class TestDescriptor<E>
     implements
         EntityDescriptorBase,
         EntityIdentityDescriptor<E>,
@@ -60,6 +60,12 @@ final class TestDescriptor<E>
     required JsonMap fields,
     required int localRevision,
   }) => throw UnsupportedError('Not needed by protocol model tests.');
+}
+
+/// A [TestDescriptor] whose creates converge on the row their identity names.
+final class ConvergentTestDescriptor<E> extends TestDescriptor<E>
+    implements ConvergentCreateDescriptor {
+  const ConvergentTestDescriptor({super.uniqueConstraints, super.fields});
 }
 
 const _defaultTestFields = [

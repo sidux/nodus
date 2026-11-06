@@ -144,6 +144,11 @@ void _emitFields(StringBuffer buffer, EntitySpec spec) {
         '    allowedTransitions: ${_transitionDescriptorLiteral(field)},',
       );
     }
+    if (field.yieldingValues.isNotEmpty) {
+      buffer.writeln(
+        '    yieldingValues: ${_dartLiteral(field.yieldingWireValues)},',
+      );
+    }
     if (_hasScalarConstraints(field)) {
       buffer.writeln('    constraints: EntityFieldConstraints(');
       if (field.minLength case final value?) {
@@ -381,6 +386,7 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
       'EntityIdentityDescriptor<${spec.className}>'
       '${uniqueIndexes.isEmpty ? '' : ', EntityUniqueConstraintDescriptor'}'
       '${spec.guardedActions.isEmpty ? '' : ', ActionPolicyProvider'}'
+      '${spec.convergentCreates ? ', ConvergentCreateDescriptor' : ''}'
       '${spec.hasOrderedCapability ? ', OrderedDescriptor' : ''}'
       '${spec.hasActivityTrackedCapability ? ', ActivityTrackedEntityDescriptor' : ''}'
       '${spec.isActivityEntry ? ', ActivityEntryEntityDescriptor' : ''} {',

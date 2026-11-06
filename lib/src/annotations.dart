@@ -338,6 +338,7 @@ final class Entity {
     this.sync,
     this.syncTarget,
     this.coIdentityWith = const [],
+    this.convergentCreates = false,
   });
 
   final String? table;
@@ -408,6 +409,17 @@ final class Entity {
   ///
   /// Transport implementations never belong in entity declarations.
   final Object? syncTarget;
+
+  /// Declares that every device creates this entity under the identity its
+  /// unique key derives, so creates of one identity from several devices are
+  /// one creation rather than a collision.
+  ///
+  /// A create meeting the row its identity already names, with the same
+  /// owner and unique key, is accepted as that row: its own values yield to
+  /// the server's, and the work queued after it applies on top. Use this only
+  /// when the application derives the identity from the unique key, such as
+  /// a UUIDv5 of an owner and a date; any other identity still conflicts.
+  final bool convergentCreates;
 }
 
 final class ExclusiveFieldGroup {
@@ -531,6 +543,7 @@ final class Persisted {
     this.updateBy = const [],
     this.editable,
     this.normalization = FieldNormalization.none,
+    this.yieldingValues = const [],
   });
 
   final String? column;
@@ -596,6 +609,14 @@ final class Persisted {
   /// Canonicalization applied consistently to creates, drafts, queries,
   /// storage, synchronization, and remote materialization.
   final FieldNormalization normalization;
+
+  /// Enum values a device sets only on the application's own initiative,
+  /// which yield to any concurrent value from elsewhere whatever [conflict]
+  /// says, while every other value follows [conflict].
+  ///
+  /// For example, a placement an automatic planner chose yields to one the
+  /// user chose on another device, but not the other way round.
+  final List<Object> yieldingValues;
 
   /// Allowed client-originated edges for a mutable persisted enum field.
   ///

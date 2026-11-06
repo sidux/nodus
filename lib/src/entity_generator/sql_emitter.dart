@@ -1268,9 +1268,9 @@ String _pushOperationRoutingSql(
         raise exception 'Create access denied' using errcode = '42501';
       end if;
 ${!spec.hasOwnershipReference && activitySource == null ? "      if (current_operation -> 'patch' ->> '${spec.ownerField.name}')::uuid\n          <> auth.uid() then\n        raise exception 'Owner must match authenticated user' using errcode = '42501';\n      end if;" : ''}
-${[_initialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _actionInitialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _foreignInitialValueValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _referenceValidation(spec, "current_operation -> 'patch'", indent: '      '), _workflowMembershipCreateValidationSql(spec, "current_operation -> 'patch'", indent: '      ')].where((section) => section.isNotEmpty).join('\n')}${createOrderScopeLock.isEmpty ? '' : '\n$createOrderScopeLock'}${createOrderedIntent.isEmpty ? '' : '\n$createOrderedIntent'}
-      insert into public.${spec.tableName} ($createColumns)
-      values ($createValues) returning * into canonical;${createOrderScopeAdvance.isEmpty ? '' : '\n$createOrderScopeAdvance'}''',
+${[_initialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _actionInitialStateValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _foreignInitialValueValidationSql(spec, "current_operation -> 'patch'", indent: '      '), _referenceValidation(spec, "current_operation -> 'patch'", indent: '      '), _workflowMembershipCreateValidationSql(spec, "current_operation -> 'patch'", indent: '      ')].where((section) => section.isNotEmpty).join('\n')}
+${_convergentCreateSql(spec, '''${createOrderScopeLock.isEmpty ? '' : '$createOrderScopeLock\n'}${createOrderedIntent.isEmpty ? '' : '$createOrderedIntent\n'}      insert into public.${spec.tableName} ($createColumns)
+      values ($createValues) returning * into canonical;${createOrderScopeAdvance.isEmpty ? '' : '\n$createOrderScopeAdvance'}''')}''',
     ));
   }
   if (spec.canCommand || activeRelationship != null) {
@@ -1307,6 +1307,42 @@ ${[_initialStateValidationSql(spec, "current_operation -> 'patch'", indent: '   
   }
   buffer.writeln('    end if;');
   return buffer.toString().trimRight();
+}
+
+/// Wraps [insert], the create's insert and its ordering, so a create of a
+/// convergent entity meeting the row its identity already names is accepted
+/// as that row instead of inserting it again. The row must have the same
+/// owner and unique key; any other row under that identity stays taken.
+String _convergentCreateSql(EntitySpec spec, String insert) {
+  if (!spec.convergentCreates) return insert;
+  final keyFields = <FieldSpec>[
+    spec.ownerField,
+    for (final index in spec.postgresIndexes)
+      if (index.unique && index.condition == null)
+        for (final name in index.fieldNames)
+          spec.fields.singleWhere((field) => field.name == name),
+  ];
+  final matches = {
+    for (final field in keyFields)
+      'canonical.${field.columnName} is not distinct from '
+          "(${_jsonCast("current_operation -> 'patch' -> '${field.name}'", field)})",
+  }.join('\n          and ');
+  final indentedInsert = insert
+      .split('\n')
+      .map((line) => line.isEmpty ? line : '  $line')
+      .join('\n');
+  return '''      perform pg_advisory_xact_lock(
+        hashtextextended('${spec.className}:' || (current_operation ->> 'entityId'), 0)
+      );
+      select * into canonical from public.${spec.tableName}
+      where ${spec.idField.columnName} = (current_operation ->> 'entityId')::uuid;
+      converged := found;
+      if converged and not ($matches) then
+        raise exception 'Create identity is taken' using errcode = '23505';
+      end if;
+      if not converged then
+$indentedInsert
+      end if;''';
 }
 
 String _collaborationPublicationSql(EntitySpec spec) {
@@ -3047,6 +3083,7 @@ void _emitEntityFunctions(
             ? '  related_changes jsonb;\n'
             : '',
       )
+      ..write(spec.convergentCreates ? '  converged boolean;\n' : '')
       ..writeln('  change_sequence bigint;')
       ..writeln("  results jsonb := '[]'::jsonb;")
       ..writeln('begin')
@@ -3077,6 +3114,7 @@ void _emitEntityFunctions(
                   "    order_scope_versions := '[]'::jsonb;\n"
             : '',
       )
+      ..write(spec.convergentCreates ? '    converged := false;\n' : '')
       ..writeln(
         '    current_operation := public.upcast_${spec.tableName}_operation('
         'current_operation);',
@@ -3140,6 +3178,19 @@ void _emitEntityFunctions(
           createRequiredFieldNames: createRequiredFieldNames,
         ),
       )
+      ..write(
+        spec.convergentCreates
+            ? '    if converged then\n'
+                  '      select changes.sequence into change_sequence from '
+                  'public.local_entity_changes changes where '
+                  "changes.entity_type = '${spec.className}' and "
+                  'changes.entity_id = canonical.${spec.idField.columnName} and '
+                  '(changes.audience_user_id is null or '
+                  'changes.audience_user_id = auth.uid()) '
+                  'order by changes.sequence desc limit 1;\n'
+                  '    else\n  '
+            : '',
+      )
       ..writeln(
         '    select changes.sequence into change_sequence from '
         'public.local_entity_changes changes where '
@@ -3147,6 +3198,7 @@ void _emitEntityFunctions(
         'order by changes.sequence desc '
         'limit 1;',
       )
+      ..write(spec.convergentCreates ? '    end if;\n' : '')
       ..writeln('    if change_sequence is null then')
       ..writeln(
         "      raise exception 'Accepted operation has no change-log entry' "
@@ -3196,6 +3248,14 @@ void _emitEntityFunctions(
                   "'operationId', operation_uuid, "
                   "'${EntityConventions.serverVersionFieldName}', "
                   'canonical.${spec.serverVersionField.columnName});',
+      )
+      ..write(
+        spec.convergentCreates
+            ? '    if converged then\n'
+                  '      receipt_result := receipt_result || '
+                  "jsonb_build_object('converged', true);\n"
+                  '    end if;\n'
+            : '',
       )
       ..writeln(
         '    insert into public.local_entity_operation_receipts '
