@@ -6578,15 +6578,30 @@ final class LocalEntityGraphCoordinator
 
   /// Whether every component a pulled aggregate composes is stored with the
   /// aggregate's owner, as the local composition constraint requires.
+  ///
+  /// The constraint only checks an inserted aggregate or a changed component
+  /// reference. A stored aggregate that keeps its component applies without
+  /// it, so a deletion still lands after the server revoked the component.
   Future<bool> _storesComposedComponents(RemoteEntityChange change) async {
     final compositions =
         _compositionsByAggregate[change.identity.entityType] ?? const [];
     if (compositions.isEmpty) return true;
     final aggregate = _engineFor(change.identity.entityType).descriptor;
     final ownerId = change.fields[_ownerFieldOf(aggregate).name];
+    final storedAggregate = await database
+        .customSelect(
+          'select * from ${aggregate.tableName} '
+          'where ${EntityConventions.idColumnName} = ?',
+          variables: [Variable.withString(change.identity.rawId)],
+        )
+        .getSingleOrNull();
     for (final composition in compositions) {
       final componentId = change.fields[composition.fieldName];
       if (componentId is! String) continue;
+      final referenceColumn = aggregate.fields
+          .singleWhere((field) => field.name == composition.fieldName)
+          .columnName;
+      if (storedAggregate?.data[referenceColumn] == componentId) continue;
       final component = _engineFor(composition.componentEntityType).descriptor;
       final stored = await database
           .customSelect(
