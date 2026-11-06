@@ -1102,11 +1102,8 @@ final class NodusGenerator {
       if (removed.isNotEmpty || changed.isNotEmpty || constraintsChanged) {
         requiresManualChanges = true;
       }
-      if (removed.isEmpty && changed.isEmpty && constraintsChanged) {
-        statements.add(
-          'await migrator.alterTable(TableMigration(schema.${_camelCase(key.name)}));',
-        );
-      }
+      final table = _camelCase(key.name);
+      final added = <String>[];
       for (final name in newColumns.keys.toSet().difference(
         oldColumns.keys.toSet(),
       )) {
@@ -1116,12 +1113,25 @@ final class NodusGenerator {
           requiresManualChanges = true;
           continue;
         }
-        final getter = _requiredString(column, 'getter_name');
-        final table = _camelCase(key.name);
+        added.add('schema.$table.${_requiredString(column, 'getter_name')}');
+      }
+      if (removed.isEmpty && changed.isEmpty && constraintsChanged) {
+        // The rebuild already gives the table its new columns, which the old
+        // rows cannot be copied from, so it names them instead of adding
+        // them again afterwards.
+        statements.add(
+          added.isEmpty
+              ? 'await migrator.alterTable(TableMigration(schema.$table));'
+              : 'await migrator.alterTable(TableMigration(schema.$table, '
+                    'newColumns: [${added.join(', ')}]));',
+        );
+        continue;
+      }
+      for (final column in added) {
         statements.addAll([
           'await migrator.addColumn(',
           '  schema.$table,',
-          '  schema.$table.$getter,',
+          '  $column,',
           ');',
         ]);
       }

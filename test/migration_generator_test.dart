@@ -212,6 +212,29 @@ void main() {
       ]);
     });
 
+    test('a rebuild for changed constraints carries the new columns instead '
+        'of adding them after it', () {
+      final fixture = _Fixture();
+      addTearDown(fixture.dispose);
+      final oldFile = fixture.writeSchema(1, [_column('id')]);
+      final newFile = fixture.writeSchema(
+        2,
+        [_column('id'), _column('display_name', nullable: true)],
+        constraints: const ['check (display_name <> \'\')'],
+      );
+
+      final proposal = fixture.generator().migrationStatements(
+        oldFile,
+        newFile,
+      );
+
+      expect(proposal.requiresManualChanges, isTrue);
+      expect(proposal.statements, [
+        'await migrator.alterTable(TableMigration(schema.notes, '
+            'newColumns: [schema.notes.displayName]));',
+      ]);
+    });
+
     test('restores collision-free getters in Drift migration shapes', () {
       final fixture = _Fixture();
       addTearDown(fixture.dispose);
