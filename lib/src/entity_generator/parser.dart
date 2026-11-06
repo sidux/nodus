@@ -4716,10 +4716,95 @@ List<ActionSpec> _parseActions(
         parameters: List.unmodifiable(parameters),
         assignments: List.unmodifiable(assignments),
         bulk: annotation.read('bulk').boolValue,
+        rebase: _parseActionRebase(
+          annotation.peek('rebase'),
+          method,
+          classElement,
+          parameters: parameters,
+          assignments: assignments,
+        ),
       ),
     );
   }
+  for (final action in actions.where((action) => action.rebase != null)) {
+    final fields = action.targetFields.toSet();
+    final twin = actions.where(
+      (other) =>
+          other != action &&
+          other.targetFields.length == fields.length &&
+          fields.containsAll(other.targetFields),
+    );
+    if (twin.isNotEmpty) {
+      throw InvalidGenerationSourceError(
+        'Entity action `${action.methodName}` declares a rebase, so no other '
+        'action may change exactly its fields; `${twin.first.methodName}` '
+        'does, and a queued change could not tell them apart.',
+        element: classElement,
+      );
+    }
+  }
   return List.unmodifiable(actions);
+}
+
+/// The Dart expression naming [reader]'s rebase function, validated against
+/// the action's parameters.
+String? _parseActionRebase(
+  ConstantReader? reader,
+  MethodElement method,
+  ClassElement classElement, {
+  required List<ActionParameterSpec> parameters,
+  required List<ActionAssignmentSpec> assignments,
+}) {
+  if (reader == null || reader.isNull) return null;
+  final function = reader.objectValue.toFunctionValue();
+  if (assignments.isNotEmpty) {
+    throw InvalidGenerationSourceError(
+      'Entity action `${method.name}` declares a rebase, so it may assign '
+      'only its parameters.',
+      element: method,
+    );
+  }
+  final expected = {
+    for (final parameter in parameters) parameter.name: parameter.dartType,
+  };
+  bool isValues(DartType type) {
+    if (type is! RecordType || type.positionalFields.isNotEmpty) return false;
+    final named = {
+      for (final field in type.namedFields)
+        field.name: field.type.getDisplayString(),
+    };
+    return named.length == expected.length &&
+        expected.entries.every((entry) => named[entry.key] == entry.value);
+  }
+
+  final reference = switch (function) {
+    final MethodElement member
+        when member.isStatic && member.enclosingElement == classElement =>
+      '${classElement.name}.${member.name}',
+    final TopLevelFunctionElement topLevel
+        when topLevel.library == classElement.library =>
+      topLevel.name,
+    _ => null,
+  };
+  final positional = function?.formalParameters ?? const [];
+  if (reference == null ||
+      function!.typeParameters.isNotEmpty ||
+      positional.length != 3 ||
+      positional.any(
+        (parameter) =>
+            !parameter.isRequiredPositional || !isValues(parameter.type),
+      ) ||
+      !isValues(function.returnType)) {
+    throw InvalidGenerationSourceError(
+      'The rebase of entity action `${method.name}` must be a static method '
+      'of `${classElement.name}` or a top-level function of its library '
+      'taking three records and returning one, each with exactly the '
+      'action\'s parameters as named fields: '
+      '(${expected.entries.map((entry) => '${entry.value} ${entry.key}').join(', ')}).',
+      element: method,
+    );
+  }
+  return reference;
 }
 
 void _validateActionTarget(

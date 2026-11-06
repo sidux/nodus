@@ -107,6 +107,91 @@ final class Account {}
     );
   });
 
+  test(
+    'a rebased action moves its queued values through the declared rebase',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+
+typedef Level = ({int level});
+
+@Entity(
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+  ],
+)
+abstract class Gauge implements OwnedBy<Gauge, Account> {
+  @Persisted(defaultValue: 0)
+  abstract final int level;
+
+  @Action(rebase: Gauge.rebaseRaise)
+  Future<void> raise({required int level});
+
+  static Level rebaseRaise(Level madeOn, Level now, Level raised) =>
+      (level: now.level + raised.level - madeOn.level);
+}
+
+final class Account {}
+''';
+
+      await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(source),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/note.entity.g.dart': decodedMatches(
+            allOf([
+              contains('RebasedActionsDescriptor'),
+              contains('JsonMap _rebaseGaugeRaise('),
+              contains('final rebased = Gauge.rebaseRaise('),
+              contains("fieldNames: const ['level'],"),
+              contains('rebase: _rebaseGaugeRaise,'),
+            ]),
+          ),
+        },
+      );
+    },
+  );
+
+  test('rejects a rebase that does not take the action\'s values', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+  ],
+)
+abstract class Gauge implements OwnedBy<Gauge, Account> {
+  @Persisted(defaultValue: 0)
+  abstract final int level;
+
+  @Action(rebase: Gauge.rebaseRaise)
+  Future<void> raise({required int level});
+
+  static int rebaseRaise(int madeOn, int now, int raised) => now;
+}
+
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      localEntityBuilder(BuilderOptions.empty),
+      _sources(source),
+      rootPackage: 'nodus',
+    );
+
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains('The rebase of entity action `raise` must be a static method'),
+    );
+  });
+
   test('rejects convergent creates without a unique key', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
@@ -6962,6 +7047,10 @@ abstract class Child
               contains('void replaceByPosition<V>('),
               contains('void replaceById<V>('),
               contains('void replaceByKey<V, K>('),
+              contains('LocalId<Child> Function(V value)? idOf,'),
+              contains(
+                'final member = _revive(matched) ?? add(id: idOf?.call(value));',
+              ),
               contains('List<ChildMutationDraft> get availableMembers'),
               contains('ChildMutationDraft activate('),
               contains('void order(Iterable<ChildMutationDraft> members)'),

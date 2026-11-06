@@ -1409,12 +1409,16 @@ final class ActionSpec {
     required this.parameters,
     required this.assignments,
     this.bulk = false,
+    this.rebase,
   });
 
   final String methodName;
   final List<ActionParameterSpec> parameters;
   final List<ActionAssignmentSpec> assignments;
   final bool bulk;
+
+  /// Dart expression naming the declared rebase function, if any.
+  final String? rebase;
 
   List<String> get targetFields => [
     ...parameters.map((parameter) => parameter.fieldName),

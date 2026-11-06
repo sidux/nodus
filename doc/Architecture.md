@@ -2523,6 +2523,28 @@ incomplete by that drops whole. Work never coalesces into a queued convergent
 create, so what the user did after creating survives convergence. No
 operation is rejected on this path.
 
+When the server's row was removed, what the device still means to do with it
+after those rules, a carried intent or a later change, restores it first, as
+reviving it locally would; otherwise it stays removed and the moves queued for
+it go, unless the device queued its own removal or restore. A row created
+under an identity not derived this way, such as an older client's random one,
+that holds the unique key of the device's still-queued convergent create is
+the same creation: the pull that brings it moves the local row, its queued
+work, and every local reference to it onto that identity, where the create
+converges. A server refusal of such a create because the key is taken is
+therefore a conflict the next pull resolves, not a rejection.
+
+An action whose values are relative to the state it was made on, such as a
+score shifted by finished work, declares `@Action(rebase: ...)`: a pure static
+method of the entity, or top-level function of its library, from the action's
+values at the state it was made on, at the state it lands on, and as queued,
+each a record named like its parameters, to the values to send. The runtime
+applies it whenever that state changed before the server applied the action,
+on a convergent create and in an ordinary conflict where the accepted base is
+known, so the action lands as made on the newer state instead of overwriting
+or yielding to it. No other action of the entity may change exactly its
+fields.
+
 Conflict policies MUST be deterministic, typed, and declared once. Automatic
 resolution is allowed only where field semantics make it safe. Rejection must
 restore or rebase the visible projection without losing the accepted base or

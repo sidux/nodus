@@ -820,6 +820,30 @@ final class ActionAssignment {
   };
 }
 
+/// A generated action whose queued values move onto a new base through the
+/// rebase its entity declares.
+final class RebasedActionDefinition {
+  const RebasedActionDefinition({
+    required this.fieldNames,
+    required this.rebase,
+  });
+
+  final List<String> fieldNames;
+
+  /// Takes the action's values at the state it was made on, at the state it
+  /// now lands on, and as queued, and returns the values to send instead.
+  final JsonMap Function(JsonMap madeOn, JsonMap now, JsonMap pending) rebase;
+
+  /// Whether [patch] is exactly this action's change.
+  bool matches(JsonMap patch) =>
+      patch.length == fieldNames.length && fieldNames.every(patch.containsKey);
+}
+
+/// Generated capability of an entity with [RebasedActionDefinition]s.
+abstract interface class RebasedActionsDescriptor {
+  List<RebasedActionDefinition> get rebasedActions;
+}
+
 abstract interface class ActionPolicyProvider {
   ActionPolicy get actionPolicy;
 }
@@ -3445,12 +3469,21 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
   }) async {
     List<_RejectedProjection> rejectedProjections = const [];
     final outcome = await database.transaction(() async {
-      final typed = error is SyncBackendException
+      final reported = error is SyncBackendException
           ? error
           : RetryableSyncException(
               code: 'unexpected_error',
               message: error.toString(),
             );
+      // A convergent create refused because another row holds its unique
+      // key meets an older app's row for the same key; the pull that brings
+      // that row adopts it, and the create converges there.
+      final typed =
+          descriptor is ConvergentCreateDescriptor &&
+              item.operation is CreatePushOperation &&
+              reported.code == 'unique_violation'
+          ? VersionConflictException(reported.message)
+          : reported;
       final nextAttemptCount = item.attemptCount + 1;
       final status = _failedSyncWorkStatus(item, typed);
       if (status != SyncWorkStatus.retryableFailure) {
@@ -3726,6 +3759,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     required ServerVersion serverVersion,
     required RemoteEntityFields fields,
   }) async {
+    await _adoptConvergentTwin(identity.rawId, fields.toWire());
     final row = await database
         .customSelect(
           'select * from ${descriptor.tableName} where ${EntityConventions.idColumnName} = ?',
@@ -3790,13 +3824,26 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     final acceptedVersion = row?.read<int>(
       EntityConventions.serverVersionColumnName,
     );
+    // The state each queued patch was made on: the accepted record and the
+    // patches queued before it.
+    final madeOn = acceptedJson == null ? null : _decodeMap(acceptedJson);
     for (final pendingRow in pendingRows) {
       final kind = SyncWorkKind.values.byName(pendingRow.read<String>('kind'));
       final pendingPayload = _decodeMap(pendingRow.read<String>('payload'));
       if (kind == SyncWorkKind.statePatch) {
         if (pendingRow.read<String>('entity_id') != identity.rawId) continue;
-        final patch = _decodeMap(pendingPayload['patch']);
-        final pendingBaseVersion = pendingRow.read<int>('base_server_version');
+        final queued = _decodeMap(pendingPayload['patch']);
+        var pendingBaseVersion = pendingRow.read<int>('base_server_version');
+        final knowsBase =
+            madeOn != null && acceptedVersion == pendingBaseVersion;
+        // An action declaring a rebase lands on the newer version as made on
+        // it, instead of conflicting with it.
+        final rebased = knowsBase && serverVersion.value > pendingBaseVersion
+            ? _rebasedActionPatch(queued, madeOn: madeOn, now: resolved)
+            : null;
+        madeOn?.addAll(queued);
+        final patch = rebased ?? queued;
+        if (rebased != null) pendingBaseVersion = serverVersion.value;
         final resolution = mergeRemoteFields(
           visibleFields: resolved,
           pendingPatch: patch,
@@ -3805,10 +3852,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           yieldingValues: yieldingValues,
           remoteVersion: serverVersion,
           pendingBaseVersion: ServerVersion(pendingBaseVersion),
-          baseFields:
-              acceptedJson != null && acceptedVersion == pendingBaseVersion
-              ? _decodeMap(acceptedJson)
-              : null,
+          baseFields: knowsBase ? _decodeMap(acceptedJson!) : null,
         );
         final rebasedPatch = resolution.rebasedPendingPatch;
         resolved
@@ -3822,7 +3866,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
             'delete from local_entity_sync_work where id = ?',
             [pendingRow.read<int>('id')],
           );
-        } else if (rebasedPatch.length != patch.length) {
+        } else if (!_sameWireValue(rebasedPatch, queued)) {
           await database.customStatement(
             'update local_entity_sync_work set payload = ? where id = ?',
             [
@@ -3868,6 +3912,169 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     );
   }
 
+  /// Adopts [remoteId], a row another device created under an identity not
+  /// derived like this device's, when this device's own create of the same
+  /// unique key is still queued: an older app's random identity for the
+  /// same day, say. The local row, its queued work, and every reference to
+  /// it move to [remoteId], where the create then converges.
+  Future<void> _adoptConvergentTwin(String remoteId, JsonMap remote) async {
+    if (descriptor is! ConvergentCreateDescriptor) return;
+    final constraints = switch (descriptor) {
+      final EntityUniqueConstraintDescriptor value => value.uniqueConstraints,
+      _ => const <EntityUniqueConstraint>[],
+    };
+    final fieldsByName = {
+      for (final field in descriptor.fields) field.name: field,
+    };
+    for (final constraint in constraints) {
+      if (constraint.condition != null ||
+          constraint.unordered ||
+          !constraint.covers(remote) ||
+          constraint.fieldNames.any((name) => remote[name] == null)) {
+        continue;
+      }
+      final twin = await database
+          .customSelect(
+            'select ${EntityConventions.idColumnName} as id '
+            'from ${descriptor.tableName} where '
+            '${constraint.fieldNames.map((name) => '${fieldsByName[name]!.columnName} = ?').join(' and ')} '
+            '${constraint.liveOnly ? 'and deleted_at is null ' : ''}'
+            'and ${EntityConventions.idColumnName} <> ? '
+            'and accepted_snapshot is null and exists ('
+            "select 1 from local_entity_sync_work work where work.direction = 'push' "
+            'and work.entity_type = ? and work.entity_id = '
+            '${descriptor.tableName}.${EntityConventions.idColumnName}) '
+            'limit 1',
+            variables: [
+              for (final name in constraint.fieldNames)
+                _queryVariable(fieldsByName[name]!, remote[name]!),
+              Variable.withString(remoteId),
+              Variable.withString(descriptor.entityType),
+            ],
+          )
+          .getSingleOrNull();
+      if (twin == null) continue;
+      await _moveIdentity(twin.read<String>('id'), remoteId);
+      return;
+    }
+  }
+
+  Future<void> _moveIdentity(String from, String to) async {
+    // Children follow in the same transaction, so their references are
+    // checked once everything has moved.
+    await database.customStatement('PRAGMA defer_foreign_keys = ON');
+    await database.customStatement(
+      'update ${descriptor.tableName} set ${EntityConventions.idColumnName} = ? '
+      'where ${EntityConventions.idColumnName} = ?',
+      [to, from],
+    );
+    final work = await database
+        .customSelect(
+          'select id, payload from local_entity_sync_work '
+          'where entity_type = ? and entity_id = ?',
+          variables: [
+            Variable.withString(descriptor.entityType),
+            Variable.withString(from),
+          ],
+        )
+        .get();
+    for (final row in work) {
+      final payload = _decodeMap(row.read<String>('payload'));
+      final patch = _decodeMap(payload['patch']);
+      if (patch.containsKey(EntityConventions.idFieldName)) {
+        patch[EntityConventions.idFieldName] = to;
+      }
+      await database.customStatement(
+        'update local_entity_sync_work set entity_id = ?, payload = ? '
+        'where id = ?',
+        [
+          to,
+          jsonEncode({...payload, 'entityId': to, 'patch': patch}),
+          row.read<int>('id'),
+        ],
+      );
+    }
+    final moved = <(_ErasedLocalEntityEngine, List<String>)>[];
+    for (final referrer in graphCoordinator.definition.descriptors) {
+      for (final field in referrer.fields) {
+        if (field.reference?.targetEntityType != descriptor.entityType) {
+          continue;
+        }
+        final ids = await database
+            .customSelect(
+              'select ${EntityConventions.idColumnName} as id '
+              'from ${referrer.tableName} where ${field.columnName} = ?',
+              variables: [Variable.withString(from)],
+            )
+            .get();
+        await database.customStatement(
+          'update ${referrer.tableName} set ${field.columnName} = ? '
+          'where ${field.columnName} = ?',
+          [to, from],
+        );
+        final referring = await database
+            .customSelect(
+              'select id, payload from local_entity_sync_work '
+              "where direction = 'push' and entity_type = ?",
+              variables: [Variable.withString(referrer.entityType)],
+            )
+            .get();
+        for (final row in referring) {
+          final payload = _decodeMap(row.read<String>('payload'));
+          final patch = payload['patch'];
+          if (patch is! Map || patch[field.name] != from) continue;
+          await database.customStatement(
+            'update local_entity_sync_work set payload = ? where id = ?',
+            [
+              jsonEncode({
+                ...payload,
+                'patch': {..._decodeMap(patch), field.name: to},
+              }),
+              row.read<int>('id'),
+            ],
+          );
+        }
+        if (ids.isNotEmpty) {
+          moved.add((
+            graphCoordinator._engineFor(referrer.entityType),
+            [for (final id in ids) id.read<String>('id')],
+          ));
+        }
+      }
+    }
+    graphCoordinator._afterCommit.add(() async {
+      _publishRejectedProjections([_RejectedProjection.removed(from)]);
+      for (final (engine, ids) in moved) {
+        await engine._reloadIdentities(ids);
+      }
+    });
+  }
+
+  /// Shows [ids] as stored again, after their references moved underneath.
+  Future<void> _reloadIdentities(List<String> ids) async {
+    final projections = <_RejectedProjection>[];
+    for (final id in ids) {
+      final row = await database
+          .customSelect(
+            'select * from ${descriptor.tableName} '
+            'where ${EntityConventions.idColumnName} = ?',
+            variables: [Variable.withString(id)],
+          )
+          .getSingleOrNull();
+      if (row == null) continue;
+      final fields = _fieldsFromRow(row.data);
+      projections.add(
+        _RejectedProjection.updated(
+          id,
+          fields,
+          localRevision: row.read<int>('local_revision'),
+          changedFieldNames: fields.keys.toSet(),
+        ),
+      );
+    }
+    _publishRejectedProjections(projections);
+  }
+
   /// Settles this device's queued create of a convergent entity that met
   /// [remote], the row another device created under the same identity.
   ///
@@ -3885,7 +4092,8 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     if (descriptor is! ConvergentCreateDescriptor) return;
     final rows = await database
         .customSelect(
-          "select id, kind, payload from local_entity_sync_work "
+          "select id, kind, payload, sync_target, created_at "
+          "from local_entity_sync_work "
           "where direction = 'push' and entity_type = ? and entity_id = ? "
           "and status in ('pending', 'processing', 'retryableFailure') "
           'order by id',
@@ -3901,14 +4109,23 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
           SyncMutationOperation.create.name,
     );
     if (createIndex < 0) return;
+    final createRow = rows[createIndex];
+    final createPayload = _decodeMap(createRow.read<String>('payload'));
+    final created = _decodeMap(createPayload['patch']);
     final rolling = JsonMap.of(remote);
+    final madeOn = JsonMap.of(created);
     final changedLater = <String>{};
+    var keepsLaterChange = false;
     for (final row in rows.skip(createIndex + 1)) {
       if (row.read<String>('kind') != SyncWorkKind.statePatch.name) continue;
       final payload = _decodeMap(row.read<String>('payload'));
       final patch = _decodeMap(payload['patch']);
       changedLater.addAll(patch.keys);
-      final converged = _convergedPatch(patch, rolling);
+      final converged = _convergedPatch(
+        _rebasedActionPatch(patch, madeOn: madeOn, now: rolling) ?? patch,
+        rolling,
+      );
+      madeOn.addAll(patch);
       if (converged == null || converged.isEmpty) {
         await database.customStatement(
           'delete from local_entity_sync_work where id = ?',
@@ -3916,6 +4133,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         );
         continue;
       }
+      keepsLaterChange = true;
       rolling.addAll(converged);
       if (!_sameWireValue(converged, patch)) {
         await database.customStatement(
@@ -3927,9 +4145,6 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
         );
       }
     }
-    final createRow = rows[createIndex];
-    final createPayload = _decodeMap(createRow.read<String>('payload'));
-    final created = _decodeMap(createPayload['patch']);
     final intent = <String, Object?>{
       for (final field in descriptor.fields)
         if (field.conflictPolicy == FieldConflictPolicy.localWins &&
@@ -3943,33 +4158,106 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       final ActionPolicyProvider provider => provider.actionPolicy,
       _ => null,
     };
-    if (intent.isEmpty ||
-        !(actionPolicy?.allowsPatch(intent, remote) ?? true)) {
+    final carriesIntent =
+        intent.isNotEmpty &&
+        (actionPolicy?.allowsPatch(intent, remote) ?? true);
+    final later = rows.skip(createIndex + 1).toList(growable: false);
+    String operationOf(QueryRow row) =>
+        _decodeMap(row.read<String>('payload'))['operation']! as String;
+    // Another device removed the row. What this device still means to do
+    // with it brings it back, as reviving it here would; otherwise it stays
+    // removed, and so do the moves queued for it. The device's own removal
+    // or restore keeps deciding when it queued one.
+    final removedElsewhere =
+        remote[EntityConventions.deletedAtFieldName] != null &&
+        !later.any(
+          (row) => operationOf(row) == SyncMutationOperation.delete.name,
+        );
+    final restores = removedElsewhere && (carriesIntent || keepsLaterChange);
+    if (removedElsewhere && !restores) {
+      for (final row in later) {
+        if (operationOf(row) != SyncMutationOperation.command.name) continue;
+        await database.customStatement(
+          'delete from local_entity_sync_work where id = ?',
+          [row.read<int>('id')],
+        );
+      }
+    }
+    final identity = descriptor.parseIdentity(entityId);
+    final localRevision = createPayload['localRevision']! as int;
+    final settled = <(PushSyncWorkKind, PushOperation)>[
+      if (restores)
+        (
+          PushSyncWorkKind.semanticCommand,
+          DeletePushOperation(
+            operationId: idGenerator.nextOperationId(),
+            identity: identity,
+            baseServerVersion: remoteVersion,
+            localRevision: localRevision,
+            protocolVersion: descriptor.protocolVersion,
+            patch: EntityPatch.fromWire({
+              EntityConventions.deletedAtFieldName: null,
+            }),
+          ),
+        ),
+      if (carriesIntent)
+        (
+          PushSyncWorkKind.statePatch,
+          PatchPushOperation(
+            operationId: idGenerator.nextOperationId(),
+            identity: identity,
+            baseServerVersion: remoteVersion,
+            localRevision: localRevision,
+            protocolVersion: descriptor.protocolVersion,
+            patch: EntityPatch.fromWire(intent),
+          ),
+        ),
+    ];
+    if (settled.isEmpty) {
       await database.customStatement(
         'delete from local_entity_sync_work where id = ?',
         [createRow.read<int>('id')],
       );
-    } else {
-      final operation = PatchPushOperation(
-        operationId: idGenerator.nextOperationId(),
-        identity: descriptor.parseIdentity(entityId),
-        baseServerVersion: remoteVersion,
-        localRevision: createPayload['localRevision']! as int,
-        protocolVersion: descriptor.protocolVersion,
-        patch: EntityPatch.fromWire(intent),
-      );
+    }
+    // The first settled operation takes the create's place in the queue,
+    // ahead of the moves queued after it; an intent that follows only sets
+    // fields no later work changes, so its place after them is equivalent.
+    for (final (index, (kind, operation)) in settled.indexed) {
+      if (index == 0) {
+        await database.customStatement(
+          'update local_entity_sync_work set operation_id = ?, kind = ?, '
+          "status = 'pending', base_server_version = ?, protocol_version = ?, "
+          'payload = ?, attempt_count = 0, lease_until = null, '
+          'next_attempt_at = null, last_error_code = null, '
+          'last_error_detail = null where id = ?',
+          [
+            operation.operationId.value,
+            kind.name,
+            remoteVersion.value,
+            operation.protocolVersion,
+            jsonEncode(operation.toWire()),
+            createRow.read<int>('id'),
+          ],
+        );
+        continue;
+      }
       await database.customStatement(
-        'update local_entity_sync_work set operation_id = ?, '
-        "kind = 'statePatch', status = 'pending', base_server_version = ?, "
-        'protocol_version = ?, payload = ?, attempt_count = 0, '
-        'lease_until = null, next_attempt_at = null, last_error_code = null, '
-        'last_error_detail = null where id = ?',
+        'insert into local_entity_sync_work '
+        '(sync_target, direction, kind, status, entity_type, entity_id, '
+        'operation_id, base_server_version, local_revision, protocol_version, '
+        "payload, attempt_count, created_at) values (?, 'push', ?, 'pending', "
+        '?, ?, ?, ?, ?, ?, ?, 0, ?)',
         [
+          createRow.read<String>('sync_target'),
+          kind.name,
+          descriptor.entityType,
+          entityId,
           operation.operationId.value,
           remoteVersion.value,
+          localRevision,
           operation.protocolVersion,
           jsonEncode(operation.toWire()),
-          createRow.read<int>('id'),
+          createRow.read<int>('created_at'),
         ],
       );
     }
@@ -4008,6 +4296,23 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
       return null;
     }
     return converged;
+  }
+
+  /// [patch] moved from [madeOn], the state it was made on, onto [now] by
+  /// the rebase its action declares; null when its action declares none.
+  JsonMap? _rebasedActionPatch(
+    JsonMap patch, {
+    required JsonMap madeOn,
+    required JsonMap now,
+  }) {
+    final rebasing = switch (descriptor) {
+      final RebasedActionsDescriptor value => value.rebasedActions,
+      _ => const <RebasedActionDefinition>[],
+    };
+    for (final action in rebasing) {
+      if (action.matches(patch)) return action.rebase(madeOn, now, patch);
+    }
+    return null;
   }
 
   static bool _yields(EntityFieldDescriptor field, Object? value) => field
@@ -4324,6 +4629,19 @@ final class LocalEntityGraphCoordinator
   late final Map<SyncTargetId, SyncWorker> _workers;
   late final MutationCoordinator _mutationCoordinator;
   final Map<String, _ErasedLocalEntityEngine> _engines = {};
+
+  /// Projection work an engine defers until the transaction it wrote in
+  /// has committed, such as identities that moved.
+  final List<Future<void> Function()> _afterCommit = [];
+
+  Future<void> _runAfterCommit() async {
+    final work = [..._afterCommit];
+    _afterCommit.clear();
+    for (final publish in work) {
+      await publish();
+    }
+  }
+
   final ObservableList<SyncWorkItem> _syncWork = ObservableList();
   late final ReadOnlyObservableList<SyncWorkItem> _syncWorkView =
       ReadOnlyObservableList(_syncWork);
@@ -5540,6 +5858,7 @@ final class LocalEntityGraphCoordinator
     var supersededReceipt = false;
     final acknowledgedCreates =
         <(_ErasedLocalEntityEngine, _RejectedProjection)>[];
+    _afterCommit.clear();
     await database.transaction(() async {
       final cursorRow = await database
           .customSelect(
@@ -5645,6 +5964,7 @@ final class LocalEntityGraphCoordinator
         ));
       }
     });
+    await _runAfterCommit();
     for (final (engine, projection) in acknowledgedCreates) {
       engine._applyRejectedProjection(projection);
       if (projection.changedFieldNames.isNotEmpty) {
@@ -5734,6 +6054,7 @@ final class LocalEntityGraphCoordinator
           )
         >[];
     final acknowledgedWorkIds = <String, int>{};
+    _afterCommit.clear();
     await database.transaction(() async {
       for (final change in _inCompositionOrder(result.changes)) {
         final engine = _engineForRemoteChange(
@@ -5824,6 +6145,7 @@ final class LocalEntityGraphCoordinator
         );
       }
     });
+    await _runAfterCommit();
     final changes =
         <_ErasedLocalEntityEngine, EntityProjectionChange<dynamic>>{};
     runInAction(() {

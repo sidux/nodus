@@ -1961,6 +1961,7 @@ void _emitAggregateCollectionDraft(
     ..writeln('    required K Function($childDraft member) memberKey,')
     ..writeln('    required K Function(V value) valueKey,')
     ..writeln('    required void Function($childDraft member, V value) write,')
+    ..writeln('    $idType Function(V value)? idOf,')
     ..writeln('  }) {')
     ..writeln('    _ensureActive();')
     ..writeln('    final requested = values.toList(growable: false);')
@@ -1974,7 +1975,9 @@ void _emitAggregateCollectionDraft(
     ..writeln('      final matched = matches == null || matches.isEmpty')
     ..writeln('          ? null')
     ..writeln('          : matches.removeAt(0);')
-    ..writeln('      final member = _revive(matched) ?? add();')
+    ..writeln(
+      '      final member = _revive(matched) ?? add(id: idOf?.call(value));',
+    )
     ..writeln('      write(member, value);')
     ..writeln('      ordered.add(member);')
     ..writeln('    }')

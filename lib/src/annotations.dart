@@ -940,9 +940,22 @@ final class OwnerReference {
 /// Name the action for its domain meaning; the generic name `edit` is reserved
 /// for ordinary generated draft behavior.
 final class Action {
-  const Action({this.values = const [], this.bulk = false});
+  const Action({this.values = const [], this.bulk = false, this.rebase});
 
   final List<ActionValue> values;
+
+  /// Moves this action's values onto a new base when the state it was made
+  /// on changes under it before the server applies it: a convergent create
+  /// meeting another device's row, or a concurrent remote change.
+  ///
+  /// A pure static method of the entity, or a top-level function of its
+  /// library, taking the action's values at the state it was made on, at
+  /// the state it now lands on, and as queued, each as one record named
+  /// like the action's parameters, and returning the values to send instead.
+  /// For example, a shift of an energy score by finished work moves the
+  /// score it lands on by the same amount instead of overwriting it.
+  /// Only an action that assigns nothing but its parameters may declare it.
+  final Function? rebase;
 
   /// Generates the same semantic action on a typed entity selection.
   ///

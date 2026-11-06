@@ -209,6 +209,51 @@ bool _hasScalarConstraints(FieldSpec field) =>
     field.maxValue != null ||
     field.allowedValues.isNotEmpty;
 
+String _actionRebaseName(EntitySpec spec, ActionSpec action) =>
+    '_rebase${spec.className}${action.methodName[0].toUpperCase()}'
+    '${action.methodName.substring(1)}';
+
+/// Adapts [action]'s declared rebase to the wire values the runtime holds.
+void _emitActionRebase(
+  StringBuffer buffer,
+  EntitySpec spec,
+  ActionSpec action,
+) {
+  final fields = [
+    for (final parameter in action.parameters)
+      spec.fields.singleWhere((field) => field.name == parameter.fieldName),
+  ];
+  final recordType =
+      '({${[for (final parameter in action.parameters) '${parameter.dartType} ${parameter.name}'].join(', ')}})';
+  buffer
+    ..writeln('JsonMap ${_actionRebaseName(spec, action)}(')
+    ..writeln('  JsonMap madeOn,')
+    ..writeln('  JsonMap now,')
+    ..writeln('  JsonMap pending,')
+    ..writeln(') {')
+    ..writeln('  $recordType read(JsonMap values) => (');
+  for (final field in fields) {
+    buffer.writeln(
+      "    ${field.name}: ${_fieldReference(spec, field)}.decode(values['${field.name}']),",
+    );
+  }
+  buffer
+    ..writeln('  );')
+    ..writeln(
+      '  final rebased = ${action.rebase}(read(madeOn), read(now), read(pending));',
+    )
+    ..writeln('  return {');
+  for (final field in fields) {
+    buffer.writeln(
+      "    '${field.name}': ${_fieldReference(spec, field)}.encode(rebased.${field.name}),",
+    );
+  }
+  buffer
+    ..writeln('  };')
+    ..writeln('}')
+    ..writeln();
+}
+
 String _transitionDescriptorLiteral(FieldSpec field) {
   if (field.transitions.isEmpty) return 'const []';
   return 'const [${field.transitions.map((transition) => 'EntityValueTransition(${_dartLiteral(transition.fromWire)}, ${_dartLiteral(transition.toWire)})').join(', ')}]';
@@ -379,6 +424,12 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
   final descriptorName = '${spec.className}Descriptor';
   final recordName = '${spec.className}Record';
   final uniqueIndexes = spec.indexes.where((index) => index.unique).toList();
+  final rebasedActions = spec.actions
+      .where((action) => action.rebase != null)
+      .toList(growable: false);
+  for (final action in rebasedActions) {
+    _emitActionRebase(buffer, spec, action);
+  }
   buffer
     ..writeln(
       'final class $descriptorName implements '
@@ -387,12 +438,31 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
       '${uniqueIndexes.isEmpty ? '' : ', EntityUniqueConstraintDescriptor'}'
       '${spec.guardedActions.isEmpty ? '' : ', ActionPolicyProvider'}'
       '${spec.convergentCreates ? ', ConvergentCreateDescriptor' : ''}'
+      '${rebasedActions.isEmpty ? '' : ', RebasedActionsDescriptor'}'
       '${spec.hasOrderedCapability ? ', OrderedDescriptor' : ''}'
       '${spec.hasActivityTrackedCapability ? ', ActivityTrackedEntityDescriptor' : ''}'
       '${spec.isActivityEntry ? ', ActivityEntryEntityDescriptor' : ''} {',
     )
     ..writeln('  const $descriptorName();')
-    ..writeln()
+    ..writeln();
+  if (rebasedActions.isNotEmpty) {
+    buffer
+      ..writeln('  @override')
+      ..writeln(
+        '  List<RebasedActionDefinition> get rebasedActions => const [',
+      );
+    for (final action in rebasedActions) {
+      buffer
+        ..writeln('    RebasedActionDefinition(')
+        ..writeln('      fieldNames: ${_dartLiteral(action.targetFields)},')
+        ..writeln('      rebase: ${_actionRebaseName(spec, action)},')
+        ..writeln('    ),');
+    }
+    buffer
+      ..writeln('  ];')
+      ..writeln();
+  }
+  buffer
     ..writeln('  @override')
     ..writeln('  EntityIdentity<${spec.className}> nextIdentity(')
     ..writeln('    EntityIdGenerator generator,')
