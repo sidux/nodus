@@ -3016,6 +3016,20 @@ void _emitEntityFunctions(
       if (fieldAuthorization.isNotEmpty) {
         buffer.writeln(fieldAuthorization);
       }
+      // A patch made on an older version is judged against the row it was
+      // made on: the client rebases it after the conflict, and only then do
+      // actions and transitions check it against the current row. A
+      // first-write-only time another device set meanwhile yields there
+      // instead of refusing the patch.
+      buffer
+        ..writeln(
+          '  if current_row.${spec.serverVersionField.columnName} '
+          '<> p_base_server_version then',
+        )
+        ..writeln(
+          "    raise exception 'Version conflict' using errcode = 'PT409';",
+        )
+        ..writeln('  end if;');
       final actionValidation = _actionValidationSql(spec);
       if (actionValidation.isNotEmpty) {
         buffer.writeln(actionValidation);
@@ -3025,14 +3039,6 @@ void _emitEntityFunctions(
         buffer.writeln(transitionValidation);
       }
       buffer
-        ..writeln(
-          '  if current_row.${spec.serverVersionField.columnName} '
-          '<> p_base_server_version then',
-        )
-        ..writeln(
-          "    raise exception 'Version conflict' using errcode = 'PT409';",
-        )
-        ..writeln('  end if;')
         ..writeln('  update public.${spec.tableName}')
         ..writeln('  set')
         ..writeln(assignments)

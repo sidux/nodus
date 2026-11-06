@@ -2499,8 +2499,12 @@ server acknowledges, whether through its reply or a pulled receipt after a lost
 reply, was made on top of it, so the acknowledged version becomes its base
 rather than a concurrent edit it must yield to. Queued work is based on the
 version already accepted locally, never on an in-memory copy that trails it,
-and a pulled version the device has already accepted is not merged again. A
-server-wins field yields only
+and a pulled version the device has already accepted is not merged again.
+Every target checks a patch's base version before its actions and
+transitions, so a patch made on an older version conflicts and is rebased
+instead of being judged against a row its device has not seen: a
+first-write-only time another device set meanwhile yields rather than
+refusing the patch. A server-wins field yields only
 to a newer remote version that changed it since the pending base, so an
 unrelated concurrent edit never discards it. Queued work never merges a
 reference ahead of the queued work that creates or restores its target.

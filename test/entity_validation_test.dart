@@ -1011,6 +1011,15 @@ final class Account {}
             contains('current_row.completed_at is null'),
             contains('Invalid initial entity action state'),
             contains("Patch does not match a declared entity action"),
+            // A patch made on an older version conflicts before it is
+            // judged, so a first-write-only time set meanwhile yields on
+            // the client's rebase instead of refusing the patch.
+            contains(
+              "raise exception 'Version conflict' using errcode = 'PT409';\n"
+              '  end if;\n'
+              "  if p_operation = 'patch' and p_patch ? 'completedAt'\n"
+              '     and not (',
+            ),
             isNot(contains('complete_goal')),
           ]),
         ),
