@@ -6180,12 +6180,16 @@ final class LocalEntityGraphCoordinator
     _afterCommit.clear();
     var parked = const <_FailedRemoteChange>[];
     final reread = await _rereadUnreadableRemoteChanges(item.target);
+    final repairs = await _repairParkedRemoteChanges(item.target);
     await database.transaction(() async {
       // One change the device cannot store must never hold back the rest:
       // it waits for the others, which may free what it needs, and is
       // parked if it still fails, so the cursor always moves on.
       final failed = <_FailedRemoteChange>[];
-      for (final change in _inCompositionOrder(result.changes)) {
+      for (final change in [
+        ...repairs,
+        ..._inCompositionOrder(result.changes),
+      ]) {
         final error = await _applyPulledChange(
           change,
           target: item.target,
@@ -6434,67 +6438,186 @@ final class LocalEntityGraphCoordinator
     }
     var released = false;
     for (final failure in failed) {
-      final change = failure.change;
-      if (change.isRevocation) continue;
-      final EntityDescriptorBase descriptor;
-      try {
-        descriptor = _descriptorFor(change.identity.entityType);
-      } on Object {
-        continue;
-      }
-      final constraints = switch (descriptor) {
-        final EntityUniqueConstraintDescriptor value => value.uniqueConstraints,
-        _ => const <EntityUniqueConstraint>[],
-      };
-      final fieldsByName = {
-        for (final field in descriptor.fields) field.name: field,
-      };
-      final remote = change.fields.toWire();
-      for (final constraint in constraints) {
-        final fields = [
-          for (final name in constraint.fieldNames) fieldsByName[name],
-        ];
-        if (fields.any((field) => field == null) ||
-            constraint.unordered ||
-            !constraint.covers(remote) ||
-            constraint.fieldNames.any((name) => remote[name] == null)) {
+      for (final holder in await _uniqueValueHolders(failure.change)) {
+        if (holder.nullable.isEmpty ||
+            !(pendingIds[holder.descriptor.entityType]?.contains(holder.id) ??
+                false)) {
           continue;
         }
-        final nullable = [
-          for (final field in fields)
-            if (field!.nullable) field,
-        ];
-        if (nullable.isEmpty) continue;
-        final holders = await database
-            .customSelect(
-              'select ${EntityConventions.idColumnName} as id '
-              'from ${descriptor.tableName} where '
-              '${fields.map((field) => '${field!.columnName} = ?').join(' and ')} '
-              'and ${EntityConventions.idColumnName} <> ?',
-              variables: [
-                for (final field in fields)
-                  _fieldDatabaseVariable(field!, remote[field.name]!),
-                Variable.withString(change.identity.rawId),
-              ],
-            )
-            .get();
-        for (final holder in holders) {
-          final holderId = holder.read<String>('id');
-          if (!(pendingIds[descriptor.entityType]?.contains(holderId) ??
-              false)) {
-            continue;
-          }
-          await database.customStatement(
-            'update ${descriptor.tableName} set '
-            '${nullable.map((field) => '${field.columnName} = null').join(', ')} '
-            'where ${EntityConventions.idColumnName} = ?',
-            [holderId],
-          );
-          released = true;
-        }
+        await database.customStatement(
+          'update ${holder.descriptor.tableName} set '
+          '${holder.nullable.map((field) => '${field.columnName} = null').join(', ')} '
+          'where ${EntityConventions.idColumnName} = ?',
+          [holder.id],
+        );
+        released = true;
       }
     }
     return released;
+  }
+
+  /// The local entities other than [change]'s own that hold one of its unique
+  /// values, with the nullable fields of the key they hold.
+  Future<
+    List<
+      ({
+        EntityDescriptorBase descriptor,
+        String id,
+        List<EntityFieldDescriptor> nullable,
+      })
+    >
+  >
+  _uniqueValueHolders(RemoteEntityChange change) async {
+    if (change.isRevocation) return const [];
+    final EntityDescriptorBase descriptor;
+    try {
+      descriptor = _descriptorFor(change.identity.entityType);
+    } on Object {
+      return const [];
+    }
+    final constraints = switch (descriptor) {
+      final EntityUniqueConstraintDescriptor value => value.uniqueConstraints,
+      _ => const <EntityUniqueConstraint>[],
+    };
+    final fieldsByName = {
+      for (final field in descriptor.fields) field.name: field,
+    };
+    final remote = change.fields.toWire();
+    final holders =
+        <
+          ({
+            EntityDescriptorBase descriptor,
+            String id,
+            List<EntityFieldDescriptor> nullable,
+          })
+        >[];
+    for (final constraint in constraints) {
+      final fields = [
+        for (final name in constraint.fieldNames) fieldsByName[name],
+      ];
+      if (fields.any((field) => field == null) ||
+          constraint.unordered ||
+          !constraint.covers(remote) ||
+          constraint.fieldNames.any((name) => remote[name] == null)) {
+        continue;
+      }
+      final rows = await database
+          .customSelect(
+            'select ${EntityConventions.idColumnName} as id '
+            'from ${descriptor.tableName} where '
+            '${fields.map((field) => '${field!.columnName} = ?').join(' and ')} '
+            '${constraint.liveOnly ? 'and deleted_at is null ' : ''}'
+            'and ${EntityConventions.idColumnName} <> ?',
+            variables: [
+              for (final field in fields)
+                _fieldDatabaseVariable(field!, remote[field.name]!),
+              Variable.withString(change.identity.rawId),
+            ],
+          )
+          .get();
+      for (final row in rows) {
+        holders.add((
+          descriptor: descriptor,
+          id: row.read<String>('id'),
+          nullable: [
+            for (final field in fields)
+              if (field!.nullable) field,
+          ],
+        ));
+      }
+    }
+    return holders;
+  }
+
+  /// Repairs what keeps changes parked for [target] since an earlier pull:
+  /// the server's current copy of each parked entity and of every local
+  /// entity holding one of its unique values, to apply before them. A holder
+  /// the server no longer has, with no work of this device queued for it, is
+  /// a stale copy and goes. The server is the authority, so its copies agree
+  /// with each other and the parked change lands once they are applied.
+  Future<List<RemoteEntityChange>> _repairParkedRemoteChanges(
+    SyncTargetId target,
+  ) async {
+    final rows = await database
+        .customSelect(
+          'select entity_type, payload from local_entity_sync_work '
+          "where direction = 'parked' and kind = 'remoteChange' and "
+          'sync_target = ? order by id',
+          variables: [Variable.withString(target.wireName)],
+        )
+        .get();
+    final repairs = <RemoteEntityChange>[];
+    final seen = <String>{};
+    Future<void> refresh(
+      EntityDescriptorBase descriptor,
+      String id,
+      ServerSequence sequence,
+    ) async {
+      if (!seen.add('${descriptor.entityType}:$id')) return;
+      try {
+        final engine = _engineFor(descriptor.entityType);
+        final loader = engine._backend;
+        if (loader is! SnapshotSyncAdapter) return;
+        final identity = descriptor.parseIdentity(id);
+        final snapshot = await loader.fetchSnapshot(identity);
+        if (snapshot != null) {
+          repairs.add(
+            RemoteEntityChange(
+              identity: identity,
+              serverVersion: snapshot.serverVersion,
+              fields: snapshot.fields,
+              serverSequence: sequence,
+            ),
+          );
+          return;
+        }
+        final queued = await database
+            .customSelect(
+              "select 1 from local_entity_sync_work where direction = 'push' "
+              'and entity_type = ? and entity_id = ? limit 1',
+              variables: [
+                Variable.withString(descriptor.entityType),
+                Variable.withString(id),
+              ],
+            )
+            .getSingleOrNull();
+        if (queued != null) return;
+        repairs.add(
+          RemoteEntityChange(
+            identity: identity,
+            serverVersion: ServerVersion(1),
+            fields: RemoteEntityFields.decode(descriptor, {
+              EntityConventions.idFieldName: id,
+            }, complete: false),
+            serverSequence: sequence,
+            isRevocation: true,
+          ),
+        );
+      } on Object {
+        // Offline, or still unreadable: the next pull repairs it.
+      }
+    }
+
+    for (final row in rows) {
+      final RemoteEntityChange parked;
+      try {
+        parked = _decodeParkedRemoteChange(
+          row.read<String>('entity_type'),
+          _decodeMap(jsonDecode(row.read<String>('payload'))),
+        );
+      } on Object {
+        continue;
+      }
+      for (final holder in await _uniqueValueHolders(parked)) {
+        await refresh(holder.descriptor, holder.id, parked.serverSequence);
+      }
+      await refresh(
+        parked.fields.descriptor,
+        parked.identity.rawId,
+        parked.serverSequence,
+      );
+    }
+    return repairs;
   }
 
   /// Takes back the changes parked by earlier pulls of [target], so they are

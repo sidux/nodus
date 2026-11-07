@@ -2485,9 +2485,14 @@ is applied in its own savepoint; one that fails waits for the rest of its
 page, and when no more can be stored, the nullable unique values that stale
 copies with a newer version in the same set still hold are released before
 another try. A change that still fails is parked durably with its error, one
-per entity, and the cursor moves on. Every later pull of that target tries
-parked changes again with its page; a parked change older than what the
-device then holds applies as a no-op. An adapter that cannot read a record
+per entity, and the cursor moves on. Every later pull of that target, which
+an application requests when an account opens, on foreground, on reconnect,
+and on pull-to-refresh, repairs before it retries: it reads the server
+snapshot of each parked entity and of every local entity holding one of its
+unique values, applies those first, and removes a holder the server no longer
+has unless this device still queues work for it. The server's copies agree
+with each other, so a stale or missed local copy cannot keep a change parked;
+a parked change older than what the device then holds applies as a no-op. An adapter that cannot read a record
 lists it as unreadable instead of failing the page; the device parks its
 identity and reads the entity's server snapshot again on later pulls, so it
 lands once the app can read it. Parked work never enters the push or pull
