@@ -5102,13 +5102,32 @@ final class PushResult {
   }
 }
 
+/// A change the adapter listed but could not read, such as a record a newer
+/// server version writes. The device parks it and reads the entity again
+/// later instead of holding back the page.
+final class UnreadableRemoteChange {
+  const UnreadableRemoteChange({
+    required this.entityType,
+    required this.entityId,
+    required this.serverSequence,
+    required this.error,
+  });
+
+  final String entityType;
+  final String entityId;
+  final ServerSequence serverSequence;
+  final String error;
+}
+
 final class PullResult {
   PullResult({
     required this.requestedAfter,
     required Iterable<RemoteEntityChange> changes,
     required this.nextSequence,
     required this.hasMore,
-  }) : changes = List.unmodifiable(changes) {
+    Iterable<UnreadableRemoteChange> unreadable = const [],
+  }) : changes = List.unmodifiable(changes),
+       unreadable = List.unmodifiable(unreadable) {
     if (nextSequence.value < requestedAfter.value) {
       throw ArgumentError.value(
         nextSequence,
@@ -5129,9 +5148,15 @@ final class PullResult {
       }
       previous = sequence;
     }
-    if (hasMore &&
-        (this.changes.isEmpty ||
-            nextSequence != this.changes.last.serverSequence)) {
+    final last =
+        [
+          ...this.changes.map((change) => change.serverSequence.value),
+          ...this.unreadable.map((change) => change.serverSequence.value),
+        ].fold<int?>(
+          null,
+          (max, value) => max == null || value > max ? value : max,
+        );
+    if (hasMore && last != nextSequence.value) {
       throw ArgumentError.value(
         nextSequence,
         'nextSequence',
@@ -5141,6 +5166,9 @@ final class PullResult {
   }
 
   final List<RemoteEntityChange> changes;
+
+  /// Changes in this page the adapter could not read.
+  final List<UnreadableRemoteChange> unreadable;
   final ServerSequence requestedAfter;
   final ServerSequence nextSequence;
   final bool hasMore;

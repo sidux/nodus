@@ -2452,7 +2452,8 @@ target adapter signal, foreground, reconnect, or periodic recovery
     -> coalesced durable pull request for that target
     -> ordered remote change-log read after that target's local cursor
     -> descriptor validation and policy-allowed upcast
-    -> atomic Drift base/projection/target-cursor update
+    -> atomic Drift base/projection/target-cursor update, a change that
+       cannot be stored or read parked instead of holding the page back
     -> same IdentityMap objects and exact queries react
 ```
 
@@ -2475,6 +2476,22 @@ realtime events reconstruct correctness.
 Remote changes are written to Drift before the IdentityMap publishes them.
 No feature stream writes directly into entities, and no global invalidation is
 needed.
+
+One change MUST NOT hold back a target lane. The change log lists each
+entity's final state, so a device can meet a change it cannot store yet, such
+as a unique value its stale copy of another entity still holds after a swap,
+or one it cannot read, such as a record written by a newer server. Each change
+is applied in its own savepoint; one that fails waits for the rest of its
+page, and when no more can be stored, the nullable unique values that stale
+copies with a newer version in the same set still hold are released before
+another try. A change that still fails is parked durably with its error, one
+per entity, and the cursor moves on. Every later pull of that target tries
+parked changes again with its page; a parked change older than what the
+device then holds applies as a no-op. An adapter that cannot read a record
+lists it as unreadable instead of failing the page; the device parks its
+identity and reads the entity's server snapshot again on later pulls, so it
+lands once the app can read it. Parked work never enters the push or pull
+queues and is reported through diagnostics.
 
 ### 10.4 Cross-target constraints
 

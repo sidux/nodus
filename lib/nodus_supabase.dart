@@ -455,44 +455,41 @@ final class SupabaseSyncBackend
       );
       final envelope = _map(response);
       final rows = _list(envelope['changes']);
+      final unreadable = <UnreadableRemoteChange>[];
       final changes = rows
           .map((value) {
             final row = _map(value);
-            final descriptor = _descriptorFor(
-              row['entity_type']?.toString() ?? _singleDescriptor.entityType,
-            );
-            final isRevocation = row['is_revocation'] == null
-                ? false
-                : _bool(row['is_revocation'], 'is_revocation');
-            final fields = isRevocation
-                ? <String, Object?>{
-                    EntityConventions.idFieldName: _map(
-                      row['record'],
-                    )[EntityConventions.idColumnName],
-                  }
-                : _decodeRecord(row['record'], descriptor);
-            final remoteFields = RemoteEntityFields.decode(
-              descriptor,
-              fields,
-              complete: !isRevocation,
-            );
-            final serverVersion = parseServerVersion(row['server_version']);
-            return RemoteEntityChange(
-              identity: remoteFields.identity,
-              serverVersion: serverVersion,
-              fields: remoteFields,
-              serverSequence: parseServerSequence(row['sequence']),
-              sourceOperationId: row['operation_id'] == null
-                  ? null
-                  : parseSyncOperationId(row['operation_id'].toString()),
-              isRevocation: isRevocation,
-            );
+            try {
+              return _decodeChange(row);
+            } on Object catch (error) {
+              // One record this app cannot read must not hold back the
+              // rest; the device parks it and reads the entity again later.
+              final sequence = row['sequence'];
+              final record = row['record'];
+              final id = record is Map
+                  ? record[EntityConventions.idColumnName]
+                  : row['entity_id'];
+              if (sequence == null || id == null) rethrow;
+              unreadable.add(
+                UnreadableRemoteChange(
+                  entityType:
+                      row['entity_type']?.toString() ??
+                      _singleDescriptor.entityType,
+                  entityId: id.toString(),
+                  serverSequence: parseServerSequence(sequence),
+                  error: error.toString(),
+                ),
+              );
+              return null;
+            }
           })
+          .nonNulls
           .toList(growable: false);
 
       return PullResult(
         requestedAfter: afterSequence,
         changes: changes,
+        unreadable: unreadable,
         nextSequence: parseServerSequence(envelope['nextSequence']),
         hasMore: _bool(envelope['hasMore'], 'hasMore'),
       );
@@ -509,6 +506,38 @@ final class SupabaseSyncBackend
         message: error.message?.toString() ?? error.toString(),
       );
     }
+  }
+
+  RemoteEntityChange _decodeChange(JsonMap row) {
+    final descriptor = _descriptorFor(
+      row['entity_type']?.toString() ?? _singleDescriptor.entityType,
+    );
+    final isRevocation = row['is_revocation'] == null
+        ? false
+        : _bool(row['is_revocation'], 'is_revocation');
+    final fields = isRevocation
+        ? <String, Object?>{
+            EntityConventions.idFieldName: _map(
+              row['record'],
+            )[EntityConventions.idColumnName],
+          }
+        : _decodeRecord(row['record'], descriptor);
+    final remoteFields = RemoteEntityFields.decode(
+      descriptor,
+      fields,
+      complete: !isRevocation,
+    );
+    final serverVersion = parseServerVersion(row['server_version']);
+    return RemoteEntityChange(
+      identity: remoteFields.identity,
+      serverVersion: serverVersion,
+      fields: remoteFields,
+      serverSequence: parseServerSequence(row['sequence']),
+      sourceOperationId: row['operation_id'] == null
+          ? null
+          : parseSyncOperationId(row['operation_id'].toString()),
+      isRevocation: isRevocation,
+    );
   }
 
   @override

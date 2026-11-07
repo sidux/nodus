@@ -292,61 +292,106 @@ void main() {
     },
   );
 
-  test(
-    'fractional server versions are rejected instead of truncated',
-    () async {
-      final fixture = _fixture({
-        'changes': [
-          {
-            'sequence': 1,
-            'entity_type': 'Note',
-            'record': {
-              'id': 'a0000000-0000-7000-8000-000000000001',
-              'is_active': true,
-              'server_version': 1,
-            },
-            'server_version': 1.5,
-            'operation_id': null,
-            'is_revocation': false,
-          },
-        ],
-        'nextSequence': 1,
-        'hasMore': false,
-      });
-      addTearDown(fixture.dispose);
-
-      await expectLater(
-        fixture.backend.pull(afterSequence: ServerSequence.zero),
-        throwsA(_serverContractRejection),
-      );
-    },
-  );
-
-  test(
-    'malformed remote IDs are validated before identity construction',
-    () async {
-      final fixture = _fixture({
-        'changes': [
-          {
-            'sequence': 1,
-            'entity_type': 'Note',
-            'record': {'id': 42, 'is_active': true, 'server_version': 1},
+  test('a fractional server version is set aside as unreadable instead of '
+      'truncated, without holding back the page', () async {
+    final fixture = _fixture({
+      'changes': [
+        {
+          'sequence': 1,
+          'entity_type': 'Note',
+          'record': {
+            'id': 'a0000000-0000-7000-8000-000000000001',
+            'is_active': true,
             'server_version': 1,
-            'operation_id': null,
-            'is_revocation': false,
           },
-        ],
-        'nextSequence': 1,
-        'hasMore': false,
-      });
-      addTearDown(fixture.dispose);
+          'server_version': 1.5,
+          'operation_id': null,
+          'is_revocation': false,
+        },
+      ],
+      'nextSequence': 1,
+      'hasMore': false,
+    });
+    addTearDown(fixture.dispose);
 
-      await expectLater(
-        fixture.backend.pull(afterSequence: ServerSequence.zero),
-        throwsA(_serverContractRejection),
-      );
-    },
-  );
+    final page = await fixture.backend.pull(afterSequence: ServerSequence.zero);
+
+    expect(page.changes, isEmpty);
+    expect(
+      page.unreadable.single.entityId,
+      'a0000000-0000-7000-8000-000000000001',
+    );
+    expect(page.unreadable.single.serverSequence, ServerSequence(1));
+    expect(page.nextSequence, ServerSequence(1));
+  });
+
+  test('a malformed remote ID is validated before identity construction and '
+      'set aside as unreadable', () async {
+    final fixture = _fixture({
+      'changes': [
+        {
+          'sequence': 1,
+          'entity_type': 'Note',
+          'record': {'id': 42, 'is_active': true, 'server_version': 1},
+          'server_version': 1,
+          'operation_id': null,
+          'is_revocation': false,
+        },
+      ],
+      'nextSequence': 1,
+      'hasMore': false,
+    });
+    addTearDown(fixture.dispose);
+
+    final page = await fixture.backend.pull(afterSequence: ServerSequence.zero);
+
+    expect(page.changes, isEmpty);
+    expect(page.unreadable.single.entityId, '42');
+  });
+
+  test('an unreadable record is set aside while the rest of its page is '
+      'read', () async {
+    final fixture = _fixture({
+      'changes': [
+        {
+          'sequence': 1,
+          'entity_type': 'Note',
+          'record': {
+            'id': 'a0000000-0000-7000-8000-000000000001',
+            'is_active': 'sometimes',
+            'server_version': 1,
+          },
+          'server_version': 1,
+          'operation_id': null,
+          'is_revocation': false,
+        },
+        {
+          'sequence': 2,
+          'entity_type': 'Note',
+          'record': {
+            'id': 'a0000000-0000-7000-8000-000000000002',
+            'is_active': true,
+            'server_version': 1,
+          },
+          'server_version': 1,
+          'operation_id': null,
+          'is_revocation': false,
+        },
+      ],
+      'nextSequence': 2,
+      'hasMore': true,
+    });
+    addTearDown(fixture.dispose);
+
+    final page = await fixture.backend.pull(afterSequence: ServerSequence.zero);
+
+    expect(
+      page.changes.single.identity.rawId,
+      'a0000000-0000-7000-8000-000000000002',
+    );
+    expect(page.unreadable.single.serverSequence, ServerSequence(1));
+    expect(page.hasMore, isTrue);
+  });
 
   test('a change recorded before a field existed decodes with the field\'s '
       'default, or null when it has none and may be empty', () async {
@@ -406,8 +451,8 @@ void main() {
     expect(fields['note'], isNull);
   });
 
-  test('a change missing a required field without a default is still '
-      'rejected', () async {
+  test('a change missing a required field without a default is still not '
+      'read, and is set aside as unreadable', () async {
     final fixture = _fixture({
       'changes': [
         {
@@ -427,13 +472,14 @@ void main() {
     });
     addTearDown(fixture.dispose);
 
-    await expectLater(
-      fixture.backend.pull(afterSequence: ServerSequence.zero),
-      throwsA(_serverContractRejection),
-    );
+    final page = await fixture.backend.pull(afterSequence: ServerSequence.zero);
+
+    expect(page.changes, isEmpty);
+    expect(page.unreadable.single.serverSequence, ServerSequence(1));
   });
 
-  test('record and envelope server versions must match', () async {
+  test('record and envelope server versions must match, or the change is '
+      'set aside as unreadable', () async {
     final fixture = _fixture({
       'changes': [
         {
@@ -454,10 +500,10 @@ void main() {
     });
     addTearDown(fixture.dispose);
 
-    await expectLater(
-      fixture.backend.pull(afterSequence: ServerSequence.zero),
-      throwsA(_serverContractRejection),
-    );
+    final page = await fixture.backend.pull(afterSequence: ServerSequence.zero);
+
+    expect(page.changes, isEmpty);
+    expect(page.unreadable.single.serverSequence, ServerSequence(1));
   });
 
   test('push response identity must match the submitted operation', () async {

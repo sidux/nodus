@@ -3994,7 +3994,7 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     final work = await database
         .customSelect(
           'select id, payload from local_entity_sync_work '
-          'where entity_type = ? and entity_id = ?',
+          "where direction <> 'parked' and entity_type = ? and entity_id = ?",
           variables: [
             Variable.withString(descriptor.entityType),
             Variable.withString(from),
@@ -6178,72 +6178,38 @@ final class LocalEntityGraphCoordinator
         >[];
     final acknowledgedWorkIds = <String, int>{};
     _afterCommit.clear();
+    var parked = const <_FailedRemoteChange>[];
+    final reread = await _rereadUnreadableRemoteChanges(item.target);
     await database.transaction(() async {
+      // One change the device cannot store must never hold back the rest:
+      // it waits for the others, which may free what it needs, and is
+      // parked if it still fails, so the cursor always moves on.
+      final failed = <_FailedRemoteChange>[];
       for (final change in _inCompositionOrder(result.changes)) {
-        final engine = _engineForRemoteChange(
+        final error = await _applyPulledChange(
           change,
           target: item.target,
-          fromPull: true,
+          resolved: resolved,
+          acknowledgedWorkIds: acknowledgedWorkIds,
         );
-        if (change.isRevocation) {
-          await engine._purgeRevokedEntity(change.identity.rawId);
-          resolved.add((
-            engine,
-            change,
-            const _MergedRemoteProjection(
-              fields: <String, Object?>{},
-              inserted: false,
-              changedFieldNames: <String>{},
-            ),
-          ));
-          continue;
-        }
-        // Gaining access can address an older aggregate change ahead of the
-        // component copy published for the new audience, possibly on a later
-        // page, or the component may stay unreadable. Every page would then
-        // abort on the local composition constraint, so the aggregate waits
-        // for the newer snapshot that follows its component.
-        if (!await _storesComposedComponents(change)) {
-          resolved.add((
-            engine,
-            change,
-            const _MergedRemoteProjection(
-              fields: <String, Object?>{},
-              inserted: false,
-              changedFieldNames: <String>{},
-              ignored: true,
-            ),
-          ));
-          continue;
-        }
-        final sourceOperationId = change.sourceOperationId;
-        if (sourceOperationId != null) {
-          final acknowledgedWorkId = await _takeAcknowledgedWork(
-            item.target,
-            sourceOperationId,
-            acknowledgedWorkIds,
-          );
-          // A pulled receipt of this device's own operation (for example
-          // after its push reply was lost) is the base of everything queued
-          // after it, not a concurrent edit those operations must yield to.
-          if (acknowledgedWorkId != null) {
-            await engine._rebasePendingPushes(
-              change.identity.rawId,
-              change.serverVersion,
-              queuedAfterWorkId: acknowledgedWorkId,
-            );
-          }
-        }
-        resolved.add((
-          engine,
-          change,
-          await engine._mergeRemoteIntoDatabase(
-            identity: change.identity,
-            serverVersion: change.serverVersion,
-            fields: change.fields,
-          ),
-        ));
+        if (error != null) failed.add((change: change, error: error));
       }
+      for (final entry in reread.entries) {
+        await database.customStatement(
+          'delete from local_entity_sync_work where id = ?',
+          [entry.key],
+        );
+        final change = entry.value;
+        if (change != null) failed.add((change: change, error: 'unreadable'));
+      }
+      await _parkUnreadableRemoteChanges(item.target, result.unreadable);
+      parked = await _settleFailedRemoteChanges(
+        [...await _takeParkedRemoteChanges(item.target), ...failed],
+        target: item.target,
+        resolved: resolved,
+        acknowledgedWorkIds: acknowledgedWorkIds,
+      );
+      await _parkRemoteChanges(item.target, parked);
       await database.customStatement(
         'update local_entity_sync_cursor set cursor = ? where sync_target = ?',
         [result.nextSequence.value, item.target.wireName],
@@ -6303,7 +6269,418 @@ final class LocalEntityGraphCoordinator
     for (final entry in changes.entries) {
       entry.key._notifyErasedProjectionChanged(entry.value);
     }
+    for (final failure in parked) {
+      _recordDiagnosticSafely(
+        diagnostics,
+        SyncFailureDiagnostic(
+          occurredAt: clock.nowUtc(),
+          workId: item.id,
+          target: item.target,
+          operationId: item.operationId,
+          direction: SyncDirection.pull,
+          identity: failure.change.identity,
+          attemptCount: 1,
+          failure: RetryableSyncException(
+            code: 'pulled_change_parked',
+            message:
+                '${failure.change.identity.entityType} '
+                '${failure.change.identity.rawId} '
+                'v${failure.change.serverVersion.value} waits: '
+                '${failure.error}',
+          ),
+          stackTrace: StackTrace.current,
+          resultingStatus: SyncWorkStatus.retryableFailure,
+          retryAt: null,
+        ),
+      );
+    }
     await _workChanged();
+  }
+
+  /// Applies one pulled [change] in its own savepoint and returns the error
+  /// it failed with, leaving nothing of it behind, or null once it is stored.
+  Future<Object?> _applyPulledChange(
+    RemoteEntityChange change, {
+    required SyncTargetId target,
+    required List<
+      (_ErasedLocalEntityEngine, RemoteEntityChange, _MergedRemoteProjection)
+    >
+    resolved,
+    required Map<String, int> acknowledgedWorkIds,
+  }) async {
+    final acknowledged = Map<String, int>.of(acknowledgedWorkIds);
+    final afterCommit = _afterCommit.length;
+    try {
+      final merged = await database.transaction(() async {
+        final engine = _engineForRemoteChange(
+          change,
+          target: target,
+          fromPull: true,
+        );
+        if (change.isRevocation) {
+          await engine._purgeRevokedEntity(change.identity.rawId);
+          return (
+            engine,
+            const _MergedRemoteProjection(
+              fields: <String, Object?>{},
+              inserted: false,
+              changedFieldNames: <String>{},
+            ),
+          );
+        }
+        // Gaining access can address an older aggregate change ahead of the
+        // component copy published for the new audience, possibly on a later
+        // page, or the component may stay unreadable. Every page would then
+        // abort on the local composition constraint, so the aggregate waits
+        // for the newer snapshot that follows its component.
+        if (!await _storesComposedComponents(change)) {
+          return (
+            engine,
+            const _MergedRemoteProjection(
+              fields: <String, Object?>{},
+              inserted: false,
+              changedFieldNames: <String>{},
+              ignored: true,
+            ),
+          );
+        }
+        final sourceOperationId = change.sourceOperationId;
+        if (sourceOperationId != null) {
+          final acknowledgedWorkId = await _takeAcknowledgedWork(
+            target,
+            sourceOperationId,
+            acknowledgedWorkIds,
+          );
+          // A pulled receipt of this device's own operation (for example
+          // after its push reply was lost) is the base of everything queued
+          // after it, not a concurrent edit those operations must yield to.
+          if (acknowledgedWorkId != null) {
+            await engine._rebasePendingPushes(
+              change.identity.rawId,
+              change.serverVersion,
+              queuedAfterWorkId: acknowledgedWorkId,
+            );
+          }
+        }
+        return (
+          engine,
+          await engine._mergeRemoteIntoDatabase(
+            identity: change.identity,
+            serverVersion: change.serverVersion,
+            fields: change.fields,
+          ),
+        );
+      });
+      resolved.add((merged.$1, change, merged.$2));
+      return null;
+    } catch (error) {
+      acknowledgedWorkIds
+        ..clear()
+        ..addAll(acknowledged);
+      _afterCommit.removeRange(afterCommit, _afterCommit.length);
+      return error;
+    }
+  }
+
+  /// Retries [failed] changes until none more can be stored, freeing on the
+  /// way the unique keys their stale local copies still hold, and returns
+  /// those still failing.
+  ///
+  /// A swap of a unique value, such as two goals trading their Focus slots,
+  /// reaches a device as each row's final state, and either order collides
+  /// with the other row's old value. Each row the swap moves has a newer
+  /// version among [failed], so its nullable unique values can be cleared
+  /// before that version lands.
+  Future<List<_FailedRemoteChange>> _settleFailedRemoteChanges(
+    List<_FailedRemoteChange> failed, {
+    required SyncTargetId target,
+    required List<
+      (_ErasedLocalEntityEngine, RemoteEntityChange, _MergedRemoteProjection)
+    >
+    resolved,
+    required Map<String, int> acknowledgedWorkIds,
+  }) async {
+    var remaining = failed;
+    while (remaining.isNotEmpty) {
+      final next = <_FailedRemoteChange>[];
+      for (final failure in remaining) {
+        final error = await _applyPulledChange(
+          failure.change,
+          target: target,
+          resolved: resolved,
+          acknowledgedWorkIds: acknowledgedWorkIds,
+        );
+        if (error != null) next.add((change: failure.change, error: error));
+      }
+      final progressed = next.length < remaining.length;
+      remaining = next;
+      if (!progressed && !await _releaseHeldUniqueValues(remaining)) break;
+    }
+    return remaining;
+  }
+
+  /// Clears the nullable unique values that the stale local copy of an entity
+  /// among [failed] holds against another change among them, and returns
+  /// whether it cleared any.
+  Future<bool> _releaseHeldUniqueValues(
+    List<_FailedRemoteChange> failed,
+  ) async {
+    final pendingIds = <String, Set<String>>{};
+    for (final failure in failed) {
+      if (failure.change.isRevocation) continue;
+      (pendingIds[failure.change.identity.entityType] ??= {}).add(
+        failure.change.identity.rawId,
+      );
+    }
+    var released = false;
+    for (final failure in failed) {
+      final change = failure.change;
+      if (change.isRevocation) continue;
+      final EntityDescriptorBase descriptor;
+      try {
+        descriptor = _descriptorFor(change.identity.entityType);
+      } on Object {
+        continue;
+      }
+      final constraints = switch (descriptor) {
+        final EntityUniqueConstraintDescriptor value => value.uniqueConstraints,
+        _ => const <EntityUniqueConstraint>[],
+      };
+      final fieldsByName = {
+        for (final field in descriptor.fields) field.name: field,
+      };
+      final remote = change.fields.toWire();
+      for (final constraint in constraints) {
+        final fields = [
+          for (final name in constraint.fieldNames) fieldsByName[name],
+        ];
+        if (fields.any((field) => field == null) ||
+            constraint.unordered ||
+            !constraint.covers(remote) ||
+            constraint.fieldNames.any((name) => remote[name] == null)) {
+          continue;
+        }
+        final nullable = [
+          for (final field in fields)
+            if (field!.nullable) field,
+        ];
+        if (nullable.isEmpty) continue;
+        final holders = await database
+            .customSelect(
+              'select ${EntityConventions.idColumnName} as id '
+              'from ${descriptor.tableName} where '
+              '${fields.map((field) => '${field!.columnName} = ?').join(' and ')} '
+              'and ${EntityConventions.idColumnName} <> ?',
+              variables: [
+                for (final field in fields)
+                  _fieldDatabaseVariable(field!, remote[field.name]!),
+                Variable.withString(change.identity.rawId),
+              ],
+            )
+            .get();
+        for (final holder in holders) {
+          final holderId = holder.read<String>('id');
+          if (!(pendingIds[descriptor.entityType]?.contains(holderId) ??
+              false)) {
+            continue;
+          }
+          await database.customStatement(
+            'update ${descriptor.tableName} set '
+            '${nullable.map((field) => '${field.columnName} = null').join(', ')} '
+            'where ${EntityConventions.idColumnName} = ?',
+            [holderId],
+          );
+          released = true;
+        }
+      }
+    }
+    return released;
+  }
+
+  /// Takes back the changes parked by earlier pulls of [target], so they are
+  /// tried again with the page that arrived.
+  Future<List<_FailedRemoteChange>> _takeParkedRemoteChanges(
+    SyncTargetId target,
+  ) async {
+    final rows = await database
+        .customSelect(
+          'select id, entity_type, entity_id, payload, last_error_detail '
+          "from local_entity_sync_work where direction = 'parked' and "
+          "kind = 'remoteChange' and sync_target = ? order by id",
+          variables: [Variable.withString(target.wireName)],
+        )
+        .get();
+    final changes = <_FailedRemoteChange>[];
+    for (final row in rows) {
+      await database.customStatement(
+        'delete from local_entity_sync_work where id = ?',
+        [row.read<int>('id')],
+      );
+      try {
+        changes.add((
+          change: _decodeParkedRemoteChange(
+            row.read<String>('entity_type'),
+            _decodeMap(jsonDecode(row.read<String>('payload'))),
+          ),
+          error: row.readNullable<String>('last_error_detail') ?? 'parked',
+        ));
+      } on Object {
+        // A parked change this version cannot read any more is dropped; its
+        // entity's next change replaces it.
+      }
+    }
+    return changes;
+  }
+
+  /// Keeps [failed] durably, one per entity, until a later pull stores them
+  /// or a newer change of their entity replaces them.
+  Future<void> _parkRemoteChanges(
+    SyncTargetId target,
+    List<_FailedRemoteChange> failed,
+  ) async {
+    final latest = <String, _FailedRemoteChange>{};
+    for (final failure in failed) {
+      final key =
+          '${failure.change.identity.entityType}:'
+          '${failure.change.identity.rawId}';
+      final kept = latest[key];
+      if (kept == null ||
+          kept.change.serverSequence.value <
+              failure.change.serverSequence.value) {
+        latest[key] = failure;
+      }
+    }
+    final now = clock.nowUtc().millisecondsSinceEpoch;
+    for (final failure in latest.values) {
+      final change = failure.change;
+      await database.customStatement(
+        'insert into local_entity_sync_work (sync_target, direction, kind, '
+        'status, entity_type, entity_id, operation_id, base_server_version, '
+        'local_revision, protocol_version, payload, attempt_count, '
+        'last_error_code, last_error_detail, created_at) '
+        "values (?, 'parked', 'remoteChange', 'retryableFailure', ?, ?, ?, "
+        "?, 0, 1, ?, 1, 'pulled_change_parked', ?, ?)",
+        [
+          target.wireName,
+          change.identity.entityType,
+          change.identity.rawId,
+          'parked:${change.identity.entityType}:${change.identity.rawId}',
+          change.serverVersion.value,
+          jsonEncode({
+            'serverVersion': change.serverVersion.value,
+            'serverSequence': change.serverSequence.value,
+            'sourceOperationId': change.sourceOperationId?.value,
+            'isRevocation': change.isRevocation,
+            'fields': change.fields.toWire(),
+          }),
+          failure.error.toString(),
+          now,
+        ],
+      );
+    }
+  }
+
+  /// Keeps each change of [unreadable] durably, one per entity, until the
+  /// device can read its entity's current server copy.
+  Future<void> _parkUnreadableRemoteChanges(
+    SyncTargetId target,
+    List<UnreadableRemoteChange> unreadable,
+  ) async {
+    final now = clock.nowUtc().millisecondsSinceEpoch;
+    for (final change in unreadable) {
+      await database.customStatement(
+        "delete from local_entity_sync_work where direction = 'parked' and "
+        "kind = 'unreadable' and sync_target = ? and entity_type = ? and "
+        'entity_id = ?',
+        [target.wireName, change.entityType, change.entityId],
+      );
+      await database.customStatement(
+        'insert into local_entity_sync_work (sync_target, direction, kind, '
+        'status, entity_type, entity_id, operation_id, base_server_version, '
+        'local_revision, protocol_version, payload, attempt_count, '
+        'last_error_code, last_error_detail, created_at) '
+        "values (?, 'parked', 'unreadable', 'retryableFailure', ?, ?, ?, 0, "
+        "0, 1, ?, 1, 'pulled_change_unreadable', ?, ?)",
+        [
+          target.wireName,
+          change.entityType,
+          change.entityId,
+          'parked:${change.entityType}:${change.entityId}',
+          jsonEncode({'serverSequence': change.serverSequence.value}),
+          change.error,
+          now,
+        ],
+      );
+    }
+  }
+
+  /// Reads again the server copy of each entity parked unreadable for
+  /// [target], by work id: the change to apply, null when the entity is gone,
+  /// and no entry while it still cannot be read.
+  Future<Map<int, RemoteEntityChange?>> _rereadUnreadableRemoteChanges(
+    SyncTargetId target,
+  ) async {
+    final rows = await database
+        .customSelect(
+          'select id, entity_type, entity_id, payload from '
+          "local_entity_sync_work where direction = 'parked' and "
+          "kind = 'unreadable' and sync_target = ? order by id",
+          variables: [Variable.withString(target.wireName)],
+        )
+        .get();
+    final reread = <int, RemoteEntityChange?>{};
+    for (final row in rows) {
+      try {
+        final engine = _engineFor(row.read<String>('entity_type'));
+        final loader = engine._backend;
+        if (loader is! SnapshotSyncAdapter) continue;
+        final identity = engine.descriptor.parseIdentity(
+          row.read<String>('entity_id'),
+        );
+        final snapshot = await loader.fetchSnapshot(identity);
+        reread[row.read<int>('id')] = snapshot == null
+            ? null
+            : RemoteEntityChange(
+                identity: identity,
+                serverVersion: snapshot.serverVersion,
+                fields: snapshot.fields,
+                serverSequence: ServerSequence(
+                  _decodeMap(
+                        jsonDecode(row.read<String>('payload')),
+                      )['serverSequence']!
+                      as int,
+                ),
+              );
+      } on Object {
+        // Still unreadable, or the network is away: it stays parked and is
+        // read again on the next pull.
+      }
+    }
+    return reread;
+  }
+
+  RemoteEntityChange _decodeParkedRemoteChange(
+    String entityType,
+    JsonMap payload,
+  ) {
+    final descriptor = _descriptorFor(entityType);
+    final isRevocation = payload['isRevocation'] == true;
+    final fields = RemoteEntityFields.decode(
+      descriptor,
+      _decodeMap(payload['fields']),
+      complete: !isRevocation,
+    );
+    final sourceOperationId = payload['sourceOperationId'];
+    return RemoteEntityChange(
+      identity: fields.identity,
+      serverVersion: ServerVersion(payload['serverVersion']! as int),
+      fields: fields,
+      serverSequence: ServerSequence(payload['serverSequence']! as int),
+      sourceOperationId: sourceOperationId == null
+          ? null
+          : parseSyncOperationId(sourceOperationId as String),
+      isRevocation: isRevocation,
+    );
   }
 
   Future<SyncFailureOutcome> _handleFailure(
@@ -7285,6 +7662,22 @@ final class _RejectedProjection {
   final JsonMap? fields;
   final int localRevision;
   final Set<String> changedFieldNames;
+}
+
+/// A pulled change the device could not store yet, with why.
+typedef _FailedRemoteChange = ({RemoteEntityChange change, Object error});
+
+Variable _fieldDatabaseVariable(EntityFieldDescriptor field, Object value) {
+  final encoded = field.toDatabase(value)!;
+  return switch (field.kind) {
+    EntityFieldKind.boolean ||
+    EntityFieldKind.integer => Variable.withInt(encoded as int),
+    EntityFieldKind.real => Variable.withReal(encoded as double),
+    EntityFieldKind.text ||
+    EntityFieldKind.uuid ||
+    EntityFieldKind.date ||
+    EntityFieldKind.timestamp => Variable.withString(encoded as String),
+  };
 }
 
 final class _MergedRemoteProjection {
