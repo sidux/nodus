@@ -3098,6 +3098,15 @@ void _emitEntityFunctions(
         "    raise exception 'Authentication required' using errcode = '42501';",
       )
       ..writeln('  end if;')
+      ..writeln(
+        "  if public.is_agent_request() and not public.agent_writable("
+        "'${spec.className}') then",
+      )
+      ..writeln(
+        "    raise exception 'Agents cannot change this entity' "
+        "using errcode = '42501';",
+      )
+      ..writeln('  end if;')
       ..writeln("  if jsonb_typeof(p_operations) <> 'array' then")
       ..writeln(
         "    raise exception 'Operations must be an array' using errcode = '22023';",
@@ -3321,6 +3330,12 @@ void _emitEntityFunctions(
     ..writeln('  if auth.uid() is null then')
     ..writeln(
       "    raise exception 'Authentication required' using errcode = '42501';",
+    )
+    ..writeln('  end if;')
+    ..writeln('  if public.is_agent_request() then')
+    ..writeln(
+      "    raise exception 'Agents read through run_agent_tool' "
+      "using errcode = '42501';",
     )
     ..writeln('  end if;')
     ..writeln(

@@ -34,6 +34,9 @@ final class EntitySpec {
     this.syncModeOverride,
     this.syncTargetOverride,
     this.convergentCreates = false,
+    this.documentation,
+    this.agentAccess,
+    this.agentText,
   });
 
   final String className;
@@ -69,6 +72,15 @@ final class EntitySpec {
   /// Whether a create meeting the row its identity already names is accepted
   /// as that row; see `Entity.convergentCreates`.
   final bool convergentCreates;
+
+  /// The declaration's documentation comment, without comment markers.
+  final String? documentation;
+
+  /// How AI agents may use this entity; null keeps it out of their reach.
+  final AgentAccessSpec? agentAccess;
+
+  /// Declares this entity's ordered rows as a document's plain text.
+  final AgentTextSpec? agentText;
 
   String get sourceBaseName =>
       inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
@@ -585,6 +597,9 @@ final class EntitySpec {
       syncModeOverride: syncModeOverride,
       syncTargetOverride: syncTargetOverride,
       convergentCreates: convergentCreates,
+      documentation: documentation,
+      agentAccess: agentAccess,
+      agentText: agentText,
     );
   }
 
@@ -1410,6 +1425,8 @@ final class ActionSpec {
     required this.assignments,
     this.bulk = false,
     this.rebase,
+    this.agentTool = false,
+    this.documentation,
   });
 
   final String methodName;
@@ -1420,10 +1437,35 @@ final class ActionSpec {
   /// Dart expression naming the declared rebase function, if any.
   final String? rebase;
 
+  /// Whether agents may call this action through a generated tool.
+  final bool agentTool;
+
+  /// The action's documentation comment, without comment markers.
+  final String? documentation;
+
   List<String> get targetFields => [
     ...parameters.map((parameter) => parameter.fieldName),
     ...assignments.map((assignment) => assignment.fieldName),
   ];
+}
+
+final class AgentAccessSpec {
+  const AgentAccessSpec({required this.create, required this.edit});
+
+  final bool create;
+  final bool edit;
+}
+
+final class AgentTextSpec {
+  const AgentTextSpec({
+    required this.documentFieldName,
+    required this.textFieldName,
+    required this.terminator,
+  });
+
+  final String documentFieldName;
+  final String textFieldName;
+  final String terminator;
 }
 
 final class ActionParameterSpec {
@@ -1511,6 +1553,7 @@ final class FieldSpec {
     this.draftEditableOverride,
     this.persistedVariantName,
     this.persistedVariantComponentNullable,
+    this.documentation,
   });
 
   final String name;
@@ -1590,6 +1633,9 @@ final class FieldSpec {
   final String? persistedVariantName;
   final bool? persistedVariantComponentNullable;
 
+  /// The field's documentation comment, without comment markers.
+  final String? documentation;
+
   FieldSpec withReference(ReferenceSpec value) => _copy(reference: value);
 
   FieldSpec withTransitions(List<ValueTransitionSpec> value) =>
@@ -1654,6 +1700,7 @@ final class FieldSpec {
     draftEditableOverride: draftEditableOverride,
     persistedVariantName: persistedVariantName,
     persistedVariantComponentNullable: persistedVariantComponentNullable,
+    documentation: documentation,
   );
 
   bool get isServerManaged => authority == FieldAuthority.server;

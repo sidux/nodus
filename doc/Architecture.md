@@ -2660,6 +2660,32 @@ the principal's remaining rows become identity-only revocations, and the
 principal's own history is purged. Applications MUST NOT hand-write that
 policy per entity.
 
+### 11.1 Agent tool surface
+
+AI agents (MCP clients such as Claude, ChatGPT, or Gemini) act in an account
+through a generated, schema-capable target surface, never through a
+handwritten tool list. An entity joins only through `@AgentAccess`; its
+generated list and get tools read under row-level security, `create` and
+`edit` add tools for the inferred create payload and edit draft, and a
+declared `@Action` joins only with `@AgentTool`. A document composed through
+`@AgentText` is read and written as plain text. Documentation comments of
+the entity, its fields, and its actions become tool and argument
+descriptions.
+
+The target emits one manifest function (`list_agent_tools`) and one
+dispatcher (`run_agent_tool`). Every write runs through the generated push
+function with the caller's own identity, so an agent meets exactly the rules,
+authorization, change capture, and synchronization of any other client. An
+optional idempotency key derives operation and entity identities, so a
+retried call converges on the first result.
+
+A token issued to an OAuth client is an agent request. Generated push
+functions refuse it outside the declared writable set, graph and entity pull
+functions refuse it, and every table outside the readable set carries a
+restrictive policy that refuses it. A revoked agent is refused before its
+token expires. Expose an intent only once every rule it implies runs on the
+target: a decision kept in client code would be skipped by an agent.
+
 ## 12. Serialization and API boundaries
 
 One semantic codec definition is generated per declared type. From it, target

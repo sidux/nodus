@@ -1065,6 +1065,70 @@ void main() {
     expect(output, contains('final executor = await localStore.open('));
   });
 
+  test('agent access generates confined tools from the declarations', () {
+    EntitySpec entity({
+      required String className,
+      required String tableName,
+      AgentAccessSpec? agentAccess,
+    }) => EntitySpec(
+      className: className,
+      packageName: spec.packageName,
+      inputImport: spec.inputImport,
+      tableName: tableName,
+      ownership: spec.ownership,
+      cardinality: spec.cardinality,
+      authenticatedReadSync: spec.authenticatedReadSync,
+      hasSoftDeletableCapability: true,
+      fields: spec.fields,
+      security: spec.security,
+      commands: spec.commands,
+      documentation: 'A unit of work.',
+      agentAccess: agentAccess,
+    );
+    final exposed = entity(
+      className: 'WorkItem',
+      tableName: 'work_items',
+      agentAccess: const AgentAccessSpec(create: true, edit: true),
+    );
+    final hidden = entity(className: 'Secret', tableName: 'secrets');
+    final sql = emitEntityGraphSupabaseSql(
+      _supabaseGraph(
+        className: 'ExampleGraph',
+        inputImport: 'package:example/app/example_graph.dart',
+        schemaVersion: 2,
+        entities: [exposed, hidden],
+      ),
+    );
+
+    for (final tool in [
+      'list_work_items',
+      'get_work_item',
+      'create_work_item',
+      'edit_work_item',
+    ]) {
+      expect(sql, contains('function public.agent_tool_$tool(p_arguments'));
+      expect(sql, contains('"name": "$tool"'));
+      expect(sql, contains("when '$tool' then"));
+    }
+    expect(sql, isNot(contains('agent_tool_list_secrets')));
+    expect(sql, contains("select p_entity_type = any(array['WorkItem'])"));
+    expect(sql, contains('create policy "secrets_agent_scope"'));
+    expect(sql, isNot(contains('"work_items_agent_scope"')));
+    expect(sql, contains("'Agents read through run_agent_tool'"));
+    expect(
+      sql,
+      contains(
+        'revoke all on function public.agent_tool_create_work_item(jsonb) '
+        'from public, anon, authenticated, service_role;',
+      ),
+    );
+    expect(
+      emitSupabaseSql(exposed),
+      contains("public.is_agent_request() and not public.agent_writable("
+          "'WorkItem')"),
+    );
+  });
+
   test('unbounded authenticated reads stay out of graph pull by default', () {
     EntitySpec publicEntity({
       required Cardinality cardinality,

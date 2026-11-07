@@ -48,6 +48,12 @@ const _syncCommandChecker = TypeChecker.typeNamed(
   inPackage: 'nodus',
 );
 const _actionChecker = TypeChecker.typeNamed(Action, inPackage: 'nodus');
+const _agentAccessChecker = TypeChecker.typeNamed(
+  AgentAccess,
+  inPackage: 'nodus',
+);
+const _agentToolChecker = TypeChecker.typeNamed(AgentTool, inPackage: 'nodus');
+const _agentTextChecker = TypeChecker.typeNamed(AgentText, inPackage: 'nodus');
 const _entityProcessChecker = TypeChecker.typeNamed(
   EntityProcess,
   inPackage: 'nodus',
@@ -641,6 +647,9 @@ Future<EntitySpec?> parseEntityAsset(
     fields.add(
       FieldSpec(
         name: field.name!,
+        documentation: _documentation(
+          field.documentationComment ?? field.getter?.documentationComment,
+        ),
         columnName: columnName,
         dartType: dartType,
         sqlType: sqlType,
@@ -1276,6 +1285,9 @@ Future<EntitySpec?> parseEntityAsset(
     syncModeOverride: syncMode,
     syncTargetOverride: syncTarget,
     convergentCreates: annotation.read('convergentCreates').boolValue,
+    documentation: _documentation(classElement.documentationComment),
+    agentAccess: _parseAgentAccess(classElement),
+    agentText: _parseAgentText(classElement, fieldsByNameForAgent(fields)),
   );
   _validateConvergentCreates(spec, classElement);
   final invalidDraftOverride = fields
@@ -4592,6 +4604,14 @@ List<ActionSpec> _parseActions(
   final actions = <ActionSpec>[];
   for (final method in classElement.methods) {
     final object = _actionChecker.firstAnnotationOf(method);
+    if (_agentToolChecker.hasAnnotationOf(method) &&
+        (object == null ||
+            !_agentAccessChecker.hasAnnotationOf(classElement))) {
+      throw InvalidGenerationSourceError(
+        'AgentTool marks a declared Action of an AgentAccess entity.',
+        element: method,
+      );
+    }
     if (object == null) continue;
     if (method.name == 'edit') {
       throw InvalidGenerationSourceError(
@@ -4723,6 +4743,8 @@ List<ActionSpec> _parseActions(
           parameters: parameters,
           assignments: assignments,
         ),
+        agentTool: _agentToolChecker.hasAnnotationOf(method),
+        documentation: _documentation(method.documentationComment),
       ),
     );
   }
@@ -6498,4 +6520,59 @@ void _validateConfiguredDefault(
       element: field,
     );
   }
+}
+
+/// The text of a documentation comment, without its comment markers.
+String? _documentation(String? comment) {
+  if (comment == null) return null;
+  final text = comment
+      .split('\n')
+      .map((line) => line.trim().replaceFirst(RegExp(r'^/// ?'), ''))
+      .join('\n')
+      .trim();
+  return text.isEmpty ? null : text;
+}
+
+Map<String, FieldSpec> fieldsByNameForAgent(List<FieldSpec> fields) => {
+  for (final field in fields) field.name: field,
+};
+
+AgentAccessSpec? _parseAgentAccess(ClassElement classElement) {
+  final object = _agentAccessChecker.firstAnnotationOf(classElement);
+  if (object == null) return null;
+  final annotation = ConstantReader(object);
+  return AgentAccessSpec(
+    create: annotation.read('create').boolValue,
+    edit: annotation.read('edit').boolValue,
+  );
+}
+
+AgentTextSpec? _parseAgentText(
+  ClassElement classElement,
+  Map<String, FieldSpec> fieldsByName,
+) {
+  final object = _agentTextChecker.firstAnnotationOf(classElement);
+  if (object == null) return null;
+  final annotation = ConstantReader(object);
+  final document = annotation.read('document').objectValue.toSymbolValue();
+  final text = annotation.read('text').objectValue.toSymbolValue();
+  final documentField = fieldsByName[document];
+  if (documentField == null || documentField.reference == null) {
+    throw InvalidGenerationSourceError(
+      'AgentText.document must name a reference field of this entity.',
+      element: classElement,
+    );
+  }
+  final textField = fieldsByName[text];
+  if (textField == null || !textField.dartType.startsWith('String')) {
+    throw InvalidGenerationSourceError(
+      'AgentText.text must name a persisted String field of this entity.',
+      element: classElement,
+    );
+  }
+  return AgentTextSpec(
+    documentFieldName: document!,
+    textFieldName: text!,
+    terminator: annotation.read('terminator').stringValue,
+  );
 }

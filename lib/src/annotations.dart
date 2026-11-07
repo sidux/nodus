@@ -998,3 +998,50 @@ final class SyncCommand {
   final String targetField;
   final SyncCommandValue value;
 }
+
+/// Exposes an entity to AI agents through the generated agent tool surface.
+///
+/// The entity's rows become readable through generated list and get tools,
+/// under the same row-level security as the account that signed the agent in.
+/// [create] and [edit] add tools for the generated create payload and the
+/// ordinary edit draft. Declared actions join only when annotated with
+/// [AgentTool]. A token issued to an agent can touch nothing else.
+///
+/// Expose an intent only once every rule it implies runs on the server: the
+/// agent sends that intent alone, so a rule kept in client code would be
+/// skipped.
+final class AgentAccess {
+  const AgentAccess({this.create = false, this.edit = false});
+
+  final bool create;
+  final bool edit;
+}
+
+/// Exposes a declared [Action] of an [AgentAccess] entity as an agent tool.
+///
+/// The action's documentation comment becomes the tool description.
+final class AgentTool {
+  const AgentTool();
+}
+
+/// Declares that the ordered rows of this entity form a document's plain text.
+///
+/// [document] names the reference to the composed document and [text] the
+/// text field. Agents read the document as the rows' text joined in order and
+/// write it as one row holding the whole text followed by [terminator], so an
+/// [AgentAccess] entity composing that document takes and returns its content
+/// as a string.
+final class AgentText {
+  const AgentText({
+    required this.document,
+    required this.text,
+    this.terminator = '',
+  });
+
+  final Symbol document;
+  final Symbol text;
+
+  /// Appended to written text when the document format ends every row with
+  /// a delimiter, such as a newline.
+  final String terminator;
+}

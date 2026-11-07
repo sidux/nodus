@@ -1,5 +1,6 @@
 import 'package:nodus/nodus.dart';
 
+import 'graph_agent_sql_emitter.dart';
 import 'model.dart';
 import 'sql_emitter.dart';
 
@@ -169,6 +170,9 @@ begin
   if auth.uid() is null then
     raise exception 'Authentication required' using errcode = '42501';
   end if;
+  if public.is_agent_request() then
+    raise exception 'Agents read through run_agent_tool' using errcode = '42501';
+  end if;
   select coalesce(array_agg(addressed.sequence order by addressed.sequence), '{}')
   into addressed_sequences
   from (
@@ -217,7 +221,8 @@ revoke all on function public.$functionName(bigint) from $supabaseApiRoles;
 grant execute on function public.$functionName(bigint) to authenticated;
 
 $principalRetirementSql
-''';
+
+${emitAgentSurfaceSql(graph)}''';
 }
 
 /// Emits the step that runs before a principal's identity is removed.
