@@ -503,17 +503,19 @@ end;
     final name = 'get_$singular';
     final related = <String>[];
     for (final other in all) {
-      for (final field in other.spec.fields) {
-        final reference = field.reference;
-        if (reference == null ||
-            reference.targetClassName != spec.className ||
-            field.isComposition ||
-            field == other.spec.ownerField) {
-          continue;
-        }
+      final pointing = [
+        for (final field in other.spec.fields)
+          if (field.reference?.targetClassName == spec.className &&
+              !field.isComposition &&
+              field != other.spec.ownerField)
+            field,
+      ];
+      for (final field in pointing) {
         final active = other.spec.activeRelationship;
+        // Rows of the same table, or of a table that points here through
+        // several fields, are told apart by the field that points here.
         final key = lowerCamelCase(
-          other.table == table
+          other.table == table || pointing.length > 1
               ? '${other.table}_by_${field.columnName}'
               : other.table,
         );

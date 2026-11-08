@@ -9251,6 +9251,66 @@ enum MembershipStatus { pending, approved, revoked }
     );
   });
 
+  test('agent reads name each list of rows that point to an entity through '
+      'several fields after the field', () async {
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources('''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@AgentAccess()
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Task implements OwnedBy<Task, Account>, SoftDeletable {
+  abstract final String title;
+}
+''', fileName: 'task.dart')
+        ..['nodus|lib/task_dependency.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/task.dart';
+
+@AgentAccess()
+@Entity(cardinality: Cardinality.unbounded)
+abstract class TaskDependency
+    implements OwnedBy<TaskDependency, Account>, Activatable {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(inverse: 'blockerLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+
+  @Reference(inverse: 'blockedLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> blockerTaskId;
+}
+'''
+        ..['nodus|lib/account.dart'] = 'final class Account {}',
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          predicate<String>((sql) {
+            final start = sql.indexOf(
+              'create or replace function public.agent_tool_get_task(',
+            );
+            final getTask = sql.substring(start, sql.indexOf(r'$$;', start));
+            return getTask.contains("'taskDependenciesByTaskId', coalesce((") &&
+                getTask.contains(
+                  "'taskDependenciesByBlockerTaskId', coalesce((",
+                ) &&
+                !getTask.contains("'taskDependencies', coalesce((");
+          }, 'names both lists of task dependencies after their field'),
+        ),
+      },
+    );
+  });
+
   test('rejects reserved Dart words as entity-set accessors', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
