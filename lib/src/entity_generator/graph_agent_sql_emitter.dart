@@ -6,6 +6,7 @@ import 'package:source_gen/source_gen.dart';
 import 'member_operations.dart';
 import 'member_operations_sql.dart';
 import 'model.dart';
+import 'sql_emitter.dart' show activeReferrerExistsSql, principalByIdExpression;
 
 /// Emits the agent tool surface of a graph target.
 ///
@@ -732,6 +733,72 @@ end;
     );
   }
 
+  /// The function that refuses a status change the graph keeps behind a
+  /// check while that check is pending: relationship editors may not take
+  /// such an edge, and an agent acting for the user may not either, so the
+  /// check is not skipped. It reads the checks with the generated guards'
+  /// rights, since an agent cannot read them itself. Null when [action]
+  /// takes no such edge.
+  ({String name, String sql})? _checkedEdges(ActionSpec action) {
+    final conditions = <String>[];
+    for (final assignment in action.assignments) {
+      if (assignment.kind != ActionValueKind.literal) continue;
+      final field = spec.fields.firstWhere(
+        (candidate) => candidate.name == assignment.fieldName,
+      );
+      final target = snakeCase(assignment.literal! as String);
+      for (final transition in field.transitions) {
+        if (transition.toWire != target ||
+            transition.relationshipBlockers.isEmpty) {
+          continue;
+        }
+        final blocked = transition.relationshipBlockers
+            .map(
+              (blocker) => activeReferrerExistsSql(
+                blocker,
+                'current_row.${spec.idField.columnName}',
+              ),
+            )
+            .join(' or ');
+        conditions.add(
+          "(current_row.${field.columnName} = '${transition.fromWire}' and ($blocked))",
+        );
+      }
+    }
+    if (conditions.isEmpty) return null;
+    final name =
+        'public.agent_${snakeCase(action.methodName)}_${singular}_awaits_check';
+    // Only about a row the caller may read.
+    final readable = {
+      for (final grant in spec.security.grants)
+        if (grant.operation == RlsOperation.select)
+          principalByIdExpression(spec, grant.principal, 'p_id'),
+    }.join(' or ');
+    return (
+      name: name,
+      sql:
+          '''
+create or replace function $name(p_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as \$\$
+  select coalesce((
+    select ${conditions.join(' or ')}
+    from public.$table current_row
+    where current_row.${spec.idField.columnName} = p_id
+      and ($readable)
+  ), false)
+\$\$;
+
+revoke all on function $name(uuid) from $_apiRoles;
+grant execute on function $name(uuid) to authenticated;
+''',
+    );
+  }
+
   _AgentTool _actionTool(ActionSpec action) {
     if (spec.isOrderScopeTransferAction(action)) {
       throw InvalidGenerationSourceError(
@@ -741,6 +808,7 @@ end;
     }
     final name = '${snakeCase(action.methodName)}_$singular';
     final fields = {for (final field in spec.fields) field.name: field};
+    final checked = _checkedEdges(action);
     final properties = <String, Object?>{
       'id': {'type': 'string', 'format': 'uuid'},
       for (final parameter in action.parameters)
@@ -776,7 +844,7 @@ end;
       destructive: false,
       idempotent: false,
       functionSql:
-          '''
+          '''${checked?.sql ?? ''}
 create or replace function public.agent_tool_$name(p_arguments jsonb)
 returns jsonb
 language plpgsql
@@ -789,6 +857,10 @@ begin
   perform public.agent_require_access();
   perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
 ${_selectRowSql('current_row')}
+${checked == null ? '' : '''  if ${checked.name}(current_row.${spec.idField.columnName}) then
+    raise exception 'This waits for a check: do it in Grittle so the reviewer is asked'
+      using errcode = '42501';
+  end if;'''}
 ${_pushSql(spec, operation: 'patch', entityId: 'current_row.${spec.idField.columnName}', patch: patch.join(', '), base: 'current_row.${spec.serverVersionField.columnName}')}
   select * into current_row from public.$table item where item.${spec.idField.columnName} = current_row.${spec.idField.columnName};
   return $rowFunction(current_row);

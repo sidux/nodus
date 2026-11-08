@@ -685,7 +685,7 @@ String _activitySourceAccessExpression(
   final expressions = source.security.grants
       .where((grant) => operations.contains(grant.operation))
       .map(
-        (grant) => _principalByIdExpression(
+        (grant) => principalByIdExpression(
           source,
           grant.principal,
           idExpression,
@@ -962,7 +962,7 @@ String _rpcAuthorizationExpression(
   final expressions = spec.security.grants
       .where((grant) => grant.operation == operation)
       .map(
-        (grant) => _principalByIdExpression(
+        (grant) => principalByIdExpression(
           spec,
           grant.principal,
           idExpression,
@@ -3438,7 +3438,7 @@ String _transitionValidationSql(EntitySpec spec) {
           final blockers = transition.relationshipBlockers;
           final actor = principals
               .map((principal) {
-                final granted = _principalByIdExpression(
+                final granted = principalByIdExpression(
                   spec,
                   principal,
                   'p_id',
@@ -3449,7 +3449,7 @@ String _transitionValidationSql(EntitySpec spec) {
                   return granted;
                 }
                 final blocked = blockers
-                    .map((blocker) => _activeReferrerExists(blocker, 'p_id'))
+                    .map((blocker) => activeReferrerExistsSql(blocker, 'p_id'))
                     .join(' or ');
                 return '($granted and not ($blocked))';
               })
@@ -3471,7 +3471,7 @@ String _transitionValidationSql(EntitySpec spec) {
 }
 
 /// Whether a row [referrer] describes references the row [id].
-String _activeReferrerExists(
+String activeReferrerExistsSql(
   ActiveReferrerSpec referrer,
   String id, {
   int depth = 0,
@@ -3484,7 +3484,7 @@ String _activeReferrerExists(
   return unless == null
       ? exists
       : '($exists and not '
-            '${_activeReferrerExists(unless, id, depth: depth + 1)})';
+            '${activeReferrerExistsSql(unless, id, depth: depth + 1)})';
 }
 
 String _activeReferrerConditions(
@@ -3518,7 +3518,7 @@ String _fieldUpdateAuthorizationSql(EntitySpec spec) {
   )) {
     final allowed = field.updatePrincipals
         .map(
-          (principal) => _principalByIdExpression(
+          (principal) => principalByIdExpression(
             spec,
             principal,
             'p_id',
@@ -3640,7 +3640,8 @@ ${indent}end if;''';
       .join('\n');
 }
 
-String _principalByIdExpression(
+/// SQL deciding whether the caller holds [principal]'s access to row [idExpression].
+String principalByIdExpression(
   EntitySpec spec,
   RlsPrincipal principal,
   String idExpression, {
