@@ -631,6 +631,13 @@ end;
           average = 'least(greatest($average, ${bounds[0]}), ${bounds[1]})';
         }
         return average;
+      case CopyOfSpec(:final fieldName):
+        if (!earlier.containsKey(fieldName)) {
+          throw InvalidGenerationSourceError(
+            'CopyOf(#$fieldName) must follow the starting value it copies.',
+          );
+        }
+        return 'starting_${snakeCase(fieldName)}';
       case BandedSpec():
         final source = earlier[value.fieldName];
         if (source == null) {

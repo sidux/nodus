@@ -895,6 +895,15 @@ String _dayRootDart(
             '.round()$clamp;',
           )
           ..writeln('  });');
+      case CopyOfSpec(:final fieldName):
+        if (!spec.initial.keys
+            .takeWhile((key) => key != entry.key)
+            .contains(fieldName)) {
+          throw InvalidGenerationSourceError(
+            'CopyOf(#$fieldName) must follow the starting value it copies.',
+          );
+        }
+        buffer.writeln('  final ${entry.key} = $fieldName;');
       case BandedSpec(:final fieldName, :final bounds, :final values):
         final type = target.dartType.replaceAll('?', '');
         final branches = [

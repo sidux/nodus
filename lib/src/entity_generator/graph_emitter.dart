@@ -2768,7 +2768,8 @@ void _emitEntityGraphRuntime(
       ..writeln('  void ${binding.installMethodName}({')
       ..writeln(
         binding.kind == DurableWorkBindingKind.process
-            ? '    required Future<void> Function(${binding.sources.single.entityClassName} source, GeneratedDurableWorkContext context) run,'
+            ? '    required Future<void> Function(${binding.sources.first.entityClassName} source, GeneratedDurableWorkContext context) run,\n'
+                  '    EntityPredicate<${binding.sources.first.entityClassName}> Function()? scope,'
             : '    required Future<void> Function(GeneratedDurableWorkContext context) run,',
       )
       ..writeln('  }) {')
@@ -2795,7 +2796,7 @@ void _emitEntityGraphRuntime(
       ..writeln('      ],')
       ..writeln(
         binding.kind == DurableWorkBindingKind.process
-            ? '      run: (context) => ${binding.sources.single.entityClassName}List.all(this).runGeneratedProcess((source) => run(source, context)),'
+            ? '      run: (context) => ${binding.sources.first.entityClassName}List.all(this, where: scope?.call()).runGeneratedProcess((source) => run(source, context)),'
             : '      run: run,',
       )
       ..writeln('    ));')

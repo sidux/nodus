@@ -1757,7 +1757,14 @@ abstract final class ApplyOutcomesProcessDeclaration {}
 ```
 
 `WorkSource` names one graph entity and, optionally, the persisted fields that
-can trigger the work; an empty field list means every projection change. The
+can trigger the work; an empty field list means every projection change.
+`wakeOn` adds other sources whose changes also wake the process, so a
+reconciliation over a small source (such as completed goals) reacts to a
+large one (such as tasks) without revisiting every row of it. The generated
+installer takes an optional `scope` predicate that narrows the rows the
+handler revisits. Because a process may run on every device that hears of a
+change, its handler MUST converge: apply idempotent outcomes, or write values
+derived from the data alone. The
 compiler validates the source, field symbols, and unique lower-camel name.
 Generation exposes one typed graph installer whose handler receives the stable
 source identity and a `GeneratedDurableWorkContext` containing the operation ID

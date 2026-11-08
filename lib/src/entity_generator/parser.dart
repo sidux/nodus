@@ -3229,13 +3229,19 @@ Future<List<DurableWorkBindingSpec>> _discoverDurableWorkBindings(
           name: name,
           kind: DurableWorkBindingKind.process,
           declarationImport: annotated.element.library!.uri.toString(),
-          sources: [
+          sources: _uniqueSources(name, [
             _parseDurableWorkSource(
               ConstantReader(reader.read('source').objectValue),
               annotated.element,
               entitiesByClass,
             ),
-          ],
+            for (final source in reader.read('wakeOn').listValue)
+              _parseDurableWorkSource(
+                ConstantReader(source),
+                annotated.element,
+                entitiesByClass,
+              ),
+          ], annotated.element),
         ),
       );
     }
@@ -3285,6 +3291,23 @@ Future<List<DurableWorkBindingSpec>> _discoverDurableWorkBindings(
   }
   bindings.sort((left, right) => left.name.compareTo(right.name));
   return List.unmodifiable(bindings);
+}
+
+List<DurableWorkSourceSpec> _uniqueSources(
+  String name,
+  List<DurableWorkSourceSpec> sources,
+  Element element,
+) {
+  final seen = <String>{};
+  for (final source in sources) {
+    if (!seen.add(source.entityClassName)) {
+      throw InvalidGenerationSourceError(
+        'Durable work `$name` repeats source `${source.entityClassName}`.',
+        element: element,
+      );
+    }
+  }
+  return sources;
 }
 
 void _validateDurableWorkName(String name, Element element, Set<String> names) {
@@ -6674,6 +6697,8 @@ DayRootSpec _parseDayRoot(ConstantReader root, ClassElement element) {
           minimum: reader.read('minimum').intValue,
           fallback: reader.read('fallback').intValue,
         );
+      case 'CopyOf':
+        return CopyOfSpec(reader.read('field').objectValue.toSymbolValue()!);
       case 'Banded':
         final bounds = [
           for (final bound in reader.read('bounds').listValue)

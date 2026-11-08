@@ -1124,8 +1124,10 @@ void main() {
     );
     expect(
       emitSupabaseSql(exposed),
-      contains("public.is_agent_request() and not public.agent_writable("
-          "'WorkItem')"),
+      contains(
+        "public.is_agent_request() and not public.agent_writable("
+        "'WorkItem')",
+      ),
     );
   });
 

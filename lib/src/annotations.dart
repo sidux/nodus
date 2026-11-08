@@ -815,10 +815,21 @@ final class WorkSource {
 /// recovery, and retry/backoff; application code supplies only the domain
 /// handler that applies the outcome through generated entity APIs.
 final class EntityProcess {
-  const EntityProcess({required this.name, required this.source});
+  const EntityProcess({
+    required this.name,
+    required this.source,
+    this.wakeOn = const [],
+  });
 
   final String name;
+
+  /// The entity whose rows the handler revisits, and whose changes wake it.
   final WorkSource source;
+
+  /// Other entities whose changes also wake the process, so a reconciliation
+  /// over a small [source] (such as completed goals) reacts to a large one
+  /// (such as tasks) without revisiting every row of it.
+  final List<WorkSource> wakeOn;
 }
 
 /// Declares a derived, non-authoritative destination projection.
@@ -1134,6 +1145,13 @@ final class WeekdayAverage extends StartingValue {
   final int days;
   final int minimum;
   final int fallback;
+}
+
+/// The starting value of another [field] declared before it.
+final class CopyOf extends StartingValue {
+  const CopyOf(this.field);
+
+  final Symbol field;
 }
 
 /// The value of [values] whose band the starting [field] falls in: below

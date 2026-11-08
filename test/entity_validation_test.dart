@@ -431,11 +431,15 @@ abstract class Slot implements OwnedBy<Slot, Account>, SoftDeletable, Ordered {
           'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
           'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
-              contains('LocalId<Day> dayIdFor(LocalId<Account> ownerId, '
-                  'LocalDate day)'),
+              contains(
+                'LocalId<Day> dayIdFor(LocalId<Account> ownerId, '
+                'LocalDate day)',
+              ),
               contains("'\${ownerId.value}/\${day.value}'"),
-              contains('LocalId<Slot> slotIdFor(LocalId<Day> dayId, '
-                  'String label)'),
+              contains(
+                'LocalId<Slot> slotIdFor(LocalId<Day> dayId, '
+                'String label)',
+              ),
               contains('extension DayMemberOperations on Day {'),
               contains('/// Pins a slot after the pinned ones.'),
               contains('Future<void> pinSlot('),
@@ -443,21 +447,27 @@ abstract class Slot implements OwnedBy<Slot, Account>, SoftDeletable, Ordered {
               contains('member = await slots(entityGraph)'),
               contains('.create(id: slotIdFor(id, label), label: label);'),
               contains('await member!.pin();'),
-              contains('await entityGraph.slots.moveAfter(member!.id, '
-                  'anchors.last.id);'),
+              contains(
+                'await entityGraph.slots.moveAfter(member!.id, '
+                'anchors.last.id);',
+              ),
             ]),
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(
             allOf([
               contains('create or replace function public.nodus_uuid_v5('),
-              contains('create or replace function public.days_id_for('
-                  'p_owner_id uuid, p_day date)'),
+              contains(
+                'create or replace function public.days_id_for('
+                'p_owner_id uuid, p_day date)',
+              ),
               contains('create or replace function public.days_pin_slot('),
               contains("'operation', 'create',"),
               contains("'commandName', 'moveInOrder',"),
               contains("member.lane in ('pinned')"),
-              contains('grant execute on function '
-                  'public.days_pin_slot(uuid, jsonb) to authenticated;'),
+              contains(
+                'grant execute on function '
+                'public.days_pin_slot(uuid, jsonb) to authenticated;',
+              ),
             ]),
           ),
         },
@@ -953,6 +963,8 @@ final class Account {}
           'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
             allOf([
               contains('void installApplyOutcomesProcess({'),
+              contains('EntityPredicate<Notification> Function()? scope'),
+              contains('where: scope?.call()'),
               contains('void installHomeWidgetsProjection({'),
               contains('Future<void> runHomeWidgetsProjectionNow()'),
               contains("import 'package:flutter/widgets.dart' hide Table;"),
@@ -971,6 +983,38 @@ final class Account {}
       );
     },
   );
+
+  test('rejects a process that wakes on its own source again', () async {
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity()
+abstract class Notification implements OwnedBy<Notification, Account> {
+  abstract final String status;
+}
+
+@EntityProcess(
+  name: 'applyOutcomes',
+  source: WorkSource(Notification, fields: [#status]),
+  wakeOn: [WorkSource(Notification)],
+)
+abstract final class ApplyOutcomesProcess {}
+
+final class Account {}
+''';
+
+    final result = await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources(source, fileName: 'notification.dart'),
+      rootPackage: 'nodus',
+    );
+
+    expect(result.succeeded, isFalse);
+    expect(
+      result.errors.join('\n'),
+      contains('Durable work `applyOutcomes` repeats source `Notification`.'),
+    );
+  });
 
   test(
     'infers ordinary drafts and keeps explicit creation facts read-only',

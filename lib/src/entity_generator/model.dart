@@ -1518,6 +1518,12 @@ final class WeekdayAverageSpec extends StartingValueSpec {
   final int fallback;
 }
 
+final class CopyOfSpec extends StartingValueSpec {
+  const CopyOfSpec(this.fieldName);
+
+  final String fieldName;
+}
+
 final class BandedSpec extends StartingValueSpec {
   const BandedSpec({
     required this.fieldName,
