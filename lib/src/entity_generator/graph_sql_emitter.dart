@@ -1,6 +1,7 @@
 import 'package:nodus/nodus.dart';
 
 import 'graph_agent_sql_emitter.dart';
+import 'member_operations_sql.dart';
 import 'model.dart';
 import 'sql_emitter.dart';
 
@@ -222,6 +223,7 @@ grant execute on function public.$functionName(bigint) to authenticated;
 
 $principalRetirementSql
 
+${emitMemberOperationsSql(graph)}
 ${emitAgentSurfaceSql(graph)}''';
 }
 

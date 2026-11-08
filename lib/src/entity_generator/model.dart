@@ -37,6 +37,8 @@ final class EntitySpec {
     this.documentation,
     this.agentAccess,
     this.agentText,
+    this.identity,
+    this.memberOperations,
   });
 
   final String className;
@@ -81,6 +83,12 @@ final class EntitySpec {
 
   /// Declares this entity's ordered rows as a document's plain text.
   final AgentTextSpec? agentText;
+
+  /// The declared derivation of this entity's convergent identity.
+  final DerivedIdentitySpec? identity;
+
+  /// Operations declared on the members of one of this root's collections.
+  final MemberOperationsSpec? memberOperations;
 
   String get sourceBaseName =>
       inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
@@ -600,6 +608,8 @@ final class EntitySpec {
       documentation: documentation,
       agentAccess: agentAccess,
       agentText: agentText,
+      identity: identity,
+      memberOperations: memberOperations,
     );
   }
 
@@ -1447,6 +1457,219 @@ final class ActionSpec {
     ...parameters.map((parameter) => parameter.fieldName),
     ...assignments.map((assignment) => assignment.fieldName),
   ];
+}
+
+/// A declared [DerivedIdentity]: the UUIDv5 of [namespace] and the key
+/// fields' values joined by `/`.
+final class DerivedIdentitySpec {
+  const DerivedIdentitySpec({
+    required this.namespace,
+    required this.keyFieldNames,
+  });
+
+  final String namespace;
+  final List<String> keyFieldNames;
+}
+
+/// Declared operations on the members of the root's [collection].
+final class MemberOperationsSpec {
+  const MemberOperationsSpec({
+    required this.collection,
+    required this.operations,
+    this.root,
+  });
+
+  final String collection;
+  final List<MemberOperationSpec> operations;
+  final DayRootSpec? root;
+}
+
+final class DayRootSpec {
+  const DayRootSpec({
+    required this.dateFieldName,
+    required this.timezoneFieldName,
+    required this.initial,
+  });
+
+  final String dateFieldName;
+
+  /// A field of the root's owner.
+  final String timezoneFieldName;
+  final Map<String, StartingValueSpec> initial;
+}
+
+sealed class StartingValueSpec {
+  const StartingValueSpec();
+}
+
+final class WeekdayAverageSpec extends StartingValueSpec {
+  const WeekdayAverageSpec({
+    required this.fieldName,
+    required this.presentFieldName,
+    required this.days,
+    required this.minimum,
+    required this.fallback,
+  });
+
+  final String fieldName;
+  final String presentFieldName;
+  final int days;
+  final int minimum;
+  final int fallback;
+}
+
+final class BandedSpec extends StartingValueSpec {
+  const BandedSpec({
+    required this.fieldName,
+    required this.bounds,
+    required this.values,
+  });
+
+  final String fieldName;
+  final List<int> bounds;
+
+  /// Enum constant names.
+  final List<String> values;
+}
+
+final class MemberOperationSpec {
+  const MemberOperationSpec({
+    required this.name,
+    required this.description,
+    required this.parameters,
+    required this.steps,
+    this.agentTool,
+  });
+
+  final String name;
+  final String description;
+  final List<OperationParameterSpec> parameters;
+  final List<MemberStepSpec> steps;
+  final String? agentTool;
+}
+
+final class OperationParameterSpec {
+  const OperationParameterSpec({
+    required this.name,
+    required this.fieldName,
+    required this.description,
+  });
+
+  final String name;
+
+  /// The member field whose type the parameter takes; null for a member key.
+  final String? fieldName;
+  final String description;
+
+  bool get isMember => fieldName == null;
+}
+
+sealed class MemberStepSpec {
+  const MemberStepSpec();
+}
+
+final class RequireStepSpec extends MemberStepSpec {
+  const RequireStepSpec(this.condition, this.message);
+
+  final OperationConditionSpec condition;
+  final String message;
+}
+
+final class WhenStepSpec extends MemberStepSpec {
+  const WhenStepSpec(this.condition, this.then, this.otherwise);
+
+  final OperationConditionSpec condition;
+  final List<MemberStepSpec> then;
+  final List<MemberStepSpec> otherwise;
+}
+
+final class StopStepSpec extends MemberStepSpec {
+  const StopStepSpec();
+}
+
+final class EnsureMemberStepSpec extends MemberStepSpec {
+  const EnsureMemberStepSpec(this.values, this.reset);
+
+  final Map<String, OperationValueSpec> values;
+  final String? reset;
+}
+
+final class ActStepSpec extends MemberStepSpec {
+  const ActStepSpec(this.action, this.arguments);
+
+  final String action;
+  final Map<String, OperationValueSpec> arguments;
+}
+
+final class PlaceStepSpec extends MemberStepSpec {
+  const PlaceStepSpec({required this.group, this.after, this.before});
+
+  final OperationConditionSpec group;
+
+  /// Parameter names of the anchors; both null for after-last placement.
+  final String? after;
+  final String? before;
+
+  bool get isNextTo => after != null || before != null;
+}
+
+sealed class OperationConditionSpec {
+  const OperationConditionSpec();
+}
+
+final class MemberLiveConditionSpec extends OperationConditionSpec {
+  const MemberLiveConditionSpec();
+}
+
+final class CompareConditionSpec extends OperationConditionSpec {
+  const CompareConditionSpec({
+    required this.subject,
+    required this.kind,
+    this.values = const [],
+    this.other,
+  });
+
+  final OperationValueSpec subject;
+  final CompareKind kind;
+
+  /// Enum constant names for [CompareKind.isIn].
+  final List<String> values;
+  final OperationValueSpec? other;
+}
+
+final class NotConditionSpec extends OperationConditionSpec {
+  const NotConditionSpec(this.condition);
+
+  final OperationConditionSpec condition;
+}
+
+final class AllConditionSpec extends OperationConditionSpec {
+  const AllConditionSpec(this.conditions);
+
+  final List<OperationConditionSpec> conditions;
+}
+
+sealed class OperationValueSpec {
+  const OperationValueSpec();
+}
+
+final class MemberFieldValueSpec extends OperationValueSpec {
+  const MemberFieldValueSpec(this.field);
+
+  final String field;
+}
+
+final class ParameterValueSpec extends OperationValueSpec {
+  const ParameterValueSpec(this.name);
+
+  final String name;
+}
+
+final class KeyTargetValueSpec extends OperationValueSpec {
+  const KeyTargetValueSpec(this.reference, this.field);
+
+  final String reference;
+  final String field;
 }
 
 final class AgentAccessSpec {

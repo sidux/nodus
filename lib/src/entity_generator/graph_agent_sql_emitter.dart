@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:nodus/nodus.dart';
 import 'package:source_gen/source_gen.dart';
 
+import 'member_operations.dart';
+import 'member_operations_sql.dart';
 import 'model.dart';
 
 /// Emits the agent tool surface of a graph target.
@@ -35,7 +37,24 @@ String emitAgentSurfaceSql(EntityGraphSpec graph) {
       }
     }
   }
-  final tools = [for (final entity in entities) ...entity.tools(entities)];
+  final operations = [
+    for (final root in graph.entities)
+      if (root.memberOperations != null)
+        MemberOperationsSql(ResolvedMemberOperations.of(root, graph)),
+  ];
+  for (final operations in operations) {
+    if (!operations.resolved.operations.any((op) => op.agentTool != null)) {
+      continue;
+    }
+    writable
+      ..add(operations.root.className)
+      ..add(operations.member.className);
+  }
+  final tools = [
+    for (final entity in entities) ...entity.tools(entities),
+    for (final operations in operations)
+      ..._operationTools(operations, entities),
+  ];
   final buffer = StringBuffer()
     ..writeln('-- Agent tool surface: what AI agents signed in through OAuth')
     ..writeln('-- may read and change, derived from AgentAccess declarations.')
@@ -1087,3 +1106,115 @@ String _plural(String label) => label.endsWith('s')
     : label.endsWith('y')
     ? '${label.substring(0, label.length - 1)}ies'
     : '${label}s';
+
+/// Agent tools for the member operations of [operations] exposed with
+/// `agentTool`: each runs on the caller's root for today, made when missing,
+/// and returns that root's live members in order.
+List<_AgentTool> _operationTools(
+  MemberOperationsSql operations,
+  List<_AgentEntity> entities,
+) {
+  final exposed = [
+    for (final operation in operations.resolved.operations)
+      if (operation.agentTool != null) operation,
+  ];
+  if (exposed.isEmpty) return const [];
+  final dayRoot =
+      operations.dayRoot ??
+      (throw InvalidGenerationSourceError(
+        'Agent member operations need a DayRoot on '
+        '${operations.root.className}.',
+      ));
+  final member =
+      entities
+          .where(
+            (entity) => entity.spec.className == operations.member.className,
+          )
+          .firstOrNull ??
+      (throw InvalidGenerationSourceError(
+        'Agent member operations need AgentAccess on '
+        '${operations.member.className}.',
+      ));
+  Map<String, Object?> keySchema(String description) => {
+    'type': 'string',
+    'format': 'uuid',
+    'description': description,
+  };
+  String keyLabel(String argument) =>
+      _words(argument.replaceAll(RegExp(r'Id$'), ''));
+  String keyObject(String prefix) =>
+      'jsonb_strip_nulls(jsonb_build_object(${[for (final name in operations.keyArguments) "${_quote(name)}, p_arguments -> ${_quote(_prefixed(prefix, name))}"].join(', ')}))';
+  _AgentTool tool(MemberOperationSpec operation) {
+    final name = operation.agentTool!;
+    final properties = <String, Object?>{
+      for (final argument in operations.keyArguments)
+        argument: keySchema(
+          'The ${keyLabel(argument)} to act on; name exactly one of '
+          '${operations.keyArguments.join(', ')}.',
+        ),
+      for (final parameter in operation.parameters)
+        if (parameter.isMember)
+          for (final argument in operations.keyArguments)
+            _prefixed(parameter.name, argument): keySchema(
+              '${parameter.description} Named by ${keyLabel(argument)}.',
+            )
+        else
+          parameter.name: {
+            ...?_schema(operations.resolved.field(parameter.fieldName!)),
+            'description': parameter.description,
+          },
+    };
+    final arguments = [
+      "${_quote(operations.resolved.key.name)}, ${keyObject('')}",
+      for (final parameter in operation.parameters)
+        if (parameter.isMember)
+          "${_quote(parameter.name)}, nullif(${keyObject(parameter.name)}, '{}'::jsonb)"
+        else
+          "${_quote(parameter.name)}, p_arguments -> ${_quote(parameter.name)}",
+    ];
+    return _AgentTool(
+      name: name,
+      title: _capitalized(_words(operation.name)),
+      description:
+          '${operation.description.replaceAll('\n', ' ')} Returns the '
+          "day's ${_words(operations.member.className)}s in order.",
+      properties: properties,
+      required: const [],
+      readOnly: false,
+      destructive: false,
+      idempotent: false,
+      functionSql:
+          '''
+create or replace function public.agent_tool_$name(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  root_id uuid;
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
+  root_id := ${dayRoot.function}();
+  perform ${operations.function(operation)}(
+    root_id,
+    jsonb_strip_nulls(jsonb_build_object(${arguments.join(', ')}))
+  );
+  return coalesce((
+    select jsonb_agg(${member.rowFunction}(item) order by item.order_rank, item.id)
+    from public.${operations.member.tableName} item
+    where item.${operations.rootColumn} = root_id and item.deleted_at is null
+  ), '[]'::jsonb);
+end;
+\$\$;
+''',
+    );
+  }
+
+  return [for (final operation in exposed) tool(operation)];
+}
+
+String _prefixed(String prefix, String name) => prefix.isEmpty
+    ? name
+    : '$prefix${name[0].toUpperCase()}${name.substring(1)}';

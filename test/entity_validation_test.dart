@@ -334,6 +334,151 @@ final class Account {}
     );
   });
 
+  group('member operations', () {
+    const day = r'''
+import 'package:nodus/nodus.dart';
+
+import 'slot.dart';
+
+const _pinned = Compare.isIn(MemberField(#lane), [Lane.pinned]);
+
+@MemberOperations(#slots, [
+  MemberOperation(
+    #pinSlot,
+    description: 'Pins a slot after the pinned ones.',
+    steps: [
+      When(_pinned, [Stop()]),
+      EnsureMember(),
+      Act(#pin),
+      Place.afterLast(_pinned),
+    ],
+  ),
+])
+@Entity(
+  convergentCreates: true,
+  identity: DerivedIdentity('3d7c2f0e-5b8a-4e61-9a0d-6c1f2b7e9a45', [
+    #ownerId,
+    #day,
+  ]),
+  grants: [
+    RlsGrant(RlsOperation.select, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.update, RlsPrincipal.owner),
+  ],
+  indexes: [
+    CompoundIndex([#ownerId, #day], unique: true),
+  ],
+)
+abstract class Day implements OwnedBy<Day, Account> {
+  abstract final LocalDate day;
+}
+
+final class Account {}
+''';
+    const slot = r'''
+import 'package:nodus/nodus.dart';
+
+import 'note.dart';
+
+enum Lane { open, pinned }
+
+@Entity(
+  convergentCreates: true,
+  identity: DerivedIdentity('8b1e4c27-6d3f-4a90-b2c5-1e7f9d0a3c68', [
+    #dayId,
+    #label,
+  ]),
+  cardinality: Cardinality.bounded,
+  orderScope: [#dayId],
+  indexes: [
+    CompoundIndex([#dayId, #label], unique: true),
+  ],
+)
+abstract class Slot implements OwnedBy<Slot, Account>, SoftDeletable, Ordered {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(
+    inverse: 'slots',
+    onDelete: ReferenceDeleteAction.cascade,
+    aggregateMember: true,
+  )
+  abstract final LocalId<Day> dayId;
+
+  abstract final String label;
+
+  @Persisted(defaultValue: Lane.open, editable: false)
+  abstract final Lane lane;
+
+  @Action(values: [ActionValue(#lane, Lane.pinned)])
+  Future<void> pin();
+}
+''';
+    Map<String, String> sources({String action = '#pin'}) => {
+      ..._sources(day.replaceFirst('Act(#pin)', 'Act($action)')),
+      'nodus|lib/slot.dart': slot,
+    };
+
+    test('generate one rule for the application and the database', () async {
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources(),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('LocalId<Day> dayIdFor(LocalId<Account> ownerId, '
+                  'LocalDate day)'),
+              contains("'\${ownerId.value}/\${day.value}'"),
+              contains('LocalId<Slot> slotIdFor(LocalId<Day> dayId, '
+                  'String label)'),
+              contains('extension DayMemberOperations on Day {'),
+              contains('/// Pins a slot after the pinned ones.'),
+              contains('Future<void> pinSlot('),
+              contains('await entityGraph.transaction(() async {'),
+              contains('member = await slots(entityGraph)'),
+              contains('.create(id: slotIdFor(id, label), label: label);'),
+              contains('await member!.pin();'),
+              contains('await entityGraph.slots.moveAfter(member!.id, '
+                  'anchors.last.id);'),
+            ]),
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(
+            allOf([
+              contains('create or replace function public.nodus_uuid_v5('),
+              contains('create or replace function public.days_id_for('
+                  'p_owner_id uuid, p_day date)'),
+              contains('create or replace function public.days_pin_slot('),
+              contains("'operation', 'create',"),
+              contains("'commandName', 'moveInOrder',"),
+              contains("member.lane in ('pinned')"),
+              contains('grant execute on function '
+                  'public.days_pin_slot(uuid, jsonb) to authenticated;'),
+            ]),
+          ),
+        },
+      );
+    });
+
+    test('reject an action the member does not declare', () async {
+      final result = await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources(action: '#unpin'),
+        rootPackage: 'nodus',
+      );
+
+      expect(result.succeeded, isFalse);
+      expect(
+        result.errors.join('\n'),
+        contains('`unpin` is not a declared action of Slot.'),
+      );
+    });
+  });
+
   test('localOnly explicitly ignores a graph default target', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';

@@ -23,7 +23,7 @@ String emitSupabaseSql(
 
   final columns = spec.fields.map((field) {
     final clauses = <String>[
-      '  ${field.columnName} ${_postgresType(field)}',
+      '  ${field.columnName} ${postgresType(field)}',
       if (!field.nullable) 'not null',
       if (field.isId) 'primary key',
       if (field.name == spec.ownerField.name)
@@ -3801,7 +3801,7 @@ $indent  raise exception 'Owner is already a collaborator' using errcode = '2202
 ${indent}end if;''';
 }
 
-String _postgresType(FieldSpec field) => switch (field.sqlType) {
+String postgresType(FieldSpec field) => switch (field.sqlType) {
   SqlType.text => 'text',
   SqlType.uuid => 'uuid',
   SqlType.boolean => 'boolean',

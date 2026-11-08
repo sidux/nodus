@@ -54,6 +54,10 @@ const _agentAccessChecker = TypeChecker.typeNamed(
 );
 const _agentToolChecker = TypeChecker.typeNamed(AgentTool, inPackage: 'nodus');
 const _agentTextChecker = TypeChecker.typeNamed(AgentText, inPackage: 'nodus');
+const _memberOperationsChecker = TypeChecker.typeNamed(
+  MemberOperations,
+  inPackage: 'nodus',
+);
 const _entityProcessChecker = TypeChecker.typeNamed(
   EntityProcess,
   inPackage: 'nodus',
@@ -1288,6 +1292,8 @@ Future<EntitySpec?> parseEntityAsset(
     documentation: _documentation(classElement.documentationComment),
     agentAccess: _parseAgentAccess(classElement),
     agentText: _parseAgentText(classElement, fieldsByNameForAgent(fields)),
+    identity: _parseDerivedIdentity(annotation, classElement),
+    memberOperations: _parseMemberOperations(classElement),
   );
   _validateConvergentCreates(spec, classElement);
   final invalidDraftOverride = fields
@@ -6574,5 +6580,276 @@ AgentTextSpec? _parseAgentText(
     documentFieldName: document!,
     textFieldName: text!,
     terminator: annotation.read('terminator').stringValue,
+  );
+}
+
+DerivedIdentitySpec? _parseDerivedIdentity(
+  ConstantReader annotation,
+  ClassElement classElement,
+) {
+  final identity = annotation.read('identity');
+  if (identity.isNull) return null;
+  if (!annotation.read('convergentCreates').boolValue) {
+    throw InvalidGenerationSourceError(
+      'Entity.identity requires convergentCreates: an identity derived from '
+      'the unique key exists so that devices converge on one row.',
+      element: classElement,
+    );
+  }
+  final namespace = identity.read('namespace').stringValue;
+  if (!RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+  ).hasMatch(namespace)) {
+    throw InvalidGenerationSourceError(
+      'DerivedIdentity.namespace must be a lowercase UUID.',
+      element: classElement,
+    );
+  }
+  final key = [
+    for (final part in identity.read('key').listValue) part.toSymbolValue()!,
+  ];
+  if (key.isEmpty) {
+    throw InvalidGenerationSourceError(
+      'DerivedIdentity.key must name at least one field.',
+      element: classElement,
+    );
+  }
+  return DerivedIdentitySpec(namespace: namespace, keyFieldNames: key);
+}
+
+MemberOperationsSpec? _parseMemberOperations(ClassElement classElement) {
+  final object = _memberOperationsChecker.firstAnnotationOf(classElement);
+  if (object == null) return null;
+  final annotation = ConstantReader(object);
+  final names = <String>{};
+  final operations = <MemberOperationSpec>[];
+  for (final operation in annotation.read('operations').listValue) {
+    final reader = ConstantReader(operation);
+    final name = reader.read('name').objectValue.toSymbolValue()!;
+    if (!names.add(name)) {
+      throw InvalidGenerationSourceError(
+        'MemberOperations declares `$name` more than once.',
+        element: classElement,
+      );
+    }
+    final description = reader.read('description').stringValue.trim();
+    if (description.isEmpty) {
+      throw InvalidGenerationSourceError(
+        'MemberOperation `$name` needs a description.',
+        element: classElement,
+      );
+    }
+    operations.add(
+      MemberOperationSpec(
+        name: name,
+        description: description,
+        parameters: [
+          for (final parameter in reader.read('parameters').listValue)
+            _parseOperationParameter(ConstantReader(parameter)),
+        ],
+        steps: _parseMemberSteps(reader.read('steps').listValue, classElement),
+        agentTool: reader.read('agentTool').isNull
+            ? null
+            : reader.read('agentTool').stringValue,
+      ),
+    );
+  }
+  final root = annotation.read('root');
+  return MemberOperationsSpec(
+    collection: annotation.read('collection').objectValue.toSymbolValue()!,
+    operations: operations,
+    root: root.isNull ? null : _parseDayRoot(root, classElement),
+  );
+}
+
+DayRootSpec _parseDayRoot(ConstantReader root, ClassElement element) {
+  StartingValueSpec value(DartObject object) {
+    final reader = ConstantReader(object);
+    switch (object.type?.element?.name) {
+      case 'WeekdayAverage':
+        return WeekdayAverageSpec(
+          fieldName: reader.read('field').objectValue.toSymbolValue()!,
+          presentFieldName: reader.read('present').objectValue.toSymbolValue()!,
+          days: reader.read('days').intValue,
+          minimum: reader.read('minimum').intValue,
+          fallback: reader.read('fallback').intValue,
+        );
+      case 'Banded':
+        final bounds = [
+          for (final bound in reader.read('bounds').listValue)
+            bound.toIntValue()!,
+        ];
+        final values = [
+          for (final value in reader.read('values').listValue)
+            value.variable?.name ??
+                (throw InvalidGenerationSourceError(
+                  'Banded takes enum constants.',
+                  element: element,
+                )),
+        ];
+        if (values.length != bounds.length + 1) {
+          throw InvalidGenerationSourceError(
+            'Banded needs one more value than bounds.',
+            element: element,
+          );
+        }
+        return BandedSpec(
+          fieldName: reader.read('field').objectValue.toSymbolValue()!,
+          bounds: bounds,
+          values: values,
+        );
+    }
+    throw InvalidGenerationSourceError(
+      'Unsupported starting value `${object.type}`.',
+      element: element,
+    );
+  }
+
+  return DayRootSpec(
+    dateFieldName: root.read('date').objectValue.toSymbolValue()!,
+    timezoneFieldName: root.read('timezone').objectValue.toSymbolValue()!,
+    initial: {
+      for (final entry in root.read('initial').mapValue.entries)
+        entry.key!.toSymbolValue()!: value(entry.value!),
+    },
+  );
+}
+
+OperationParameterSpec _parseOperationParameter(ConstantReader reader) {
+  final field = reader.read('field');
+  return OperationParameterSpec(
+    name: reader.read('name').objectValue.toSymbolValue()!,
+    fieldName: field.isNull ? null : field.objectValue.toSymbolValue(),
+    description: reader.read('description').stringValue,
+  );
+}
+
+List<MemberStepSpec> _parseMemberSteps(
+  List<DartObject> steps,
+  ClassElement element,
+) => [for (final step in steps) _parseMemberStep(step, element)];
+
+MemberStepSpec _parseMemberStep(DartObject step, ClassElement element) {
+  final reader = ConstantReader(step);
+  switch (step.type?.element?.name) {
+    case 'Require':
+      return RequireStepSpec(
+        _parseOperationCondition(reader.read('condition').objectValue, element),
+        reader.read('message').stringValue,
+      );
+    case 'When':
+      return WhenStepSpec(
+        _parseOperationCondition(reader.read('condition').objectValue, element),
+        _parseMemberSteps(reader.read('then').listValue, element),
+        _parseMemberSteps(reader.read('otherwise').listValue, element),
+      );
+    case 'Stop':
+      return const StopStepSpec();
+    case 'EnsureMember':
+      final reset = reader.read('reset');
+      return EnsureMemberStepSpec(
+        _parseOperationValues(reader.read('values').mapValue, element),
+        reset.isNull ? null : reset.objectValue.toSymbolValue(),
+      );
+    case 'Act':
+      return ActStepSpec(
+        reader.read('action').objectValue.toSymbolValue()!,
+        _parseOperationValues(reader.read('arguments').mapValue, element),
+      );
+    case 'Place':
+      final after = reader.read('after');
+      final before = reader.read('before');
+      return PlaceStepSpec(
+        group: _parseOperationCondition(
+          reader.read('group').objectValue,
+          element,
+        ),
+        after: after.isNull ? null : after.objectValue.toSymbolValue(),
+        before: before.isNull ? null : before.objectValue.toSymbolValue(),
+      );
+  }
+  throw InvalidGenerationSourceError(
+    'Unsupported member operation step `${step.type}`.',
+    element: element,
+  );
+}
+
+Map<String, OperationValueSpec> _parseOperationValues(
+  Map<DartObject?, DartObject?> values,
+  ClassElement element,
+) => {
+  for (final entry in values.entries)
+    entry.key!.toSymbolValue()!: _parseOperationValue(entry.value!, element),
+};
+
+OperationConditionSpec _parseOperationCondition(
+  DartObject condition,
+  ClassElement element,
+) {
+  final reader = ConstantReader(condition);
+  switch (condition.type?.element?.name) {
+    case 'MemberLive':
+      return const MemberLiveConditionSpec();
+    case 'Not':
+      return NotConditionSpec(
+        _parseOperationCondition(reader.read('condition').objectValue, element),
+      );
+    case 'All':
+      return AllConditionSpec([
+        for (final part in reader.read('conditions').listValue)
+          _parseOperationCondition(part, element),
+      ]);
+    case 'Compare':
+      final kindName = reader.read('kind').objectValue.variable?.name;
+      final kind = CompareKind.values.byName(kindName!);
+      final other = reader.read('other');
+      return CompareConditionSpec(
+        subject: _parseOperationValue(
+          reader.read('subject').objectValue,
+          element,
+        ),
+        kind: kind,
+        values: [
+          for (final value in reader.read('values').listValue)
+            value.variable?.name ??
+                (throw InvalidGenerationSourceError(
+                  'Compare.isIn takes enum constants.',
+                  element: element,
+                )),
+        ],
+        other: other.isNull
+            ? null
+            : _parseOperationValue(other.objectValue, element),
+      );
+  }
+  throw InvalidGenerationSourceError(
+    'Unsupported member operation condition `${condition.type}`.',
+    element: element,
+  );
+}
+
+OperationValueSpec _parseOperationValue(
+  DartObject value,
+  ClassElement element,
+) {
+  final reader = ConstantReader(value);
+  switch (value.type?.element?.name) {
+    case 'MemberField':
+      return MemberFieldValueSpec(
+        reader.read('field').objectValue.toSymbolValue()!,
+      );
+    case 'Parameter':
+      return ParameterValueSpec(
+        reader.read('name').objectValue.toSymbolValue()!,
+      );
+    case 'KeyTarget':
+      return KeyTargetValueSpec(
+        reader.read('reference').objectValue.toSymbolValue()!,
+        reader.read('field').objectValue.toSymbolValue()!,
+      );
+  }
+  throw InvalidGenerationSourceError(
+    'Unsupported member operation value `${value.type}`.',
+    element: element,
   );
 }

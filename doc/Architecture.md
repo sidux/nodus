@@ -695,7 +695,8 @@ The ordinary create/edit mutation draft is inferred from editable fields and
 MUST NOT require a second authored form model. A real single-entity decision is expressed by pure
 computed, guard, or value methods referenced explicitly by its action.
 A decision requiring other entities or several mutations is a transaction
-rooted at the owning aggregate. External I/O uses the entity-owned process or
+rooted at the owning aggregate; when every target must apply it, it is a
+declared member operation (section 6.7) rather than handwritten code. External I/O uses the entity-owned process or
 typed capability boundary from sections 6.6 and 9 and never runs inside a local
 database transaction. Handwritten code owns the decision; generated code owns
 the awaited mutation method, validation plumbing, persistence, queueing, and
@@ -1766,6 +1767,56 @@ the irreducible domain decision and applies outcomes through generated entity,
 relationship, aggregate, or query-owned actions. A successful checkpoint MUST
 be committed with its outcome when replay could otherwise duplicate behavior.
 
+### 6.7 Declared member operations and derived identities
+
+A rule that changes one member of an aggregate in several steps, and that
+every target must apply alike, is declared once on the aggregate root with
+`@MemberOperations` and generated into the application and every
+schema-capable target. Handwritten copies per target are forbidden: they
+drift.
+
+```dart
+@MemberOperations(#items, [
+  MemberOperation(
+    #pin,
+    description: 'Pins an item at the end of the pinned items.',
+    steps: [
+      When(_pinned, [Stop()]),
+      EnsureMember(reset: #updatePlanningOutput),
+      Act(#pin),
+      Place.afterLast(_pinned),
+    ],
+    agentTool: 'pin_on_today',
+  ),
+])
+```
+
+The member is named by its key: a `DerivedIdentity` on the member keyed on
+the aggregate reference and one more field. Steps are a closed vocabulary:
+`Require` a condition, `When`/`Stop`, `EnsureMember` (keep the live member,
+restore and reset a removed one, or create one under its derived identity),
+`Act` with a declared action, and `Place` the member in the aggregate's
+order. Conditions read the member's fields, the operation's parameters, and
+a field of an entity the key references. Generation validates every symbol,
+action, and argument, and rejects anything outside the vocabulary.
+
+The application receives one awaited method per operation on the root. A
+graph transaction opens only where a path can make two or more changes, so
+a single change keeps its own commit. A schema-capable target receives one
+function per operation that applies the same steps through the generated
+push functions as the calling principal, so authorization, change capture,
+and synchronization are those of any client.
+
+`DerivedIdentity(namespace, key)` declares the UUIDv5 a convergent create
+uses; both targets derive it from the same key, so rows created by the
+application and by a target converge. A `DayRoot` lets a target reach the
+caller's root for their current day in their declared timezone, making it
+with declared `initial` values (such as a `WeekdayAverage`) that the
+application reads through the generated `<root>StartingValues`.
+
+A rule that stays a client computation, such as scoring a proposal, remains
+handwritten application code and is not exposed to targets.
+
 ## 7. Collections, queries, and identity
 
 One persisted entity ID maps to exactly one live object instance per account
@@ -2700,6 +2751,8 @@ function with the caller's own identity, so an agent meets exactly the rules,
 authorization, change capture, and synchronization of any other client. An
 optional idempotency key derives operation and entity identities, so a
 retried call converges on the first result.
+A member operation with an `agentTool` name joins the surface; it runs on the
+caller's `DayRoot` for today and returns the root's members in order.
 
 A token issued to an OAuth client is an agent request. Generated push
 functions refuse it outside the declared writable set, graph and entity pull

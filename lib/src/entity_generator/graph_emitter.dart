@@ -1,6 +1,7 @@
 import 'package:dart_style/dart_style.dart';
 import 'package:nodus/nodus.dart';
 
+import 'member_operations.dart';
 import 'model.dart';
 
 String emitEntityGraph(
@@ -86,6 +87,9 @@ String emitEntityGraph(
     buffer.writeln('}');
   }
   _emitCoIdentityConversions(buffer, graph);
+  buffer.write(
+    emitMemberOperationsDart(graph, '${graph.className}EntityGraph'),
+  );
   buffer
     ..writeln()
     ..writeln('@TableIndex.sql(')

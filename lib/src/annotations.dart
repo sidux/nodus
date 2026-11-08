@@ -1,5 +1,7 @@
 library;
 
+import 'package:uuid/uuid.dart';
+
 extension type const LocalId<T>._(String value) {
   factory LocalId(String source) => parseLocalId<T>(source);
 }
@@ -19,6 +21,10 @@ LocalId<T> parseLocalId<T>(String source) {
   }
   return LocalId<T>._(normalized);
 }
+
+/// The UUIDv5 of [namespace] and [name], which every device derives alike.
+LocalId<T> derivedLocalId<T>(String namespace, String name) =>
+    parseLocalId<T>(const Uuid().v5(namespace, name));
 
 LocalId<T>? tryParseLocalId<T>(String source) {
   if (!isValidLocalId(source)) return null;
@@ -339,6 +345,7 @@ final class Entity {
     this.syncTarget,
     this.coIdentityWith = const [],
     this.convergentCreates = false,
+    this.identity,
   });
 
   final String? table;
@@ -420,6 +427,24 @@ final class Entity {
   /// when the application derives the identity from the unique key, such as
   /// a UUIDv5 of an owner and a date; any other identity still conflicts.
   final bool convergentCreates;
+
+  /// Derives that identity from the unique key, so the application and every
+  /// schema-capable target compute the same one. Requires [convergentCreates].
+  final DerivedIdentity? identity;
+}
+
+/// The identity every device and target gives a row with one unique key:
+/// the UUIDv5 of [namespace] and the [key] fields' values joined by `/`.
+///
+/// A reference contributes its identity, a date its ISO form, and a
+/// persisted variant its case name followed by its reference, such as
+/// `task/<id>`. Generation exposes `<entity>IdFor(...)` taking the key in
+/// order and the same derivation to every schema-capable target.
+final class DerivedIdentity {
+  const DerivedIdentity(this.namespace, this.key);
+
+  final String namespace;
+  final List<Symbol> key;
 }
 
 final class ExclusiveFieldGroup {
@@ -1044,4 +1069,277 @@ final class AgentText {
   /// Appended to written text when the document format ends every row with
   /// a delimiter, such as a newline.
   final String terminator;
+}
+
+/// Declares multi-step changes to the members of an aggregate collection,
+/// written once and generated into a method on the aggregate root and into
+/// every schema-capable target, so the application and an agent apply the
+/// same rule.
+///
+/// [collection] names the inverse collection of the member's aggregate
+/// reference, such as `#items`. The member has a [DerivedIdentity] whose key
+/// is the aggregate reference followed by one field; that field is the
+/// operation's first parameter and names the member, live or removed.
+final class MemberOperations {
+  const MemberOperations(this.collection, this.operations, {this.root});
+
+  final Symbol collection;
+  final List<MemberOperation> operations;
+
+  /// How an agent finds the root: the owner's one for today, made when
+  /// missing. Required for operations exposed to agents.
+  final DayRoot? root;
+}
+
+/// A root keyed by its owner and a date, which agents reach for the owner's
+/// current day and which an operation makes when the day has none yet.
+///
+/// The root needs a [DerivedIdentity] on its owner and [date]. [timezone]
+/// names the owner's IANA timezone field, which decides the current day.
+/// [initial] gives each required field without a default its starting
+/// value; the application reads the same values through the generated
+/// `<root>StartingValues`.
+final class DayRoot {
+  const DayRoot({
+    required this.date,
+    required this.timezone,
+    this.initial = const {},
+  });
+
+  final Symbol date;
+  final Symbol timezone;
+  final Map<Symbol, StartingValue> initial;
+}
+
+/// The starting value of a [DayRoot] field.
+sealed class StartingValue {
+  const StartingValue();
+}
+
+/// The rounded mean of [field] over the owner's roots on the same weekday
+/// in the [days] before the date that have [present] set, when at least
+/// [minimum] do; otherwise [fallback]. The result is kept within the
+/// field's declared bounds.
+final class WeekdayAverage extends StartingValue {
+  const WeekdayAverage(
+    this.field, {
+    required this.present,
+    required this.days,
+    required this.minimum,
+    required this.fallback,
+  });
+
+  final Symbol field;
+  final Symbol present;
+  final int days;
+  final int minimum;
+  final int fallback;
+}
+
+/// The value of [values] whose band the starting [field] falls in: below
+/// `bounds[0]` gives `values[0]`, and so on, with the last value from the
+/// last bound up.
+final class Banded extends StartingValue {
+  const Banded(this.field, {required this.bounds, required this.values});
+
+  final Symbol field;
+  final List<int> bounds;
+  final List<Object> values;
+}
+
+/// One declared change to an aggregate member, named for its domain intent.
+///
+/// The steps run in order inside one transaction. [description] documents
+/// the generated method and, when [agentTool] exposes it, the agent tool.
+final class MemberOperation {
+  const MemberOperation(
+    this.name, {
+    required this.description,
+    required this.steps,
+    this.parameters = const [],
+    this.agentTool,
+  });
+
+  final Symbol name;
+  final String description;
+  final List<OperationParameter> parameters;
+  final List<MemberStep> steps;
+
+  /// Exposes the operation to agents under this tool name; the root needs a
+  /// [DayRoot] and the member [AgentAccess].
+  final String? agentTool;
+}
+
+/// An optional named parameter of a [MemberOperation].
+final class OperationParameter {
+  /// A value of the member field [field], such as a part of the day.
+  const OperationParameter(
+    this.name, {
+    required Symbol this.field,
+    required this.description,
+  }) : member = false;
+
+  /// Another member of the same aggregate, named by its key.
+  const OperationParameter.member(this.name, {required this.description})
+    : field = null,
+      member = true;
+
+  final Symbol name;
+  final Symbol? field;
+  final bool member;
+
+  /// Documents the parameter in the generated method and agent tool.
+  final String description;
+}
+
+/// One step of a [MemberOperation].
+sealed class MemberStep {
+  const MemberStep();
+}
+
+/// Refuses the operation with [message] unless [condition] holds.
+final class Require extends MemberStep {
+  const Require(this.condition, this.message);
+
+  final OperationCondition condition;
+  final String message;
+}
+
+/// Runs [then] when [condition] holds, otherwise [otherwise].
+final class When extends MemberStep {
+  const When(this.condition, this.then, {this.otherwise = const []});
+
+  final OperationCondition condition;
+  final List<MemberStep> then;
+  final List<MemberStep> otherwise;
+}
+
+/// Ends the operation.
+final class Stop extends MemberStep {
+  const Stop();
+}
+
+/// Makes the member live: a live one stays, a removed one is restored, reset
+/// through [reset] and appended, and an absent one is created under its
+/// derived identity at the end of the order. [values] fill the created or
+/// reset fields; every other field keeps its declared default.
+final class EnsureMember extends MemberStep {
+  const EnsureMember({this.values = const {}, this.reset});
+
+  final Map<Symbol, OperationValue> values;
+
+  /// A declared action of the member whose parameters are all fields.
+  final Symbol? reset;
+}
+
+/// Runs the member's declared [action] with [arguments]; other parameters
+/// take the member field's declared default.
+final class Act extends MemberStep {
+  const Act(this.action, {this.arguments = const {}});
+
+  final Symbol action;
+  final Map<Symbol, OperationValue> arguments;
+}
+
+/// Moves the member within its aggregate's order.
+final class Place extends MemberStep {
+  /// After the last live member matching [group], or first when none does.
+  const Place.afterLast(OperationCondition this.group)
+    : after = null,
+      before = null;
+
+  /// Next to the member named by parameter [after], else by [before], when
+  /// that member is live and on the member's side of [group]. A member
+  /// outside [group] asked to follow one inside it goes after the last
+  /// member of [group].
+  const Place.nextTo({
+    required this.after,
+    required this.before,
+    required OperationCondition this.group,
+  });
+
+  final OperationCondition? group;
+  final Symbol? after;
+  final Symbol? before;
+}
+
+/// A condition on the member, which is false for any field of an absent one.
+sealed class OperationCondition {
+  const OperationCondition();
+}
+
+/// Holds while the member is live.
+final class MemberLive extends OperationCondition {
+  const MemberLive();
+}
+
+/// Compares a member field or parameter.
+final class Compare extends OperationCondition {
+  /// The member field is one of [values].
+  const Compare.isIn(this.subject, this.values)
+    : kind = CompareKind.isIn,
+      other = null;
+
+  const Compare.isNull(this.subject)
+    : kind = CompareKind.isNull,
+      values = const [],
+      other = null;
+
+  const Compare.isTrue(this.subject)
+    : kind = CompareKind.isTrue,
+      values = const [],
+      other = null;
+
+  /// Both are present and different.
+  const Compare.differs(this.subject, OperationValue this.other)
+    : kind = CompareKind.differs,
+      values = const [];
+
+  final OperationValue subject;
+  final CompareKind kind;
+  final List<Object> values;
+  final OperationValue? other;
+}
+
+enum CompareKind { isIn, isNull, isTrue, differs }
+
+final class Not extends OperationCondition {
+  const Not(this.condition);
+
+  final OperationCondition condition;
+}
+
+final class All extends OperationCondition {
+  const All(this.conditions);
+
+  final List<OperationCondition> conditions;
+}
+
+/// A value an operation reads.
+sealed class OperationValue {
+  const OperationValue();
+}
+
+/// A field of the member.
+final class MemberField extends OperationValue {
+  const MemberField(this.field);
+
+  final Symbol field;
+}
+
+/// An operation parameter.
+final class Parameter extends OperationValue {
+  const Parameter(this.name);
+
+  final Symbol name;
+}
+
+/// A field of the entity a reference inside the member's key names, such as
+/// the habit a planned source points at. Null when the key names another
+/// case or the row is not readable.
+final class KeyTarget extends OperationValue {
+  const KeyTarget(this.reference, this.field);
+
+  final Symbol reference;
+  final Symbol field;
 }
