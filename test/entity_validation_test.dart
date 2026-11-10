@@ -489,6 +489,214 @@ abstract class Slot implements OwnedBy<Slot, Account>, SoftDeletable, Ordered {
     });
   });
 
+  group('check-ins', () {
+    const types = r'''
+import 'dart:collection';
+
+import 'package:nodus/nodus.dart';
+
+@DayParts({Part.morning: 0, Part.evening: 17}, wholeDay: Part.allDay)
+enum Part { morning, evening, allDay }
+
+@ScalarFlags(['morning', 'evening', 'all_day'])
+final class Parts extends IterableBase<Part>
+    implements PersistedScalarValue<int> {
+  const Parts.fromScalar(this._scalar);
+
+  final int _scalar;
+
+  @override
+  int toScalar() => _scalar;
+
+  @override
+  Iterator<Part> get iterator =>
+      Part.values.where((part) => _scalar & (1 << part.index) != 0).iterator;
+}
+
+sealed class Rhythm {
+  const Rhythm();
+}
+
+final class DailyRhythm extends Rhythm {
+  const DailyRhythm();
+}
+
+final class HourlyRhythm extends Rhythm {
+  const HourlyRhythm(this.everyHours);
+
+  @Persisted(minValue: 1)
+  final int everyHours;
+}
+''';
+    const account = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(cardinality: Cardinality.bounded, ownership: Ownership.identity)
+abstract class Account implements OwnedBy<Account, Account> {
+  @Persisted(defaultValue: 'UTC')
+  abstract final String timezone;
+}
+''';
+    const plant = r'''
+import 'package:nodus/nodus.dart';
+
+import 'account.dart';
+import 'types.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Plant implements OwnedBy<Plant, Account>, SoftDeletable {
+  @Persisted(defaultValue: 4)
+  abstract final Parts parts;
+
+  @PersistedVariant()
+  abstract final Rhythm rhythm;
+
+  @Persisted(defaultValue: false)
+  abstract final bool isSilk;
+}
+''';
+    const unwatering = r'''
+import 'package:nodus/nodus.dart';
+
+import 'account.dart';
+import 'plant.dart';
+import 'types.dart';
+
+@Entity()
+abstract class Unwatering implements OwnedBy<Unwatering, Account> {
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Plant> plantId;
+
+  abstract final LocalDate wateredOn;
+
+  abstract final Part part;
+
+  abstract final String? reason;
+}
+''';
+    const source = r'''
+import 'package:nodus/nodus.dart';
+
+import 'account.dart';
+import 'plant.dart';
+import 'types.dart';
+import 'unwatering.dart';
+
+@AgentAccess()
+@CheckIns(
+  subject: #plantId,
+  date: #wateredOn,
+  part: #part,
+  at: #wateredAt,
+  timezone: #timezone,
+  scheduledParts: #parts,
+  intervals: [Every.hours(#everyHours)],
+  refusals: [Refusal(#isSilk, 'A silk plant needs no water.')],
+  details: [#litres],
+  undoneAs: UndoneAs(Unwatering, comment: #reason),
+  checkInTool: 'water_plant',
+  undoTool: 'unwater_plant',
+)
+@Entity()
+abstract class Watering implements OwnedBy<Watering, Account>, SoftDeletable {
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Plant> plantId;
+
+  @Persisted(editable: false)
+  abstract final LocalDate wateredOn;
+
+  abstract final DateTime wateredAt;
+
+  @Persisted(defaultValue: Part.allDay, editable: false)
+  abstract final Part part;
+
+  abstract final int? litres;
+}
+''';
+    Map<String, String> sources({String partTypes = types}) => {
+      ..._sources(source),
+      'nodus|lib/types.dart': partTypes,
+      'nodus|lib/account.dart': account,
+      'nodus|lib/plant.dart': plant,
+      'nodus|lib/unwatering.dart': unwatering,
+    };
+
+    test('generate the same rules for the application and the database', () async {
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources(),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            allOf([
+              contains('Part partAt(DateTime moment) {'),
+              contains('if (hour >= 17) return Part.evening;'),
+              contains('extension PlantCheckIns on Plant {'),
+              contains('Future<WateringMutationDraft> beginCheckIn('),
+              contains('int? litres,'),
+              contains('if (this.isSilk) {'),
+              contains("message: 'A silk plant needs no water.',"),
+              contains('final wholeDay = this.parts.contains(Part.allDay);'),
+              contains('HourlyRhythm(:final everyHours) =>'),
+              contains('if (local.isBefore(due)) {'),
+              contains('tombstones: TombstoneVisibility.include,'),
+              contains('Future<List<Watering>> undoCheckIn('),
+              contains('await entityGraph.unwaterings.create('),
+              contains('reason: reason,'),
+            ]),
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(
+            allOf([
+              contains(
+                'create or replace function public.part_at('
+                'p_moment timestamptz, p_timezone text)',
+              ),
+              contains("when hour >= 17 then 'evening'"),
+              contains('create or replace function public.waterings_check_in('),
+              contains("raise exception 'A silk plant needs no water.'"),
+              contains('whole_day := (subject.parts & 4) <> 0;'),
+              contains('interval_active := (subject.every_hours is not null);'),
+              contains('make_interval(hours => subject.every_hours::int)'),
+              contains(
+                'create or replace function public.waterings_undo_check_in(',
+              ),
+              contains('perform public.push_unwaterings_operations('),
+              contains(
+                'create or replace function public.agent_tool_water_plant(',
+              ),
+              contains('"name": "unwater_plant"'),
+            ]),
+          ),
+        },
+      );
+    });
+
+    test('reject a part enum without day parts', () async {
+      final result = await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        sources(
+          partTypes: types.replaceFirst(
+            '@DayParts({Part.morning: 0, Part.evening: 17}, '
+                'wholeDay: Part.allDay)\n',
+            '',
+          ),
+        ),
+        rootPackage: 'nodus',
+      );
+
+      expect(result.succeeded, isFalse);
+      expect(
+        result.errors.join('\n'),
+        contains('must be an enum annotated with DayParts'),
+      );
+    });
+  });
+
   test('localOnly explicitly ignores a graph default target', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';

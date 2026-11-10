@@ -39,6 +39,7 @@ final class EntitySpec {
     this.agentText,
     this.identity,
     this.memberOperations,
+    this.checkIns,
   });
 
   final String className;
@@ -89,6 +90,9 @@ final class EntitySpec {
 
   /// Operations declared on the members of one of this root's collections.
   final MemberOperationsSpec? memberOperations;
+
+  /// How this log entity records check-ins of a scheduled subject.
+  final CheckInsSpec? checkIns;
 
   String get sourceBaseName =>
       inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
@@ -610,6 +614,7 @@ final class EntitySpec {
       agentText: agentText,
       identity: identity,
       memberOperations: memberOperations,
+      checkIns: checkIns,
     );
   }
 
@@ -1469,6 +1474,66 @@ final class DerivedIdentitySpec {
 
   final String namespace;
   final List<String> keyFieldNames;
+}
+
+/// A declared check-in log; see `CheckIns`.
+final class CheckInsSpec {
+  const CheckInsSpec({
+    required this.subjectFieldName,
+    required this.dateFieldName,
+    required this.partFieldName,
+    required this.atFieldName,
+    required this.timezoneFieldName,
+    required this.scheduledPartsFieldName,
+    required this.dayParts,
+    required this.intervals,
+    required this.refusals,
+    required this.agentRefusals,
+    required this.detailFieldNames,
+    required this.undoneAsClassName,
+    required this.undoCommentFieldName,
+    this.checkInTool,
+    this.undoTool,
+  });
+
+  final String subjectFieldName;
+  final String dateFieldName;
+  final String partFieldName;
+  final String atFieldName;
+  final String timezoneFieldName;
+  final String scheduledPartsFieldName;
+  final DayPartsSpec dayParts;
+  final List<EverySpec> intervals;
+  final List<RefusalSpec> refusals;
+  final List<RefusalSpec> agentRefusals;
+  final List<String> detailFieldNames;
+  final String undoneAsClassName;
+  final String undoCommentFieldName;
+  final String? checkInTool;
+  final String? undoTool;
+}
+
+/// The declared parts of a day: enum constant names with their start hours,
+/// in order of hour.
+final class DayPartsSpec {
+  const DayPartsSpec({required this.starts, required this.wholeDay});
+
+  final List<(String, int)> starts;
+  final String wholeDay;
+}
+
+final class EverySpec {
+  const EverySpec({required this.fieldName, required this.days});
+
+  final String fieldName;
+  final bool days;
+}
+
+final class RefusalSpec {
+  const RefusalSpec({required this.fieldName, required this.message});
+
+  final String fieldName;
+  final String message;
 }
 
 /// Declared operations on the members of the root's [collection].

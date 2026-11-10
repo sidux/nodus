@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:nodus/nodus.dart';
 import 'package:source_gen/source_gen.dart';
 
+import 'check_ins.dart';
 import 'member_operations.dart';
 import 'member_operations_sql.dart';
 import 'model.dart';
@@ -51,10 +52,21 @@ String emitAgentSurfaceSql(EntityGraphSpec graph) {
       ..add(operations.root.className)
       ..add(operations.member.className);
   }
+  final checkIns = [
+    for (final log in graph.entities)
+      if (log.checkIns != null) ResolvedCheckIns.of(log, graph),
+  ];
+  for (final log in checkIns) {
+    if (log.spec.checkInTool == null && log.spec.undoTool == null) continue;
+    writable
+      ..add(log.log.className)
+      ..add(log.undo.className);
+  }
   final tools = [
     for (final entity in entities) ...entity.tools(entities),
     for (final operations in operations)
       ..._operationTools(operations, entities),
+    for (final log in checkIns) ..._checkInTools(log, entities),
   ];
   final buffer = StringBuffer()
     ..writeln('-- Agent tool surface: what AI agents signed in through OAuth')
@@ -1866,6 +1878,142 @@ end;
   }
 
   return [for (final operation in exposed) tool(operation)];
+}
+
+/// Agent tools for a declared check-in log: checking a subject in now and
+/// undoing check-ins, each returning the affected log rows.
+List<_AgentTool> _checkInTools(
+  ResolvedCheckIns checkIns,
+  List<_AgentEntity> entities,
+) {
+  final spec = checkIns.spec;
+  if (spec.checkInTool == null && spec.undoTool == null) return const [];
+  final log =
+      entities
+          .where((entity) => entity.spec.className == checkIns.log.className)
+          .firstOrNull ??
+      (throw InvalidGenerationSourceError(
+        'Agent check-in tools need AgentAccess on ${checkIns.log.className}.',
+      ));
+  final subject = checkIns.subject;
+  final subjectLabel = _words(subject.className);
+  final subjectArgument = checkIns.subjectField.name;
+  final part = checkIns.part;
+  Map<String, Object?> schema(FieldSpec field, String description) => {
+    ...?_schema(field),
+    'description': description,
+  };
+  final subjectProperty = {
+    'type': 'string',
+    'format': 'uuid',
+    'description': 'The $subjectLabel.',
+  };
+  String rows(String ids) =>
+      "coalesce((select jsonb_agg(${log.rowFunction}(item) order by item.${checkIns.at.columnName} desc) "
+      'from public.${checkIns.log.tableName} item where item.id = any($ids)), '
+      "'[]'::jsonb)";
+  String function(String name, Map<String, Object?> properties, String body) =>
+      '''
+create or replace function public.agent_tool_$name(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  subject_id uuid;
+  ids uuid[];
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
+  subject_id := (public.agent_required(p_arguments, ${_quote(subjectArgument)}) #>> '{}')::uuid;
+$body
+end;
+\$\$;
+''';
+  final tools = <_AgentTool>[];
+  final checkInTool = spec.checkInTool;
+  if (checkInTool != null) {
+    final properties = <String, Object?>{
+      subjectArgument: subjectProperty,
+      part.name: schema(
+        part,
+        'The part of the day to check in for; the current one by default. '
+        'Only the current part of the day can be checked in, unless the '
+        '$subjectLabel is for the whole day.',
+      ),
+      for (final field in checkIns.details)
+        field.name: schema(field, 'Recorded with the check-in.'),
+    };
+    final refusals = [
+      for (final refusal in spec.agentRefusals)
+        '  if coalesce((select subject_row.${subject.fields.firstWhere((field) => field.name == refusal.fieldName).columnName} '
+            'from public.${subject.tableName} subject_row where subject_row.id = subject_id), false) then\n'
+            "    raise exception ${_quote(refusal.message)} using errcode = '42501';\n"
+            '  end if;',
+    ];
+    tools.add(
+      _AgentTool(
+        name: checkInTool,
+        title: 'Check in $subjectLabel',
+        description:
+            'Checks a $subjectLabel in for today with the same rules as the '
+            'app: in the current part of the day, only when scheduled then, '
+            'and for an interval $subjectLabel only once its interval has '
+            'passed. Checking in again updates the check-in. Returns the '
+            'check-in.',
+        properties: properties,
+        required: [subjectArgument],
+        readOnly: false,
+        destructive: false,
+        idempotent: false,
+        functionSql: function(checkInTool, properties, '''
+${refusals.join('\n')}
+  ids := array[${checkIns.checkInFunction}(subject_id, p_arguments)];
+  return ${rows('ids')} -> 0;'''),
+      ),
+    );
+  }
+  final undoTool = spec.undoTool;
+  if (undoTool != null) {
+    final properties = <String, Object?>{
+      subjectArgument: subjectProperty,
+      checkIns.date.name: schema(
+        checkIns.date,
+        'The day to undo; today by default.',
+      ),
+      part.name: schema(
+        part,
+        'The part of the day to undo; the current one by default.',
+      ),
+      checkIns.undoComment.name: schema(
+        checkIns.undoComment,
+        'Why the check-in is undone, kept with the record of it.',
+      ),
+    };
+    tools.add(
+      _AgentTool(
+        name: undoTool,
+        title: 'Undo $subjectLabel check-in',
+        description:
+            "Takes back a $subjectLabel's check-ins for a day and part of the "
+            'day, or for an interval $subjectLabel its latest check-in, and '
+            'records that it was undone. Returns the undone check-ins.',
+        properties: properties,
+        required: [subjectArgument],
+        readOnly: false,
+        destructive: true,
+        idempotent: false,
+        functionSql: function(
+          undoTool,
+          properties,
+          '  ids := ${checkIns.undoFunction}(subject_id, p_arguments);\n'
+          '  return ${rows('ids')};',
+        ),
+      ),
+    );
+  }
+  return tools;
 }
 
 String _prefixed(String prefix, String name) => prefix.isEmpty

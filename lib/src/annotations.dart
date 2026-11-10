@@ -1396,3 +1396,123 @@ final class ScalarFlags {
 
   final List<String> names;
 }
+
+/// The parts of a day an enum names, so declarations find the part a moment
+/// falls in: the part with the latest start hour at or before the moment's
+/// local hour. [wholeDay] names the part that stands for the whole day.
+///
+/// Generates `<enum>At(DateTime moment)` for the application, and the same
+/// rule in every schema-capable target.
+final class DayParts {
+  const DayParts(this.starts, {required this.wholeDay});
+
+  /// Each part with the hour it starts at; one starts at 0.
+  final Map<Object, int> starts;
+  final Object wholeDay;
+}
+
+/// Declares how the log entity it annotates records check-ins of a
+/// scheduled subject, such as a habit: the rules are written once and
+/// generated into `beginCheckIn` and `undoCheckIn` on the subject and into
+/// every schema-capable target, so the application and an agent apply the
+/// same rules.
+///
+/// A check-in belongs to the owner's local day and to a part of that day,
+/// named by an enum with [DayParts]. It is refused when a [refusals] field
+/// of the subject is set, when [scheduledParts] covers neither the part nor
+/// the whole day, and when the part is not the current one unless the whole
+/// day is scheduled. A subject scheduled for the whole day is checked in for
+/// the whole day.
+///
+/// Without an active [intervals] case a check-in is one per owner, day, and
+/// part: checking in again updates it, and checking in after an undo brings
+/// it back. With one, each check-in is a new row and is refused until the
+/// interval since the owner's latest has passed.
+final class CheckIns {
+  const CheckIns({
+    required this.subject,
+    required this.date,
+    required this.part,
+    required this.at,
+    required this.timezone,
+    required this.scheduledParts,
+    required this.undoneAs,
+    this.intervals = const [],
+    this.refusals = const [],
+    this.agentRefusals = const [],
+    this.details = const [],
+    this.checkInTool,
+    this.undoTool,
+  });
+
+  /// The reference to the scheduled subject.
+  final Symbol subject;
+
+  /// The local day of the check-in.
+  final Symbol date;
+
+  /// The part of the day, an enum with [DayParts].
+  final Symbol part;
+
+  /// When the check-in happened.
+  final Symbol at;
+
+  /// The owner's IANA timezone field, which decides an agent's local day.
+  final Symbol timezone;
+
+  /// The subject field listing the parts it is scheduled for: an `Iterable`
+  /// of the part enum whose [ScalarFlags] names match the enum's values.
+  final Symbol scheduledParts;
+
+  /// Subject variant cases that make check-ins events spaced by an interval.
+  final List<Every> intervals;
+
+  /// Subject booleans that refuse a check-in.
+  final List<Refusal> refusals;
+
+  /// Subject booleans that refuse an agent's check-in, for work only the
+  /// application completes, such as sending it to a checker.
+  final List<Refusal> agentRefusals;
+
+  /// Log fields a check-in may set; each takes its declared default unless
+  /// given.
+  final List<Symbol> details;
+
+  /// Records each undone check-in.
+  final UndoneAs undoneAs;
+
+  /// Exposes checking in to agents under this tool name.
+  final String? checkInTool;
+
+  /// Exposes undoing a check-in to agents under this tool name.
+  final String? undoTool;
+}
+
+/// A subject variant case whose check-ins are spaced by its [field].
+final class Every {
+  /// [field] hours after the latest check-in.
+  const Every.hours(this.field) : days = false;
+
+  /// [field] local days after the day of the latest check-in.
+  const Every.days(this.field) : days = true;
+
+  final Symbol field;
+  final bool days;
+}
+
+/// Refuses a check-in with [message] while the subject's [field] is true.
+final class Refusal {
+  const Refusal(this.field, this.message);
+
+  final Symbol field;
+  final String message;
+}
+
+/// The entity recording undone check-ins, created for each with the subject,
+/// date, and part fields of the same names, and [comment] when given.
+final class UndoneAs {
+  const UndoneAs(this.entity, {required this.comment});
+
+  final Type entity;
+  final Symbol comment;
+}

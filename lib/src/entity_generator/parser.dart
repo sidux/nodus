@@ -62,6 +62,8 @@ const _memberOperationsChecker = TypeChecker.typeNamed(
   MemberOperations,
   inPackage: 'nodus',
 );
+const _checkInsChecker = TypeChecker.typeNamed(CheckIns, inPackage: 'nodus');
+const _dayPartsChecker = TypeChecker.typeNamed(DayParts, inPackage: 'nodus');
 const _entityProcessChecker = TypeChecker.typeNamed(
   EntityProcess,
   inPackage: 'nodus',
@@ -1298,6 +1300,7 @@ Future<EntitySpec?> parseEntityAsset(
     agentText: _parseAgentText(classElement, fieldsByNameForAgent(fields)),
     identity: _parseDerivedIdentity(annotation, classElement),
     memberOperations: _parseMemberOperations(classElement),
+    checkIns: _parseCheckIns(classElement),
   );
   _validateConvergentCreates(spec, classElement);
   final invalidDraftOverride = fields
@@ -6706,6 +6709,89 @@ MemberOperationsSpec? _parseMemberOperations(ClassElement classElement) {
     collection: annotation.read('collection').objectValue.toSymbolValue()!,
     operations: operations,
     root: root.isNull ? null : _parseDayRoot(root, classElement),
+  );
+}
+
+CheckInsSpec? _parseCheckIns(ClassElement classElement) {
+  final object = _checkInsChecker.firstAnnotationOf(classElement);
+  if (object == null) return null;
+  final annotation = ConstantReader(object);
+  String symbol(ConstantReader reader, String name) =>
+      reader.read(name).objectValue.toSymbolValue()!;
+  String? text(String name) =>
+      annotation.read(name).isNull ? null : annotation.read(name).stringValue;
+  List<RefusalSpec> refusals(String name) => [
+    for (final refusal in annotation.read(name).listValue)
+      RefusalSpec(
+        fieldName: symbol(ConstantReader(refusal), 'field'),
+        message: ConstantReader(refusal).read('message').stringValue,
+      ),
+  ];
+  final partName = symbol(annotation, 'part');
+  final partType = classElement.getGetter(partName)?.returnType;
+  final partEnum = partType?.element;
+  final dayParts = partEnum == null
+      ? null
+      : _dayPartsChecker.firstAnnotationOf(partEnum);
+  if (dayParts == null) {
+    throw InvalidGenerationSourceError(
+      'CheckIns.part `$partName` must be an enum annotated with DayParts.',
+      element: classElement,
+    );
+  }
+  final undoneAs = ConstantReader(annotation.read('undoneAs').objectValue);
+  final undoneType = undoneAs.read('entity').typeValue;
+  return CheckInsSpec(
+    subjectFieldName: symbol(annotation, 'subject'),
+    dateFieldName: symbol(annotation, 'date'),
+    partFieldName: partName,
+    atFieldName: symbol(annotation, 'at'),
+    timezoneFieldName: symbol(annotation, 'timezone'),
+    scheduledPartsFieldName: symbol(annotation, 'scheduledParts'),
+    dayParts: _parseDayParts(ConstantReader(dayParts), partEnum!),
+    intervals: [
+      for (final every in annotation.read('intervals').listValue)
+        EverySpec(
+          fieldName: symbol(ConstantReader(every), 'field'),
+          days: ConstantReader(every).read('days').boolValue,
+        ),
+    ],
+    refusals: refusals('refusals'),
+    agentRefusals: refusals('agentRefusals'),
+    detailFieldNames: [
+      for (final detail in annotation.read('details').listValue)
+        detail.toSymbolValue()!,
+    ],
+    undoneAsClassName: undoneType.getDisplayString(),
+    undoCommentFieldName: symbol(undoneAs, 'comment'),
+    checkInTool: text('checkInTool'),
+    undoTool: text('undoTool'),
+  );
+}
+
+DayPartsSpec _parseDayParts(ConstantReader reader, Element element) {
+  String constant(DartObject value) =>
+      value.variable?.name ??
+      (throw InvalidGenerationSourceError(
+        'DayParts takes enum constants.',
+        element: element,
+      ));
+  final starts = [
+    for (final entry in reader.read('starts').mapValue.entries)
+      (constant(entry.key!), entry.value!.toIntValue()!),
+  ]..sort((a, b) => a.$2.compareTo(b.$2));
+  if (starts.isEmpty ||
+      starts.first.$2 != 0 ||
+      starts.last.$2 > 23 ||
+      {for (final (_, hour) in starts) hour}.length != starts.length) {
+    throw InvalidGenerationSourceError(
+      'DayParts needs distinct start hours from 0 to 23, one of them 0.',
+      element: element,
+    );
+  }
+  return DayPartsSpec(
+    starts: starts,
+    wholeDay: constant(reader.read('wholeDay').objectValue),
   );
 }
 

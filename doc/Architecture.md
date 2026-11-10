@@ -1824,6 +1824,42 @@ application reads through the generated `<root>StartingValues`.
 A rule that stays a client computation, such as scoring a proposal, remains
 handwritten application code and is not exposed to targets.
 
+#### Declared check-ins
+
+Recording that a scheduled subject was done, such as a habit's check-in, is
+declared once on the log entity with `@CheckIns` and generated alike:
+`beginCheckIn` and `undoCheckIn` on the subject for the application, and a
+check-in and an undo function in every schema-capable target.
+
+```dart
+@CheckIns(
+  subject: #habitId,
+  date: #completedDate,
+  part: #timeRange,
+  at: #completedAt,
+  timezone: #timezone,
+  scheduledParts: #timeRanges,
+  intervals: [Every.hours(#intervalHours), Every.days(#intervalDays)],
+  refusals: [Refusal(#isSystemHabit, '...')],
+  details: [#usedMinimum, #energyLevel, #actualMinutes],
+  undoneAs: UndoneAs(HabitReopenEvent, comment: #comment),
+  checkInTool: 'check_in_habit',
+)
+```
+
+The part enum declares its `@DayParts` once, which generates the
+part-of-day function both targets use. A check-in belongs to the owner's
+local day and the current part of it, unless the subject is scheduled for
+the whole day; it is one row per owner, day, and part, restored and updated
+when repeated, unless an `intervals` case is active, which makes each
+check-in a new row allowed once the interval since the owner's latest has
+passed. Undoing removes the matching rows and records each with the
+`undoneAs` entity. `agentRefusals` refuse an agent's check-in that only the
+application completes, such as one sent to a checker. The application reads
+its clock and zone; a target reads its clock and the owner's declared
+timezone.
+
+
 ## 7. Collections, queries, and identity
 
 One persisted entity ID maps to exactly one live object instance per account
@@ -2771,6 +2807,9 @@ others. An agent may not take a status edge declared `relationshipBlockedBy`
 while its check is pending.
 A member operation with an `agentTool` name joins the surface; it runs on the
 caller's `DayRoot` for today and returns the root's members in order.
+A `checkInTool` or `undoTool` on `@CheckIns` joins it too: checking in
+runs the declared rules on the target's clock and the owner's timezone, and
+returns the check-in; undoing returns the undone check-ins.
 
 A token issued to an OAuth client is an agent request. Generated push
 functions refuse it outside the declared writable set, graph and entity pull
