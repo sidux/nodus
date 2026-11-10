@@ -2758,6 +2758,17 @@ function with the caller's own identity, so an agent meets exactly the rules,
 authorization, change capture, and synchronization of any other client. An
 optional idempotency key derives operation and entity identities, so a
 retried call converges on the first result.
+`link` adds link and unlink tools to an activatable relationship;
+`remove` adds delete and restore tools that follow the hierarchy as the
+generated hierarchy actions do; `archive` adds archive and unarchive tools
+limited to the rows the caller owns; `hide` names fields agents read but
+never set. A declared action that moves a row into another order scope,
+such as `reparent`, joins with `@AgentTool` and lands last there, the server
+refusing a cycle. A `PersistedScalarValue<int>` bit set named by
+`@ScalarFlags` is read and written as a list of those names, and a persisted
+variant's fields are separate arguments of which setting one clears the
+others. An agent may not take a status edge declared `relationshipBlockedBy`
+while its check is pending.
 A member operation with an `agentTool` name joins the surface; it runs on the
 caller's `DayRoot` for today and returns the root's members in order.
 

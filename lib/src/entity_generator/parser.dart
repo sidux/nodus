@@ -54,6 +54,10 @@ const _agentAccessChecker = TypeChecker.typeNamed(
 );
 const _agentToolChecker = TypeChecker.typeNamed(AgentTool, inPackage: 'nodus');
 const _agentTextChecker = TypeChecker.typeNamed(AgentText, inPackage: 'nodus');
+const _scalarFlagsChecker = TypeChecker.typeNamed(
+  ScalarFlags,
+  inPackage: 'nodus',
+);
 const _memberOperationsChecker = TypeChecker.typeNamed(
   MemberOperations,
   inPackage: 'nodus',
@@ -5911,10 +5915,23 @@ ScalarValueSpec? _parseScalarValue(DartType type, FieldElement field) {
       element: field,
     );
   }
+  final flags = _scalarFlagsChecker.firstAnnotationOf(element);
+  if (flags != null && wireDartType != 'int') {
+    throw InvalidGenerationSourceError(
+      'ScalarFlags names the bits of an int value: `${type.getDisplayString()}`.',
+      element: field,
+    );
+  }
   return ScalarValueSpec(
     wireDartType: wireDartType,
     sqlType: sqlType,
     hasConstConstructor: constructor.isConst,
+    flags: flags == null
+        ? null
+        : [
+            for (final name in ConstantReader(flags).read('names').listValue)
+              name.toStringValue()!,
+          ],
   );
 }
 
@@ -6573,6 +6590,13 @@ AgentAccessSpec? _parseAgentAccess(ClassElement classElement) {
   return AgentAccessSpec(
     create: annotation.read('create').boolValue,
     edit: annotation.read('edit').boolValue,
+    link: annotation.read('link').boolValue,
+    remove: annotation.read('remove').boolValue,
+    archive: annotation.read('archive').boolValue,
+    hidden: {
+      for (final field in annotation.read('hide').listValue)
+        field.toSymbolValue()!,
+    },
   );
 }
 

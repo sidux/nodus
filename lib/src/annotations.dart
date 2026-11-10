@@ -1047,10 +1047,36 @@ final class SyncCommand {
 /// agent sends that intent alone, so a rule kept in client code would be
 /// skipped.
 final class AgentAccess {
-  const AgentAccess({this.create = false, this.edit = false});
+  const AgentAccess({
+    this.create = false,
+    this.edit = false,
+    this.link = false,
+    this.remove = false,
+    this.archive = false,
+    this.hide = const [],
+  });
 
   final bool create;
   final bool edit;
+
+  /// Adds `link_<target>_to_<owner>` and `unlink_<target>_from_<owner>`
+  /// tools to an activatable relationship: linking activates the pair's row
+  /// or creates it last in the owner's order, and unlinking deactivates it.
+  final bool link;
+
+  /// Adds `delete_<entity>` and `restore_<entity>` tools to a soft-deletable
+  /// entity. A hierarchy is removed with its descendants and restored with
+  /// those removed with it.
+  final bool remove;
+
+  /// Adds `archive_<entity>` and `unarchive_<entity>` tools to an archivable
+  /// entity. A hierarchy is archived with the descendants the caller owns
+  /// and unarchived with those archived with it.
+  final bool archive;
+
+  /// Fields agents may read but never set, such as one only the
+  /// application manages.
+  final List<Symbol> hide;
 }
 
 /// Exposes a declared [Action] of an [AgentAccess] entity as an agent tool.
@@ -1360,4 +1386,13 @@ final class KeyTarget extends OperationValue {
 
   final Symbol reference;
   final Symbol field;
+}
+
+/// Names the bits of a `PersistedScalarValue<int>` set, so tools outside
+/// Dart, such as agent tools, read and write it as a list of these names:
+/// the name at index `i` is bit `1 << i`.
+final class ScalarFlags {
+  const ScalarFlags(this.names);
+
+  final List<String> names;
 }

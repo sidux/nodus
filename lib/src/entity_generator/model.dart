@@ -1679,7 +1679,21 @@ final class KeyTargetValueSpec extends OperationValueSpec {
 }
 
 final class AgentAccessSpec {
-  const AgentAccessSpec({required this.create, required this.edit});
+  const AgentAccessSpec({
+    required this.create,
+    required this.edit,
+    this.link = false,
+    this.remove = false,
+    this.archive = false,
+    this.hidden = const {},
+  });
+
+  final bool link;
+  final bool remove;
+  final bool archive;
+
+  /// Field names agents may read but never set.
+  final Set<String> hidden;
 
   final bool create;
   final bool edit;
@@ -1971,11 +1985,15 @@ final class ScalarValueSpec {
     required this.wireDartType,
     required this.sqlType,
     required this.hasConstConstructor,
+    this.flags,
   });
 
   final String wireDartType;
   final SqlType sqlType;
   final bool hasConstConstructor;
+
+  /// The declared [ScalarFlags] names, bit `1 << i` for name `i`.
+  final List<String>? flags;
 }
 
 final class ValueTransitionSpec {

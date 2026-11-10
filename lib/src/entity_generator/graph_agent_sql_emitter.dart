@@ -86,6 +86,8 @@ String emitAgentSurfaceSql(EntityGraphSpec graph) {
         'public.agent_now()',
         'public.agent_check_arguments(jsonb, text[])',
         'public.agent_required(jsonb, text)',
+        'public.agent_flags_in(jsonb, text[])',
+        'public.agent_flags_out(bigint, text[])',
         for (final entity in entities)
           '${entity.rowFunction}(public.${entity.table})',
         for (final text in {
@@ -225,6 +227,57 @@ begin
 end;
 \$\$;
 
+create or replace function public.agent_flags_in(
+  p_value jsonb,
+  p_names text[]
+)
+returns jsonb
+language plpgsql
+immutable
+set search_path = ''
+as \$\$
+declare
+  bits bigint := 0;
+  name text;
+begin
+  -- A missing argument stays missing, so its default applies.
+  if p_value is null then
+    return null;
+  end if;
+  if jsonb_typeof(p_value) = 'null' then
+    return 'null'::jsonb;
+  end if;
+  if jsonb_typeof(p_value) <> 'array' then
+    raise exception 'Expected a list of %', array_to_string(p_names, ', ')
+      using errcode = '22023';
+  end if;
+  for name in select jsonb_array_elements_text(p_value) loop
+    if array_position(p_names, name) is null then
+      raise exception 'Unknown value "%": expected %', name, array_to_string(p_names, ', ')
+        using errcode = '22023';
+    end if;
+    bits := bits | (1::bigint << (array_position(p_names, name) - 1));
+  end loop;
+  return to_jsonb(bits);
+end;
+\$\$;
+
+create or replace function public.agent_flags_out(
+  p_value bigint,
+  p_names text[]
+)
+returns jsonb
+language sql
+immutable
+set search_path = ''
+as \$\$
+  select case when p_value is null then 'null'::jsonb else coalesce((
+    select jsonb_agg(flag.name order by flag.position)
+    from unnest(p_names) with ordinality as flag(name, position)
+    where p_value & (1::bigint << (flag.position::integer - 1)) <> 0
+  ), '[]'::jsonb) end
+\$\$;
+
 revoke all on function public.agent_session_active() from $_apiRoles;
 grant execute on function public.agent_session_active() to authenticated;
 ''';
@@ -268,7 +321,14 @@ final class _AgentEntity {
     for (final action in spec.ordinaryActions)
       if (action.agentTool) action,
   ];
-  bool get writes => access.create || access.edit || actions.isNotEmpty;
+  bool get writes =>
+      (spec.orderScopeTransferAction?.agentTool ?? false) ||
+      access.create ||
+      access.edit ||
+      access.link ||
+      access.remove ||
+      access.archive ||
+      actions.isNotEmpty;
 
   _AgentTextField? textFor(FieldSpec field) =>
       texts.where((text) => text.field == field).firstOrNull;
@@ -283,12 +343,6 @@ final class _AgentEntity {
     if (access.create && !spec.canCreatePublicly) {
       throw InvalidGenerationSourceError(
         'AgentAccess.create needs an entity its owner creates: '
-        '${spec.className}.',
-      );
-    }
-    if (access.create && spec.persistedVariants.isNotEmpty) {
-      throw InvalidGenerationSourceError(
-        'AgentAccess.create does not support persisted variants yet: '
         '${spec.className}.',
       );
     }
@@ -327,11 +381,11 @@ final class _AgentEntity {
   ];
 
   bool _createArgument(FieldSpec field) =>
+      !access.hidden.contains(field.name) &&
       spec.createParameters.contains(field) &&
       (!spec.isActionTarget(field) || field.reference != null) &&
       !field.isComposition &&
-      field.persistedVariantName == null &&
-      _schema(field) != null;
+      _schema(field, spec) != null;
 
   List<FieldSpec> get createArguments => [
     for (final field in createPayloadFields)
@@ -340,7 +394,18 @@ final class _AgentEntity {
 
   List<FieldSpec> get editArguments => [
     for (final field in spec.draftEditableFields)
-      if (!field.isComposition && _schema(field) != null) field,
+      if (!field.isComposition &&
+          !access.hidden.contains(field.name) &&
+          _schema(field, spec) != null)
+        field,
+    if (spec.canUpdate)
+      for (final variant in spec.persistedVariants)
+        for (final field in variant.storageFields)
+          if (!spec.draftEditableFields.contains(field) &&
+              spec.isPatchable(field) &&
+              !access.hidden.contains(field.name) &&
+              _schema(field, spec) != null)
+            field,
   ];
 
   List<FieldSpec> get outputFields => [
@@ -357,7 +422,7 @@ final class _AgentEntity {
   String rowFunctionSql() {
     final pairs = <String>[
       for (final field in outputFields)
-        "${_quote(field.name)}, p_row.${field.columnName}",
+        "${_quote(field.name)}, ${_outSql(field, 'p_row.${field.columnName}')}",
       for (final text in texts)
         "${_quote(text.argumentName)}, ${text.readSql('p_row')}",
     ];
@@ -398,7 +463,453 @@ as \$\$
     if (access.create) _createTool(),
     if (access.edit) _editTool(),
     for (final action in actions) _actionTool(action),
+    if (spec.orderScopeTransferAction case final transfer?
+        when transfer.agentTool)
+      _transferTool(transfer),
+    if (access.link) ..._linkTools(),
+    if (access.remove) ..._removeTools(),
+    if (access.archive) ..._archiveTools(),
   ];
+
+  /// Delete and restore tools: a hierarchy goes with its descendants, and a
+  /// restore brings back only what that removal took.
+  List<_AgentTool> _removeTools() {
+    if (!spec.hasSoftDeletableCapability) {
+      throw InvalidGenerationSourceError(
+        'AgentAccess.remove needs a soft-deletable entity: ${spec.className}.',
+      );
+    }
+    final parent = spec.hierarchyParentField;
+    final id = spec.idField.columnName;
+    final properties = <String, Object?>{
+      'id': {'type': 'string', 'format': 'uuid'},
+    };
+    String delete(
+      String entityId,
+      String stamp, {
+      String indent = '  ',
+    }) => _pushSql(
+      spec,
+      operation: 'delete',
+      entityId: entityId,
+      patch: "'deletedAt', $stamp",
+      base:
+          '(select item.${spec.serverVersionField.columnName} from public.$table item where item.$id = $entityId)',
+      indent: indent,
+    );
+    final descendants = parent == null
+        ? ''
+        : '''
+  for child_id in
+    with recursive tree as (
+      select item.$id, 0 as depth from public.$table item where item.$id = current_row.$id
+      union all
+      select child.$id, tree.depth + 1 from public.$table child
+      join tree on child.${parent.columnName} = tree.$id
+      where child.deleted_at is null
+    )
+    select tree.$id from tree where tree.$id <> current_row.$id order by tree.depth desc
+  loop
+${delete('child_id', 'public.agent_now()', indent: '    ')}
+    removed := removed + 1;
+  end loop;''';
+    final restoredDescendants = parent == null
+        ? ''
+        : '''
+  for child_id in
+    with recursive tree as (
+      select item.$id, 0 as depth from public.$table item where item.$id = current_row.$id
+      union all
+      select child.$id, tree.depth + 1 from public.$table child
+      join tree on child.${parent.columnName} = tree.$id
+      where child.deleted_at is not null
+        and child.deleted_at >= current_row.deleted_at - interval '3 seconds'
+    )
+    select tree.$id from tree where tree.$id <> current_row.$id order by tree.depth
+  loop
+${delete('child_id', "'null'::jsonb", indent: '    ')}
+    restored := restored + 1;
+  end loop;''';
+    final parentCheck = parent == null
+        ? ''
+        : '''
+  if current_row.${parent.columnName} is not null and not exists (
+    select 1 from public.$table parent_row
+    where parent_row.$id = current_row.${parent.columnName} and parent_row.deleted_at is null
+  ) then
+    raise exception 'Restore the parent entity before this hierarchy.' using errcode = '22023';
+  end if;''';
+    final deleteName = 'delete_$singular';
+    final restoreName = 'restore_$singular';
+    final hierarchy = parent == null ? '' : ' with everything under it';
+    return [
+      _AgentTool(
+        name: deleteName,
+        title: 'Delete ${_words(spec.className)}',
+        description:
+            'Deletes a $label$hierarchy. It can be brought back with '
+            '$restoreName.$_summary',
+        properties: properties,
+        required: const ['id'],
+        readOnly: false,
+        destructive: true,
+        idempotent: true,
+        functionSql:
+            '''
+create or replace function public.agent_tool_$deleteName(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  current_row public.$table;
+  child_id uuid;
+  removed integer := 1;
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array['id']);
+${_selectRowSql('current_row')}
+$descendants
+${delete('current_row.$id', 'public.agent_now()')}
+  return jsonb_build_object('deleted', removed);
+end;
+\$\$;
+''',
+      ),
+      _AgentTool(
+        name: restoreName,
+        title: 'Restore ${_words(spec.className)}',
+        description:
+            'Brings back a deleted $label$hierarchy that was deleted with '
+            'it.',
+        properties: properties,
+        required: const ['id'],
+        readOnly: false,
+        destructive: false,
+        idempotent: true,
+        functionSql:
+            '''
+create or replace function public.agent_tool_$restoreName(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  current_row public.$table;
+  child_id uuid;
+  restored integer := 1;
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array['id']);
+  select * into current_row from public.$table item
+  where item.$id = (public.agent_required(p_arguments, 'id') #>> '{}')::uuid
+    and item.deleted_at is not null;
+  if not found then
+    raise exception 'Deleted $label not found' using errcode = 'P0002';
+  end if;
+$parentCheck
+${delete('current_row.$id', "'null'::jsonb")}
+$restoredDescendants
+  select * into current_row from public.$table item where item.$id = current_row.$id;
+  return $rowFunction(current_row) || jsonb_build_object('restored', restored);
+end;
+\$\$;
+''',
+      ),
+    ];
+  }
+
+  /// Archive and unarchive tools: a hierarchy goes with the descendants the
+  /// caller owns, and unarchiving brings back those archived with it.
+  List<_AgentTool> _archiveTools() {
+    final archived = spec.archivedAtField;
+    if (archived == null) {
+      throw InvalidGenerationSourceError(
+        'AgentAccess.archive needs an archivable entity: ${spec.className}.',
+      );
+    }
+    final parent = spec.hierarchyParentField;
+    final id = spec.idField.columnName;
+    final column = archived.columnName;
+    final ownerColumn = spec.ownerField.columnName;
+    final live = spec.hasSoftDeletableCapability
+        ? ' and child.deleted_at is null'
+        : '';
+    String patch(
+      String entityId,
+      String value, {
+      String indent = '    ',
+    }) => _pushSql(
+      spec,
+      operation: 'patch',
+      entityId: entityId,
+      patch: "${_quote(archived.name)}, $value",
+      base:
+          '(select item.${spec.serverVersionField.columnName} from public.$table item where item.$id = $entityId)',
+      indent: indent,
+    );
+    String tree(String condition, {required bool deepestFirst}) =>
+        parent == null
+        ? 'select current_row.$id'
+        : '''
+    with recursive tree as (
+      select current_row.$id, 0 as depth
+      union all
+      select child.$id, tree.depth + 1 from public.$table child
+      join tree on child.${parent.columnName} = tree.$id
+      where child.$ownerColumn = auth.uid()$live and $condition
+    )
+    select tree.$id from tree order by tree.depth${deepestFirst ? ' desc' : ''}''';
+    String tool(String name, String body) =>
+        '''
+create or replace function public.agent_tool_$name(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  current_row public.$table;
+  child_id uuid;
+  stamp jsonb := public.agent_now();
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array['id']);
+${_selectRowSql('current_row')}
+$body
+  select * into current_row from public.$table item where item.$id = current_row.$id;
+  return $rowFunction(current_row);
+end;
+\$\$;
+''';
+    final hierarchy = parent == null ? '' : ' with what is under it';
+    final archiveName = 'archive_$singular';
+    final unarchiveName = 'unarchive_$singular';
+    return [
+      _AgentTool(
+        name: archiveName,
+        title: 'Archive ${_words(spec.className)}',
+        description:
+            'Archives a $label$hierarchy, out of the way but kept; '
+            '$unarchiveName brings it back.',
+        properties: const {
+          'id': {'type': 'string', 'format': 'uuid'},
+        },
+        required: const ['id'],
+        readOnly: false,
+        destructive: false,
+        idempotent: true,
+        functionSql: tool(archiveName, '''
+  if current_row.$column is null then
+    for child_id in ${tree('child.$column is null', deepestFirst: true)} loop
+${patch('child_id', 'stamp')}
+    end loop;
+  end if;'''),
+      ),
+      _AgentTool(
+        name: unarchiveName,
+        title: 'Unarchive ${_words(spec.className)}',
+        description:
+            'Brings back an archived $label$hierarchy that was archived '
+            'with it.',
+        properties: const {
+          'id': {'type': 'string', 'format': 'uuid'},
+        },
+        required: const ['id'],
+        readOnly: false,
+        destructive: false,
+        idempotent: true,
+        functionSql: tool(unarchiveName, '''
+  if current_row.$column is not null then
+    for child_id in ${tree("child.$column >= current_row.$column - interval '3 seconds'", deepestFirst: false)} loop
+${patch('child_id', "'null'::jsonb")}
+    end loop;
+  end if;'''),
+      ),
+    ];
+  }
+
+  /// The tool of an action that moves the row into another order scope,
+  /// such as under another parent: it lands last there, and the server
+  /// refuses a cycle or a parent the caller cannot reach.
+  _AgentTool _transferTool(ActionSpec action) {
+    final name = '${snakeCase(action.methodName)}_$singular';
+    final fields = {for (final field in spec.fields) field.name: field};
+    final targets = [
+      for (final parameter in action.parameters) fields[parameter.fieldName]!,
+    ];
+    final properties = <String, Object?>{
+      'id': {'type': 'string', 'format': 'uuid'},
+      for (final field in targets)
+        field.name:
+            _schema(field, spec) ??
+            (throw InvalidGenerationSourceError(
+              'AgentTool parameter `${field.name}` of '
+              '${spec.className}.${action.methodName} has an unsupported type.',
+            )),
+    };
+    final scope = targets
+        .map(
+          (field) =>
+              "${_quote(field.name)}, coalesce(p_arguments -> ${_quote(field.name)}, 'null'::jsonb)",
+        )
+        .join(', ');
+    final unchanged = targets
+        .map(
+          (field) =>
+              "current_row.${field.columnName}::text is not distinct from (p_arguments ->> ${_quote(field.name)})",
+        )
+        .join(' and ');
+    return _AgentTool(
+      name: name,
+      title: '${_capitalized(_words(action.methodName))} $label',
+      description:
+          '${action.documentation?.replaceAll('\n', ' ') ?? '${_capitalized(_words(action.methodName))} a $label.'}$_summary',
+      properties: properties,
+      required: const ['id'],
+      readOnly: false,
+      destructive: false,
+      idempotent: true,
+      functionSql:
+          '''
+create or replace function public.agent_tool_$name(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  current_row public.$table;
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
+${_selectRowSql('current_row')}
+  if not ($unchanged) then
+${_pushSql(spec, operation: 'command', entityId: 'current_row.${spec.idField.columnName}', patch: "'targetScope', jsonb_build_object($scope), 'placement', 'last', 'sourceScopeBaseVersion', 0, 'targetScopeBaseVersion', 0", base: 'current_row.${spec.serverVersionField.columnName}', command: 'transferInOrder', indent: '    ')}
+  end if;
+  select * into current_row from public.$table item where item.${spec.idField.columnName} = current_row.${spec.idField.columnName};
+  return $rowFunction(current_row);
+end;
+\$\$;
+''',
+    );
+  }
+
+  /// The link and unlink tools of an activatable relationship.
+  List<_AgentTool> _linkTools() {
+    final relationship =
+        spec.activeRelationship ??
+        (throw InvalidGenerationSourceError(
+          'AgentAccess.link needs an activatable relationship: '
+          '${spec.className}.',
+        ));
+    final owner = relationship.ownerReference;
+    final target = relationship.targetReference;
+    String role(FieldSpec field) =>
+        snakeCase(field.name.replaceAll(RegExp(r'Id$'), ''));
+    final ownerRole = role(owner);
+    final targetRole = role(target);
+    final properties = <String, Object?>{
+      owner.name: {
+        'type': 'string',
+        'format': 'uuid',
+        'description': 'The ${_words(ownerRole)}.',
+      },
+      target.name: {
+        'type': 'string',
+        'format': 'uuid',
+        'description': 'The ${_words(targetRole)}.',
+      },
+    };
+    final ordered = spec.hasOrderedCapability ? 'last' : null;
+    final ownerTable = owner.reference!.targetTableName;
+    final find =
+        '''
+  select * into current_row from public.$table item
+  where item.${owner.columnName} = (public.agent_required(p_arguments, ${_quote(owner.name)}) #>> '{}')::uuid
+    and item.${target.columnName} = (public.agent_required(p_arguments, ${_quote(target.name)}) #>> '{}')::uuid
+    and $liveCondition;''';
+    final created = [
+      "'${spec.idField.name}', to_jsonb(link_id)",
+      if (spec.ownerField.name != owner.name)
+        "'${spec.ownerField.name}', to_jsonb((select owner_row.owner_id from public.$ownerTable owner_row where owner_row.id = (p_arguments ->> ${_quote(owner.name)})::uuid))",
+      "${_quote(owner.name)}, p_arguments -> ${_quote(owner.name)}",
+      "${_quote(target.name)}, p_arguments -> ${_quote(target.name)}",
+      "${_quote(relationship.activeField.name)}, 'true'::jsonb",
+      for (final field in createPayloadFields)
+        if (field.name != owner.name &&
+            field.name != target.name &&
+            field.name != relationship.activeField.name &&
+            field.name != spec.ownerField.name)
+          '${_quote(field.name)}, ${_defaultSql(field)}',
+    ];
+    String tool(String name, String body) =>
+        '''
+create or replace function public.agent_tool_$name(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  current_row public.$table;
+  link_id uuid;
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
+$find
+$body
+  select * into current_row from public.$table item
+  where item.${owner.columnName} = (p_arguments ->> ${_quote(owner.name)})::uuid
+    and item.${target.columnName} = (p_arguments ->> ${_quote(target.name)})::uuid
+    and $liveCondition;
+  return case when current_row.${spec.idField.columnName} is null then null else $rowFunction(current_row) end;
+end;
+\$\$;
+''';
+    final linkName = 'link_${targetRole}_to_$ownerRole';
+    final unlinkName = 'unlink_${targetRole}_from_$ownerRole';
+    final active = relationship.activeField.columnName;
+    return [
+      _AgentTool(
+        name: linkName,
+        title: 'Link ${_words(targetRole)} to ${_words(ownerRole)}',
+        description:
+            'Links a ${_words(targetRole)} to a ${_words(ownerRole)}; '
+            'linking it again changes nothing.$_summary',
+        properties: properties,
+        required: [owner.name, target.name],
+        readOnly: false,
+        destructive: false,
+        idempotent: true,
+        functionSql: tool(linkName, '''
+  if current_row.${spec.idField.columnName} is null then
+    link_id := gen_random_uuid();
+${_pushSql(spec, operation: 'create', entityId: 'link_id', patch: created.join(', '), ordered: ordered, indent: '    ')}
+  elsif not current_row.$active then
+${_pushSql(spec, operation: 'patch', entityId: 'current_row.${spec.idField.columnName}', patch: "${_quote(relationship.activeField.name)}, 'true'::jsonb", base: 'current_row.${spec.serverVersionField.columnName}', indent: '    ')}
+  end if;'''),
+      ),
+      _AgentTool(
+        name: unlinkName,
+        title: 'Unlink ${_words(targetRole)} from ${_words(ownerRole)}',
+        description:
+            'Unlinks a ${_words(targetRole)} from a ${_words(ownerRole)}; '
+            'both stay, only the link ends.',
+        properties: properties,
+        required: [owner.name, target.name],
+        readOnly: false,
+        destructive: false,
+        idempotent: true,
+        functionSql: tool(unlinkName, '''
+  if current_row.${spec.idField.columnName} is not null and current_row.$active then
+${_pushSql(spec, operation: 'patch', entityId: 'current_row.${spec.idField.columnName}', patch: "${_quote(relationship.activeField.name)}, 'false'::jsonb", base: 'current_row.${spec.serverVersionField.columnName}', indent: '    ')}
+  end if;'''),
+      ),
+    ];
+  }
 
   String get _summary {
     final doc = spec.documentation;
@@ -591,7 +1102,7 @@ end;
   _AgentTool _createTool() {
     final name = 'create_$singular';
     final properties = <String, Object?>{
-      for (final field in createArguments) field.name: _schema(field),
+      for (final field in createArguments) field.name: _schema(field, spec),
       for (final text in texts) text.argumentName: text.schema,
       'idempotencyKey': {
         'type': 'string',
@@ -629,7 +1140,7 @@ end;
         if (textFor(field) case final text?)
           "${_quote(field.name)}, to_jsonb(${text.variable})"
         else if (_createArgument(field))
-          "${_quote(field.name)}, ${field.nullable || field.persistedDefaultValue != null ? "coalesce(p_arguments -> ${_quote(field.name)}, ${_defaultSql(field)})" : "public.agent_required(p_arguments, ${_quote(field.name)})"}"
+          "${_quote(field.name)}, ${field.nullable || field.persistedDefaultValue != null ? "coalesce(${_inSql(field, "p_arguments -> ${_quote(field.name)}")}, ${_defaultSql(field)})" : _inSql(field, "public.agent_required(p_arguments, ${_quote(field.name)})")}"
         else
           "${_quote(field.name)}, ${_defaultSql(field)}",
     ];
@@ -680,7 +1191,7 @@ end;
     final name = 'edit_$singular';
     final properties = <String, Object?>{
       'id': {'type': 'string', 'format': 'uuid'},
-      for (final field in editArguments) field.name: _schema(field),
+      for (final field in editArguments) field.name: _schema(field, spec),
       for (final text in texts) text.argumentName: text.schema,
     };
     final contents = [
@@ -690,9 +1201,23 @@ end;
     perform ${text.replaceFunction}(current_row.${text.field.columnName}, p_arguments ->> ${_quote(text.argumentName)}, null, ${_quote('$name:${text.argumentName}')});
   end if;''',
     ];
-    final editable = editArguments
-        .map((field) => _quote(field.name))
-        .join(', ');
+    final variantGroups = <String, List<FieldSpec>>{};
+    final plain = <FieldSpec>[];
+    for (final field in editArguments) {
+      final variant = field.persistedVariantName;
+      if (variant == null) {
+        plain.add(field);
+      } else {
+        variantGroups.putIfAbsent(variant, () => []).add(field);
+      }
+    }
+    final patchParts = [
+      for (final field in plain)
+        "case when p_arguments ? ${_quote(field.name)} then jsonb_build_object(${_quote(field.name)}, ${_inSql(field, "p_arguments -> ${_quote(field.name)}")}) else '{}'::jsonb end",
+      // Setting one part of a variant clears its other parts.
+      for (final fields in variantGroups.values)
+        "case when p_arguments ?| array[${fields.map((field) => _quote(field.name)).join(', ')}] then jsonb_build_object(${fields.map((field) => "${_quote(field.name)}, coalesce(${_inSql(field, "p_arguments -> ${_quote(field.name)}")}, 'null'::jsonb)").join(', ')}) else '{}'::jsonb end",
+    ];
     return _AgentTool(
       name: name,
       title: 'Edit $label',
@@ -718,9 +1243,7 @@ begin
   perform public.agent_require_access();
   perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
 ${_selectRowSql('current_row')}
-  select coalesce(jsonb_object_agg(argument.key, argument.value), '{}'::jsonb) into patch
-  from jsonb_each(p_arguments) argument
-  where argument.key = any(array[${editable.isEmpty ? '' : editable}]::text[]);
+  patch := ${patchParts.isEmpty ? "'{}'::jsonb" : patchParts.join('\n    || ')};
   if patch <> '{}'::jsonb then
 ${_pushSql(spec, operation: 'patch', entityId: 'current_row.${spec.idField.columnName}', patchSql: 'patch', base: 'current_row.${spec.serverVersionField.columnName}', indent: '    ')}
   end if;
@@ -1029,8 +1552,12 @@ String _pushSql(
   String? operationKey,
   String keyVariable = 'idempotency_key',
   String? ordered,
+  String? command,
   String indent = '  ',
 }) {
+  final commandName = command == null
+      ? ''
+      : ",\n$indent    'commandName', '$command'";
   final operationId = operationKey == null
       ? 'gen_random_uuid()'
       : 'public.agent_uuid($keyVariable, $operationKey)';
@@ -1043,7 +1570,7 @@ $indent    'operation', '$operation',
 $indent    'entityType', '${entity.className}',
 $indent    'entityId', $entityId,
 $indent    'baseServerVersion', $base,
-$indent    'protocolVersion', ${entity.protocolVersion}$orderedCreate,
+$indent    'protocolVersion', ${entity.protocolVersion}$orderedCreate$commandName,
 $indent    'patch', ${patchSql ?? 'jsonb_build_object($patch)'}
 $indent  )));''';
 }
@@ -1118,10 +1645,26 @@ with check (not public.is_agent_request());
   return buffer.toString();
 }
 
-Map<String, Object?>? _schema(FieldSpec field) {
-  if (field.persistedVariantName != null) return null;
+Map<String, Object?>? _schema(FieldSpec field, [EntitySpec? owner]) {
+  final variantName = field.persistedVariantName;
+  if (variantName != null) {
+    final variant = owner?.persistedVariants
+        .where((candidate) => candidate.name == variantName)
+        .firstOrNull;
+    if (variant == null ||
+        variant.storageFields.any((f) => f.reference != null)) {
+      return null;
+    }
+  }
+  final flags = field.scalarValue?.flags;
   final Map<String, Object?> schema;
-  if (field.isEnum) {
+  if (flags != null) {
+    schema = {
+      'type': 'array',
+      'items': {'type': 'string', 'enum': flags},
+      'uniqueItems': true,
+    };
+  } else if (field.isEnum) {
     schema = {'type': 'string', 'enum': field.enumWireValues};
   } else {
     schema = switch (field.sqlType) {
@@ -1153,10 +1696,46 @@ Map<String, Object?>? _schema(FieldSpec field) {
     }
   }
   final documentation = field.documentation;
-  if (documentation != null) {
-    schema['description'] = documentation.replaceAll('\n', ' ');
-  }
+  final notes = [
+    ?documentation?.replaceAll('\n', ' '),
+    if (variantName != null)
+      () {
+        final variant = owner!.persistedVariants.firstWhere(
+          (candidate) => candidate.name == variantName,
+        );
+        final choices = [
+          for (final variantCase in variant.cases)
+            if (variantCase.presenceField case final presence?) presence.name,
+        ];
+        final empty = variant.emptyCase;
+        return 'Part of `$variantName`: set at most one of '
+            '${choices.join(', ')}${empty == null ? '' : '; none is ${_caseLabel(empty.className, variant.dartType)}'}.';
+      }(),
+  ];
+  if (notes.isNotEmpty) schema['description'] = notes.join(' ');
   return schema;
+}
+
+String _caseLabel(String className, String variantType) {
+  final base = variantType.replaceAll('?', '');
+  final stem = className.endsWith(base)
+      ? className.substring(0, className.length - base.length)
+      : className;
+  return snakeCase(stem).replaceAll('_', ' ');
+}
+
+/// The stored JSON value of agent argument [argument] for [field].
+String _inSql(FieldSpec field, String argument) {
+  final flags = field.scalarValue?.flags;
+  if (flags == null) return argument;
+  return 'public.agent_flags_in($argument, array[${flags.map(_quote).join(', ')}])';
+}
+
+/// The agent-facing JSON value of [field] stored in [column].
+String _outSql(FieldSpec field, String column) {
+  final flags = field.scalarValue?.flags;
+  if (flags == null) return column;
+  return 'public.agent_flags_out($column, array[${flags.map(_quote).join(', ')}])';
 }
 
 String _defaultSql(FieldSpec field) {
