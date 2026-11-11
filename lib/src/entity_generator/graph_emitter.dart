@@ -2625,6 +2625,7 @@ void _emitEntityGraphRuntime(
       'const NoopLocalEntityDiagnostics(),',
     )
     ..writeln('    bool autoSync = true,')
+    ..writeln('    bool detached = false,')
     ..writeln('  }) async {')
     ..writeln('    final adapterRegistry = syncAdapters.bind();')
     ..writeln('    final database = $databaseName(')
@@ -2636,6 +2637,11 @@ void _emitEntityGraphRuntime(
     ..writeln('      definition: ${graph.className}Metadata.definition,')
     ..writeln('      authenticatedPrincipalId: accountId.value,')
     ..writeln('      autoSync: autoSync,')
+    ..writeln(
+      '      detachedIdentityRoots: detached ? const ['
+      '${_identityRootTypes(graph).map((type) => "'$type'").join(', ')}'
+      '] : null,',
+    )
     ..writeln('      clock: clock,')
     ..writeln('      idGenerator: idGenerator,')
     ..writeln('      diagnostics: diagnostics,')
@@ -2737,6 +2743,7 @@ void _emitEntityGraphRuntime(
     ..writeln('  }');
   if (usesManagedFlutterRuntime && graph.syncTargets.isNotEmpty) {
     _emitManagedConnectorFactories(buffer, graph, entityGraphName, accountType);
+    _emitDetachedFactories(buffer, graph, entityGraphName, accountType);
   }
   final supabaseTargets = graph.syncTargets
       .where((target) => target.wireName == 'supabase')
@@ -2834,6 +2841,20 @@ void _emitEntityGraphRuntime(
       '_coordinator.transaction(body);',
     )
     ..writeln('  Future<void> sync() => _coordinator.sync();')
+    ..writeln(
+      '  /// Whether this graph keeps every change on the device, never '
+      'synchronizing.',
+    )
+    ..writeln('  bool get isDetached => _coordinator.isDetached;')
+    ..writeln(
+      '  /// Stores imported entities a detached graph computes itself; see '
+      '[LocalEntityGraphCoordinator.recordDetachedImports].',
+    )
+    ..writeln(
+      '  Future<void> recordDetachedImports(String entityType, '
+      'Iterable<JsonMap> records) => '
+      '_coordinator.recordDetachedImports(entityType, records);',
+    )
     ..writeln('  Future<void> close() => _closeFuture ??= _close();')
     ..writeln('  Future<void> _close() async {');
   for (final entity in graph.entities) {
@@ -2843,6 +2864,106 @@ void _emitEntityGraphRuntime(
     ..writeln('    await _coordinator.close();')
     ..writeln('  }')
     ..writeln('}');
+}
+
+/// The identity-owned roots the server provisions for every account, which a
+/// detached graph provisions itself.
+List<String> _identityRootTypes(EntityGraphSpec graph) => [
+  for (final binding in graph.syncBindings)
+    if (binding.entity.ownership == Ownership.identity &&
+        (binding.mode == SyncMode.replicated ||
+            binding.mode == SyncMode.imported))
+      binding.entity.className,
+];
+
+void _emitDetachedFactories(
+  StringBuffer buffer,
+  EntityGraphSpec graph,
+  String entityGraphName,
+  String accountType,
+) {
+  final databaseName = '${graph.className}Database';
+  buffer
+    ..writeln()
+    ..writeln(
+      "  /// Opens [accountId]'s store detached from every sync target: changes",
+    )
+    ..writeln(
+      '  /// stay on this device, queued, until [adoptDetachedStore] moves them',
+    )
+    ..writeln('  /// into an account that synchronizes them.')
+    ..writeln('  static Future<$entityGraphName> openDetached({')
+    ..writeln('    required LocalId<$accountType> accountId,')
+    ..writeln(
+      '    NodusLocalStore localStore = '
+      'const ApplicationSupportNodusLocalStore(),',
+    )
+    ..writeln('    MigrationStrategy? migrationOverride,')
+    ..writeln('    Clock clock = const SystemClock(),')
+    ..writeln(
+      '    EntityIdGenerator idGenerator = const UuidV7EntityIdGenerator(),',
+    )
+    ..writeln(
+      '    LocalEntityDiagnostics diagnostics = '
+      'const NoopLocalEntityDiagnostics(),',
+    )
+    ..writeln('  }) async {')
+    ..writeln('    final executor = await localStore.open(')
+    ..writeln("      packageName: '${graph.packageName}',")
+    ..writeln('      accountId: accountId.value,')
+    ..writeln('    );')
+    ..writeln('    return open(')
+    ..writeln('      accountId: accountId,')
+    ..writeln('      executor: executor,')
+    ..writeln('      syncAdapters: ${graph.className}SyncAdapters(');
+  for (final target in graph.syncTargets) {
+    final name = lowerCamelCase(target.wireName);
+    buffer.writeln(
+      '        $name: DetachedSyncAdapter('
+      'definition: ${graph.className}Metadata.${name}SyncDefinition),',
+    );
+  }
+  buffer
+    ..writeln('      ),')
+    ..writeln('      migrationOverride: migrationOverride,')
+    ..writeln('      clock: clock,')
+    ..writeln('      idGenerator: idGenerator,')
+    ..writeln('      diagnostics: diagnostics,')
+    ..writeln('      autoSync: false,')
+    ..writeln('      detached: true,')
+    ..writeln('    );')
+    ..writeln('  }')
+    ..writeln()
+    ..writeln(
+      "  /// Moves everything [from]'s detached store holds into [into]'s empty",
+    )
+    ..writeln(
+      '  /// store, to synchronize as [into]\'s own. Close both graphs first;',
+    )
+    ..writeln('  /// [from]\'s store is left for the caller to erase.')
+    ..writeln('  static Future<void> adoptDetachedStore({')
+    ..writeln('    required LocalId<$accountType> from,')
+    ..writeln('    required LocalId<$accountType> into,')
+    ..writeln('    DetachedIdentityRename? renameIdentity,')
+    ..writeln(
+      '    NodusLocalStore localStore = '
+      'const ApplicationSupportNodusLocalStore(),',
+    )
+    ..writeln('    MigrationStrategy? migrationOverride,')
+    ..writeln('  }) => adoptDetachedLocalStore(')
+    ..writeln('    definition: ${graph.className}Metadata.definition,')
+    ..writeln('    openDatabase: (accountId) async => $databaseName(')
+    ..writeln('      await localStore.open(')
+    ..writeln("        packageName: '${graph.packageName}',")
+    ..writeln('        accountId: accountId,')
+    ..writeln('      ),')
+    ..writeln('      migrationOverride: migrationOverride,')
+    ..writeln('    ),')
+    ..writeln('    fromAccountId: from.value,')
+    ..writeln('    intoAccountId: into.value,')
+    ..writeln('    renameIdentity: renameIdentity,')
+    ..writeln('  );')
+    ..writeln();
 }
 
 void _emitManagedConnectorFactories(

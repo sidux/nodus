@@ -2023,9 +2023,11 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     }
     var row = await _projectionRow(id);
     if (row == null || refresh) {
+      // A detached graph has no remote to read: what it lacks is absent.
       final readsRemoteSnapshots =
-          _syncBinding.mode == SyncMode.replicated ||
-          _syncBinding.mode == SyncMode.imported;
+          !graphCoordinator.isDetached &&
+          (_syncBinding.mode == SyncMode.replicated ||
+              _syncBinding.mode == SyncMode.imported);
       if (!readsRemoteSnapshots) {
         if (row == null) return null;
       } else {
@@ -4535,6 +4537,73 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     );
   }
 
+  /// Stores the identity root a detached graph's server would provision for
+  /// [accountId], as the server provisions it: protocol defaults, the
+  /// action-fixed initial values, and the provisioning time.
+  ///
+  /// The root is accepted at version zero, below every version the server
+  /// assigns, so a store adopted by an account later merges the root the
+  /// server provisioned over it and rebases the edits made while detached.
+  Future<void> _provisionDetachedRoot(String accountId, DateTime now) async {
+    final existing = await database
+        .customSelect(
+          'select 1 from ${descriptor.tableName} '
+          'where ${EntityConventions.idColumnName} = ?',
+          variables: [Variable.withString(accountId)],
+        )
+        .getSingleOrNull();
+    if (existing != null) return;
+    final fields = _detachedRecord(accountId, now);
+    await _insertResolved(fields, acceptedFields: fields);
+    if (descriptor.cardinality == Cardinality.unbounded) return;
+    runInAction(() {
+      final entity = descriptor.instantiate(
+        mutationSink: this,
+        clock: clock,
+        fields: fields,
+        localRevision: 0,
+      );
+      _identityMap[accountId] = entity;
+      _all.add(entity.generatedDomain);
+    });
+  }
+
+  /// A complete record of [id] as its server would first store it: [values]
+  /// over the protocol defaults, the action-fixed initial values, the
+  /// detached account as owner, and [now] as every required timestamp.
+  JsonMap _detachedRecord(
+    String id,
+    DateTime now, [
+    JsonMap values = const {},
+  ]) {
+    final initialValues = switch (descriptor) {
+      ActionPolicyProvider(:final actionPolicy) =>
+        actionPolicy.fixedInitialValues,
+      _ => const <String, Object?>{},
+    };
+    return {
+      for (final field in descriptor.fields)
+        field.name: switch (field) {
+          _ when values.containsKey(field.name) => values[field.name],
+          _ when field.name == EntityConventions.idFieldName => id,
+          _ when field.name == EntityConventions.serverVersionFieldName => 0,
+          _ when field.name == EntityConventions.ownerFieldName =>
+            graphCoordinator.authenticatedPrincipalId,
+          _ when initialValues.containsKey(field.name) =>
+            initialValues[field.name],
+          EntityFieldDescriptor(hasProtocolDefault: true) =>
+            field.protocolDefault,
+          EntityFieldDescriptor(nullable: true) => null,
+          EntityFieldDescriptor(kind: EntityFieldKind.timestamp) =>
+            now.toUtc().toIso8601String(),
+          _ => throw StateError(
+            '${descriptor.entityType}.${field.name} has no value a detached '
+            'graph can provision.',
+          ),
+        },
+    };
+  }
+
   Future<void> _updateResolved(
     String id,
     JsonMap fields, {
@@ -4622,6 +4691,7 @@ final class LocalEntityGraphCoordinator
     required this.definition,
     required this.authenticatedPrincipalId,
     required this.autoSync,
+    this.detachedIdentityRoots,
     this.clock = const SystemClock(),
     this.idGenerator = const UuidV7EntityIdGenerator(),
     this.diagnostics = const NoopLocalEntityDiagnostics(),
@@ -4674,6 +4744,15 @@ final class LocalEntityGraphCoordinator
   final EntityIdGenerator idGenerator;
   final LocalEntityDiagnostics diagnostics;
   final bool autoSync;
+
+  /// The identity roots a detached graph provisions itself, or null for a
+  /// graph connected to its targets.
+  ///
+  /// A detached graph keeps every change on the device: its work queues
+  /// durably but no target is ever asked to push or pull it, until another
+  /// account's store adopts it.
+  final List<String>? detachedIdentityRoots;
+  bool get isDetached => detachedIdentityRoots != null;
   final Set<String> _expectedEntityTypes;
   late final Map<String, List<CompositionDefinition>> _compositionsByAggregate =
       _indexCompositions(
@@ -4851,6 +4930,14 @@ final class LocalEntityGraphCoordinator
       throw StateError('Entity graph is missing engines: $missing.');
     }
     _started = true;
+    if (detachedIdentityRoots case final roots?) {
+      final provisionedAt = clock.nowUtc();
+      for (final entityType in roots) {
+        await _engineFor(
+          entityType,
+        )._provisionDetachedRoot(authenticatedPrincipalId, provisionedAt);
+      }
+    }
     final now = clock.nowUtc().millisecondsSinceEpoch;
     await database.customStatement(
       "update local_entity_sync_work set status = 'retryableFailure', "
@@ -4883,7 +4970,7 @@ final class LocalEntityGraphCoordinator
             task: LocalEntityBackgroundTask.queueRefresh,
           ),
         );
-    if (!autoSync) return;
+    if (!autoSync || isDetached) return;
     for (final target in definition.pullSyncTargets) {
       final backend = adapters.backendFor(target);
       if (backend case RemoteChangeSignalSource source) {
@@ -5838,6 +5925,7 @@ final class LocalEntityGraphCoordinator
 
   @override
   Future<void> schedulePull() async {
+    if (isDetached) return;
     await database.transaction(() async {
       for (final target in definition.pullSyncTargets) {
         await _schedulePullInCurrentTransaction(target);
@@ -5848,7 +5936,7 @@ final class LocalEntityGraphCoordinator
   }
 
   Future<void> _schedulePullTarget(SyncTargetId target) async {
-    if (!definition.pullSyncTargets.contains(target)) return;
+    if (isDetached || !definition.pullSyncTargets.contains(target)) return;
     await database.transaction(() => _schedulePullInCurrentTransaction(target));
     await refreshSyncWork();
   }
@@ -6239,6 +6327,45 @@ final class LocalEntityGraphCoordinator
       }
     });
     await _runAfterCommit();
+    _publishResolved(resolved);
+    for (final failure in parked) {
+      _recordDiagnosticSafely(
+        diagnostics,
+        SyncFailureDiagnostic(
+          occurredAt: clock.nowUtc(),
+          workId: item.id,
+          target: item.target,
+          operationId: item.operationId,
+          direction: SyncDirection.pull,
+          identity: failure.change.identity,
+          attemptCount: 1,
+          failure: RetryableSyncException(
+            code: 'pulled_change_parked',
+            message:
+                '${failure.change.identity.entityType} '
+                '${failure.change.identity.rawId} '
+                'v${failure.change.serverVersion.value} waits: '
+                '${failure.error}',
+          ),
+          stackTrace: StackTrace.current,
+          resultingStatus: SyncWorkStatus.retryableFailure,
+          retryAt: null,
+        ),
+      );
+    }
+    await _workChanged();
+  }
+
+  /// Applies one pulled [change] in its own savepoint and returns the error
+  /// it failed with, leaving nothing of it behind, or null once it is stored.
+  /// Shows the changes a committed pull or detached import stored: each
+  /// entity's new fields, and one projection change per engine.
+  void _publishResolved(
+    List<
+      (_ErasedLocalEntityEngine, RemoteEntityChange, _MergedRemoteProjection)
+    >
+    resolved,
+  ) {
     final changes =
         <_ErasedLocalEntityEngine, EntityProjectionChange<dynamic>>{};
     runInAction(() {
@@ -6273,36 +6400,85 @@ final class LocalEntityGraphCoordinator
     for (final entry in changes.entries) {
       entry.key._notifyErasedProjectionChanged(entry.value);
     }
-    for (final failure in parked) {
-      _recordDiagnosticSafely(
-        diagnostics,
-        SyncFailureDiagnostic(
-          occurredAt: clock.nowUtc(),
-          workId: item.id,
-          target: item.target,
-          operationId: item.operationId,
-          direction: SyncDirection.pull,
-          identity: failure.change.identity,
-          attemptCount: 1,
-          failure: RetryableSyncException(
-            code: 'pulled_change_parked',
-            message:
-                '${failure.change.identity.entityType} '
-                '${failure.change.identity.rawId} '
-                'v${failure.change.serverVersion.value} waits: '
-                '${failure.error}',
-          ),
-          stackTrace: StackTrace.current,
-          resultingStatus: SyncWorkStatus.retryableFailure,
-          retryAt: null,
-        ),
-      );
-    }
-    await _workChanged();
   }
 
-  /// Applies one pulled [change] in its own savepoint and returns the error
-  /// it failed with, leaving nothing of it behind, or null once it is stored.
+  /// Stores [records] of the imported [entityType] that a detached graph
+  /// computes on this device, as the import source it never pulls from would
+  /// send them.
+  ///
+  /// Each record names the entity's `id` and the fields it sets; the rest
+  /// keep their stored or initial values. Records stand below every version a
+  /// real source assigns, and an adopting account never takes them: its own
+  /// source sends its own.
+  Future<void> recordDetachedImports(
+    String entityType,
+    Iterable<JsonMap> records,
+  ) async {
+    if (!isDetached) {
+      throw StateError('Only a detached graph computes its imported entities.');
+    }
+    final binding = definition.syncBindingFor(entityType);
+    if (binding.mode != SyncMode.imported) {
+      throw ArgumentError.value(
+        entityType,
+        'entityType',
+        'Only an imported entity is computed by a detached graph.',
+      );
+    }
+    final engine = _engineFor(entityType);
+    final descriptor = engine.descriptor;
+    final now = clock.nowUtc();
+    final resolved =
+        <
+          (
+            _ErasedLocalEntityEngine,
+            RemoteEntityChange,
+            _MergedRemoteProjection,
+          )
+        >[];
+    await database.transaction(() async {
+      for (final record in records) {
+        final id = record[EntityConventions.idFieldName]! as String;
+        final stored = await database
+            .customSelect(
+              'select * from ${descriptor.tableName} '
+              'where ${EntityConventions.idColumnName} = ?',
+              variables: [Variable.withString(id)],
+            )
+            .getSingleOrNull();
+        final current = stored == null
+            ? engine._detachedRecord(id, now, record)
+            : engine._fieldsFromRow(stored.data);
+        final version = ServerVersion(
+          (current[EntityConventions.serverVersionFieldName]! as int) + 1,
+        );
+        final change = RemoteEntityChange(
+          identity: descriptor.parseIdentity(id),
+          serverVersion: version,
+          serverSequence: ServerSequence(0),
+          fields: RemoteEntityFields.decode(descriptor, {
+            ...current,
+            ...record,
+            EntityConventions.serverVersionFieldName: version.value,
+            if (current.containsKey('updatedAt'))
+              'updatedAt': now.toUtc().toIso8601String(),
+          }, complete: true),
+        );
+        final error = await _applyPulledChange(
+          change,
+          target: binding.target!,
+          resolved: resolved,
+          acknowledgedWorkIds: const {},
+        );
+        if (error != null) {
+          throw StateError('Could not store $entityType $id: $error');
+        }
+      }
+    });
+    await _runAfterCommit();
+    _publishResolved(resolved);
+  }
+
   Future<Object?> _applyPulledChange(
     RemoteEntityChange change, {
     required SyncTargetId target,
@@ -6962,6 +7138,7 @@ final class LocalEntityGraphCoordinator
   Future<void> _performSync() => _performWorkers(_workers.values);
 
   Future<void> _performWorkers(Iterable<SyncWorker> workers) async {
+    if (isDetached) return;
     runInAction(() => _syncState.value = const SyncState(SyncPhase.syncing));
     try {
       await Future.wait([for (final worker in workers) worker.drain()]);

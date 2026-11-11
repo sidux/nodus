@@ -326,6 +326,31 @@ the application calls the generated `eraseLocalStore`, which removes that
 account's database and journals through the same `NodusLocalStore` that opened
 it, so a shared device keeps nothing of a deleted account.
 
+An application MAY let someone use it before they have an account. It opens
+a locally generated account ID with the generated `openDetached`
+factory: the graph has the same store, sets, queries, and processes, but it is
+detached from every target. Its mutations queue durable push work that no
+worker claims, it never pulls, and it provisions the identity-owned roots
+locally with the protocol defaults the server would provision, accepted at
+version zero. Feature code observes it as an ordinary ready graph; only the
+composition root knows it is detached, and it MUST NOT reach a remote
+capability on its behalf. An imported entity has no source to pull from while
+detached, so the application MAY compute it on the device and store it
+through `recordDetachedImports`, below every version a real source assigns;
+adoption leaves those rows behind for the account's own source to replace.
+
+When that person creates an account, the application closes the detached
+graph, holds the new account's graph closed, and calls the generated
+`adoptDetachedStore`. Adoption moves every row and queued work item into the
+new account's store in one transaction, renaming the detached account ID
+wherever it appears and re-deriving each identity the application derives
+from owner-scoped values through a supplied rename callback. The adopted
+work then synchronizes as the account's own, and the identity roots it pulls
+rebase the edits made while detached. Adoption refuses a target store that
+already holds entities or queued work, since merging two accounts' data is
+not a mechanical operation; the application keeps the detached store in that
+case. Once adoption returns, the application erases the detached store.
+
 Foreground operations acquire bounded session leases. A lease keeps the graph
 alive only until its local operation or query acquisition completes; it cannot
 keep sign-out blocked through an unbounded stream or remote retry.

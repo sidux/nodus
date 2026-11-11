@@ -21,10 +21,16 @@ typedef _TestRpcInvoker =
 /// immediate online request/response boundaries and never become an alternate
 /// entity persistence, cache, synchronization, or retry path.
 final class SupabaseExternalCapabilityAdapter {
-  const SupabaseExternalCapabilityAdapter(SupabaseClient client)
-    : _client = client,
-      _testFunctionInvoker = null,
-      _testRpcInvoker = null;
+  /// With [requiresSignedIn], a call without a signed-in session fails
+  /// with [ExternalCapabilityFailureKind.authentication] before it reaches
+  /// the network, such as while someone uses the app without an account.
+  const SupabaseExternalCapabilityAdapter(
+    SupabaseClient client, {
+    bool requiresSignedIn = false,
+  }) : _client = client,
+       _requiresSignedIn = requiresSignedIn,
+       _testFunctionInvoker = null,
+       _testRpcInvoker = null;
 
   /// Creates a transport-free adapter for focused capability tests.
   const SupabaseExternalCapabilityAdapter.forTesting({
@@ -32,10 +38,12 @@ final class SupabaseExternalCapabilityAdapter {
     Future<Object?> Function(String name, Map<String, Object?>? params)?
     callRpc,
   }) : _client = null,
+       _requiresSignedIn = false,
        _testFunctionInvoker = invokeFunction,
        _testRpcInvoker = callRpc;
 
   final SupabaseClient? _client;
+  final bool _requiresSignedIn;
   final _TestFunctionInvoker? _testFunctionInvoker;
   final _TestRpcInvoker? _testRpcInvoker;
 
@@ -43,6 +51,7 @@ final class SupabaseExternalCapabilityAdapter {
     ExternalCapabilityContract<Request, Response> contract,
     Request request,
   ) async {
+    _requireSession(contract.name);
     final body = _encode(contract, request);
     final Object? data;
     try {
@@ -71,6 +80,7 @@ final class SupabaseExternalCapabilityAdapter {
     ExternalCapabilityContract<Request, Response> contract,
     Request request,
   ) async {
+    _requireSession(contract.name);
     final encoded = _encode(contract, request);
     final params = _rpcParams(contract.name, encoded);
     final Object? data;
@@ -91,6 +101,16 @@ final class SupabaseExternalCapabilityAdapter {
       throw _transportFailure(contract.name, error);
     }
     return _decode(contract, data);
+  }
+
+  void _requireSession(String capability) {
+    if (!_requiresSignedIn || _client?.auth.currentSession != null) return;
+    throw ExternalCapabilityException(
+      capability: capability,
+      kind: ExternalCapabilityFailureKind.authentication,
+      code: 'not_signed_in',
+      message: 'The external capability needs a signed-in account.',
+    );
   }
 
   SupabaseClient _requireClient() =>

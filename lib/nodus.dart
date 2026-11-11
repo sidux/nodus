@@ -26,6 +26,7 @@ import 'src/annotations.dart';
 
 part 'src/entity_engine.dart';
 part 'src/account_entity_graph_session.dart';
+part 'src/detached_store_adoption.dart';
 part 'src/memory_sync_backend.dart';
 part 'src/migration.dart';
 
@@ -5970,6 +5971,25 @@ abstract interface class PullSyncAdapter implements SyncAdapter {
 /// Adapter capability for targets that own both outbound and inbound lanes.
 abstract interface class PushPullSyncAdapter
     implements PushSyncAdapter, PullSyncAdapter {}
+
+/// Stands in for a target of a detached graph, which never pushes or pulls.
+///
+/// A detached graph binds one per target so its definition is validated like
+/// any other graph's; reaching either lane is a runtime defect.
+final class DetachedSyncAdapter implements PushPullSyncAdapter {
+  const DetachedSyncAdapter({required this.definition});
+
+  @override
+  final EntityGraphDefinition definition;
+
+  @override
+  Future<PushResult> push(PushSyncWorkItem item) =>
+      throw StateError('A detached entity graph never pushes.');
+
+  @override
+  Future<PullResult> pull({required ServerSequence afterSequence}) =>
+      throw StateError('A detached entity graph never pulls.');
+}
 
 /// Optional transport capability for demand-driven entity reads.
 ///
