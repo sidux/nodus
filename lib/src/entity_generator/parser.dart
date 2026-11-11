@@ -695,6 +695,18 @@ Future<EntitySpec?> parseEntityAsset(
                   .listValue
                   .map((value) => value.toStringValue()!)
                   .toList(growable: false),
+        reserved: persisted == null
+            ? const []
+            : [
+                for (final value in persisted.read('reserved').listValue)
+                  value.toStringValue()!,
+              ],
+        reservedUnless: persisted?.peek('reservedUnless')?.isNull ?? true
+            ? null
+            : persisted!.read('reservedUnless').objectValue.toSymbolValue(),
+        reservedMessage: persisted == null
+            ? 'This value is reserved.'
+            : persisted.read('reservedMessage').stringValue,
         greaterThan: persisted?.peek('greaterThan')?.isNull ?? true
             ? null
             : persisted!.read('greaterThan').objectValue.toSymbolValue(),
@@ -3063,6 +3075,18 @@ FieldSpec _parsePersistedVariantComponent(
               .listValue
               .map((value) => value.toStringValue()!)
               .toList(growable: false),
+    reserved: persisted == null
+        ? const []
+        : [
+            for (final value in persisted.read('reserved').listValue)
+              value.toStringValue()!,
+          ],
+    reservedUnless: persisted?.peek('reservedUnless')?.isNull ?? true
+        ? null
+        : persisted!.read('reservedUnless').objectValue.toSymbolValue(),
+    reservedMessage: persisted == null
+        ? 'This value is reserved.'
+        : persisted.read('reservedMessage').stringValue,
     greaterThan: persisted?.peek('greaterThan')?.isNull ?? true
         ? null
         : persisted!.read('greaterThan').objectValue.toSymbolValue(),
@@ -4850,6 +4874,23 @@ List<ActionSpec> _parseActions(
           for (final requirement in annotation.read('requires').listValue)
             _parseRequireLinked(ConstantReader(requirement), method),
         ],
+        routeToCheck: annotation.read('routeToCheck').isNull
+            ? null
+            : (
+                annotation
+                    .read('routeToCheck')
+                    .read('action')
+                    .objectValue
+                    .toSymbolValue()!,
+                annotation
+                    .read('routeToCheck')
+                    .read('request')
+                    .typeValue
+                    .getDisplayString(),
+              ),
+        recorded: annotation.read('recorded').isNull
+            ? null
+            : _parseRecorded(annotation.read('recorded'), method),
         agentRefusals: switch (_agentToolChecker.firstAnnotationOf(method)) {
           final tool? => [
             for (final refusal in ConstantReader(
@@ -5446,6 +5487,22 @@ void _validateEntity(
         '`minValue`.',
         element: element,
       );
+    }
+    if (field.reserved.isNotEmpty) {
+      if (field.dartType.replaceAll('?', '') != 'String') {
+        throw InvalidGenerationSourceError(
+          '`reserved` is only valid for String fields.',
+          element: element,
+        );
+      }
+      final unless = field.reservedUnless;
+      if (unless != null &&
+          !fields.any((other) => other.name == unless && other.nullable)) {
+        throw InvalidGenerationSourceError(
+          '`reservedUnless` must name a nullable field: `$unless`.',
+          element: element,
+        );
+      }
     }
     if (field.allowedValues.isNotEmpty) {
       if (field.dartType.replaceAll('?', '') != 'String' &&
@@ -6916,6 +6973,30 @@ AnswersSpec? _parseAnswers(ClassElement classElement) {
     maxFieldName: symbol('max'),
     optionFieldName: symbol('option'),
     optionQuestionFieldName: symbol('optionQuestion'),
+  );
+}
+
+RecordedSpec _parseRecorded(ConstantReader reader, Element element) {
+  String? symbol(String name) => reader.read(name).isNull
+      ? null
+      : reader.read(name).objectValue.toSymbolValue();
+  return RecordedSpec(
+    entityClassName: reader.read('entity').typeValue.getDisplayString(),
+    subjectFieldName: symbol('subject')!,
+    byFieldName: symbol('by')!,
+    commentFieldName: symbol('comment'),
+    from: {
+      for (final entry in reader.read('from').mapValue.entries)
+        entry.key!.toSymbolValue()!: [
+          for (final value in entry.value!.toListValue()!)
+            value.variable?.name ??
+                (throw InvalidGenerationSourceError(
+                  'Recorded.from takes enum constants.',
+                  element: element,
+                )),
+        ],
+    },
+    fromMessage: reader.read('fromMessage').stringValue,
   );
 }
 

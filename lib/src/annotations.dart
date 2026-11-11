@@ -558,6 +558,9 @@ final class Persisted {
     this.minValue,
     this.maxValue,
     this.allowedValues = const [],
+    this.reserved = const [],
+    this.reservedUnless,
+    this.reservedMessage = 'This value is reserved.',
     this.greaterThan,
     this.greaterThanOrEqual,
     this.requires,
@@ -588,6 +591,16 @@ final class Persisted {
 
   /// Closed set accepted by a persisted String field across every backend.
   final List<String> allowedValues;
+
+  /// Values a persisted String field never takes, ignoring case and
+  /// surrounding whitespace, while [reservedUnless] is unset; every backend
+  /// refuses them with [reservedMessage].
+  final List<String> reserved;
+
+  /// A field that, while set, lets the row take a [reserved] value, such as
+  /// the row the application provides under that name.
+  final Symbol? reservedUnless;
+  final String reservedMessage;
 
   /// Another persisted numeric field that this value must exceed.
   ///
@@ -980,6 +993,8 @@ final class Action {
     this.values = const [],
     this.derive = const {},
     this.requires = const [],
+    this.recorded,
+    this.routeToCheck,
     this.bulk = false,
     this.rebase,
   });
@@ -989,6 +1004,15 @@ final class Action {
   /// Linked work that must be finished first; the generated
   /// `require<Action>` checks it, and so does the action's agent tool.
   final List<RequireLinked> requires;
+
+  /// Records each run as a row of another entity, such as who reopened a
+  /// task and why; the generated `<action>WithRecord` and the agent tool do.
+  final Recorded? recorded;
+
+  /// When a status edge this action takes waits for an accepted checker
+  /// (`relationshipBlockedBy`), the agent tool asks that checker instead of
+  /// refusing: it runs [RouteToCheck.action] and adds a request row.
+  final RouteToCheck? routeToCheck;
 
   /// Fields the action sets from its parameters, so every caller derives
   /// them alike: a [CopyOf] or [Banded] of a parameter, or [ClockNow]. The
@@ -1131,6 +1155,40 @@ final class AgentTool {
   /// Boolean fields of the row that refuse the tool, for an action only the
   /// application completes, such as one sent to a checker.
   final List<Refusal> refusals;
+}
+
+/// Sends an [Action] whose edge waits for an accepted checker to that
+/// checker: the agent tool runs [action], with the same parameters, and
+/// creates a [request] row referencing the checker's row, unless one is
+/// still at its starting state.
+final class RouteToCheck {
+  const RouteToCheck(this.action, {required this.request});
+
+  final Symbol action;
+  final Type request;
+}
+
+/// The row an [Action] records each run as: an [entity] row referencing
+/// the acting row through [subject], naming who acted through [by], and
+/// keeping the caller's [comment]. The action runs only while the row's
+/// fields hold one of the [from] values, and is refused otherwise with
+/// [fromMessage].
+final class Recorded {
+  const Recorded(
+    this.entity, {
+    required this.subject,
+    required this.by,
+    this.comment,
+    this.from = const {},
+    this.fromMessage = 'This action does not apply now.',
+  });
+
+  final Type entity;
+  final Symbol subject;
+  final Symbol by;
+  final Symbol? comment;
+  final Map<Symbol, List<Object>> from;
+  final String fromMessage;
 }
 
 /// Refuses an [Action] while a row linked to this one through the [link]

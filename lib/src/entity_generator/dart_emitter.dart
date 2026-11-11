@@ -1971,6 +1971,28 @@ void _emitCrossFieldValidations(
   required String indent,
 }) {
   for (final field in spec.fields) {
+    if (field.reserved.isEmpty) continue;
+    final value = '(${valueFor(field)})';
+    final unless = switch (field.reservedUnless) {
+      final other? =>
+        '(${valueFor(spec.fields.singleWhere((candidate) => candidate.name == other))}) == null && ',
+      null => '',
+    };
+    final reserved =
+        'const {${field.reserved.map((each) => _dartLiteral(each.trim().toLowerCase())).join(', ')}}';
+    final present = field.nullable ? '$value != null && ' : '';
+    buffer
+      ..writeln(
+        '$indent if ($unless$present$reserved.contains($value${field.nullable ? '!' : ''}.trim().toLowerCase())) {',
+      )
+      ..writeln('$indent  throw const EntityValidationException(')
+      ..writeln("$indent    entityType: '${spec.className}',")
+      ..writeln("$indent    field: '${field.name}',")
+      ..writeln('$indent    message: ${_dartLiteral(field.reservedMessage)},')
+      ..writeln('$indent  );')
+      ..writeln('$indent}');
+  }
+  for (final field in spec.fields) {
     final otherName = field.greaterThan;
     if (otherName == null) continue;
     final other = spec.fields.singleWhere(

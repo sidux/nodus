@@ -9864,6 +9864,15 @@ enum JobState { open, done }
 abstract class Job implements OwnedBy<Job, Account>, SoftDeletable {
   @Persisted(defaultValue: JobState.open)
   abstract final JobState state;
+
+  @Persisted(
+    reserved: ['Inbox'],
+    reservedUnless: #origin,
+    reservedMessage: 'Inbox is taken.',
+  )
+  abstract final String title;
+
+  abstract final String? origin;
 }
 '''
           ..['nodus|lib/project_job.dart'] = '''
@@ -9982,6 +9991,9 @@ abstract class Reply implements OwnedBy<Reply, Account>, SoftDeletable {
               'create or replace function public.projects_finish_unfinished(',
             ),
             contains("target.state in ('done')"),
+            contains(
+              "check (origin is not null or lower(btrim(title)) not in ('inbox'))",
+            ),
             contains('create trigger replies_answers'),
             contains("raise exception '% has an answer of the wrong kind.'"),
             contains("raise exception '% has an invalid option.'"),

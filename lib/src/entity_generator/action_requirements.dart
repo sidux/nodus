@@ -296,3 +296,76 @@ grant execute on function ${resolved.sqlFunction}(uuid) to authenticated;
 }
 
 String _quote(String value) => "'${value.replaceAll("'", "''")}'";
+
+/// Generated `<action>WithRecord` for every action declaring `recorded`.
+String emitRecordedActionsDart(EntityGraphSpec graph, String entityGraphName) {
+  final buffer = StringBuffer();
+  for (final entity in graph.entities) {
+    final actions = [
+      for (final action in entity.actions)
+        if (action.recorded != null) action,
+    ];
+    if (actions.isEmpty) continue;
+    buffer
+      ..writeln()
+      ..writeln(
+        'extension ${entity.className}RecordedActions on ${entity.className} {',
+      );
+    for (final action in actions) {
+      final recorded = action.recorded!;
+      final record = graph.entities.singleWhere(
+        (candidate) => candidate.className == recorded.entityClassName,
+      );
+      if (action.parameters.isNotEmpty) {
+        throw InvalidGenerationSourceError(
+          'A recorded action takes no parameters: '
+          '${entity.className}.${action.methodName}.',
+        );
+      }
+      final by = record.fields.singleWhere(
+        (field) => field.name == recorded.byFieldName,
+      );
+      final actorClass = by.reference!.targetClassName;
+      final actor = actorClass == entity.ownerClassName
+          ? 'entityGraph.accountId'
+          : 'entityGraph.accountId.as${actorClass}Id';
+      final comment = recorded.commentFieldName;
+      final from = [
+        for (final MapEntry(key: name, value: constants)
+            in recorded.from.entries)
+          'const {${[for (final constant in constants) '${entity.fields.singleWhere((field) => field.name == name).dartType.replaceAll('?', '')}.$constant'].join(', ')}}.contains($name)',
+      ];
+      buffer
+        ..writeln(
+          '  /// Runs `${action.methodName}` and records it as a '
+          '${record.className}${comment == null ? '' : ' with [$comment]'}.',
+        )
+        ..writeln(
+          '  Future<void> ${action.methodName}WithRecord('
+          '$entityGraphName entityGraph${comment == null ? '' : ', {String? $comment}'}) async {',
+        );
+      if (from.isNotEmpty) {
+        buffer
+          ..writeln('    if (!(${from.join(' && ')})) {')
+          ..writeln('      throw const EntityValidationException(')
+          ..writeln("        entityType: '${entity.className}',")
+          ..writeln("        field: '${recorded.from.keys.first}',")
+          ..writeln('        message: ${dartLiteral(recorded.fromMessage)},')
+          ..writeln('      );')
+          ..writeln('    }');
+      }
+      buffer
+        ..writeln('    await entityGraph.transaction(() async {')
+        ..writeln('      await ${action.methodName}();')
+        ..writeln('      await entityGraph.${record.setAccessor}.create(')
+        ..writeln('        ${recorded.subjectFieldName}: id,')
+        ..writeln('        ${recorded.byFieldName}: $actor,')
+        ..writeln(comment == null ? '' : '        $comment: $comment,')
+        ..writeln('      );')
+        ..writeln('    });')
+        ..writeln('  }');
+    }
+    buffer.writeln('}');
+  }
+  return buffer.toString();
+}

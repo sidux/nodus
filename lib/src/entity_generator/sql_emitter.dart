@@ -61,6 +61,12 @@ String emitSupabaseSql(
       if (field.allowedValues.isNotEmpty)
         'check (${field.columnName} in '
             '(${field.allowedValues.map(_sqlLiteral).join(', ')}))',
+      if (field.reserved.isNotEmpty)
+        'check (${switch (field.reservedUnless) {
+              final other? => '${spec.fields.singleWhere((candidate) => candidate.name == other).columnName} is not null or ',
+              null => '',
+            }}lower(btrim(${field.columnName})) not in '
+            '(${field.reserved.map((value) => _sqlLiteral(value.trim().toLowerCase())).join(', ')}))',
       if (field.greaterThan case final otherName?)
         'check (${field.columnName} > '
             '${spec.fields.singleWhere((candidate) => candidate.name == otherName).columnName})',
@@ -3485,6 +3491,14 @@ String activeReferrerExistsSql(
       ? exists
       : '($exists and not '
             '${activeReferrerExistsSql(unless, id, depth: depth + 1)})';
+}
+
+/// The first row of [referrer] active for the row [id], as a select.
+String activeReferrerSelectSql(ActiveReferrerSpec referrer, String id) {
+  final unless = referrer.unless;
+  return 'select blocker.* from public.${referrer.tableName} blocker where '
+      '${_activeReferrerConditions(referrer, id, 'blocker', 0)}'
+      '${unless == null ? '' : ' and not ${activeReferrerExistsSql(unless, id, depth: 1)}'}';
 }
 
 String _activeReferrerConditions(

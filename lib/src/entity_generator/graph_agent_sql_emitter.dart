@@ -9,7 +9,11 @@ import 'member_operations.dart';
 import 'member_operations_sql.dart'
     show MemberOperationsSql, derivedActionPatch;
 import 'model.dart';
-import 'sql_emitter.dart' show activeReferrerExistsSql, principalByIdExpression;
+import 'sql_emitter.dart'
+    show
+        activeReferrerExistsSql,
+        activeReferrerSelectSql,
+        principalByIdExpression;
 
 /// Emits the agent tool surface of a graph target.
 ///
@@ -53,6 +57,14 @@ String emitAgentSurfaceSql(EntityGraphSpec graph) {
     writable
       ..add(operations.root.className)
       ..add(operations.member.className);
+  }
+  for (final entity in entities) {
+    for (final action in entity.actions) {
+      if (action.recorded case final recorded?) {
+        writable.add(recorded.entityClassName);
+      }
+      if (action.routeToCheck case (_, final request)) writable.add(request);
+    }
   }
   final checkIns = [
     for (final log in graph.entities)
@@ -1503,7 +1515,18 @@ grant execute on function $name(uuid) to authenticated;
     final fields = {for (final field in spec.fields) field.name: field};
     final checked = _checkedEdges(action);
     final today = _dayRootFunction;
+    final recorded = action.recorded;
+    final record = recorded == null
+        ? null
+        : graph.entities.singleWhere(
+            (candidate) => candidate.className == recorded.entityClassName,
+          );
     final properties = <String, Object?>{
+      if (recorded?.commentFieldName case final comment?)
+        comment: {
+          'type': 'string',
+          'description': 'Why, kept with the record of it.',
+        },
       'id': {
         'type': 'string',
         'format': 'uuid',
@@ -1518,24 +1541,10 @@ grant execute on function $name(uuid) to authenticated;
               '${spec.className}.${action.methodName} has an unsupported type.',
             )),
     };
-    String parameterJson(String name) =>
-        action.parameters
-            .singleWhere((parameter) => parameter.name == name)
-            .dartType
-            .endsWith('?')
-        ? "coalesce(p_arguments -> ${_quote(name)}, 'null'::jsonb)"
-        : "public.agent_required(p_arguments, ${_quote(name)})";
-    final patch = [
-      for (final parameter in action.parameters)
-        "${_quote(parameter.fieldName)}, ${parameterJson(parameter.name)}",
-      ...derivedActionPatch(action, (name) => fields[name]!, parameterJson),
-      for (final assignment in action.assignments)
-        "${_quote(assignment.fieldName)}, ${switch (assignment.kind) {
-          ActionValueKind.literal => _jsonLiteral(fields[assignment.fieldName]!.isEnum && assignment.literal is String ? snakeCase(assignment.literal! as String) : assignment.literal),
-          ActionValueKind.clockNow => 'public.agent_now()',
-          ActionValueKind.clear => "'null'::jsonb",
-        }}",
-    ];
+    final patch = _actionPatch(action, action);
+    final routing = action.routeToCheck == null
+        ? null
+        : _routeToCheck(action, checked);
     return _AgentTool(
       name: name,
       title: '${_capitalized(_words(action.methodName))} $label',
@@ -1551,7 +1560,7 @@ grant execute on function $name(uuid) to authenticated;
       destructive: false,
       idempotent: false,
       functionSql:
-          '''${checked?.sql ?? ''}
+          '''${checked?.sql ?? ''}${routing?.helper ?? ''}
 create or replace function public.agent_tool_$name(p_arguments jsonb)
 returns jsonb
 language plpgsql
@@ -1567,17 +1576,208 @@ ${today == null ? '' : "  if p_arguments ->> 'id' is null then\n    p_arguments 
 ${_selectRowSql('current_row')}
 ${[for (final refusal in action.agentRefusals) "  if coalesce(current_row.${fields[refusal.fieldName]!.columnName}, false) then\n    raise exception ${_quote(refusal.message)} using errcode = '42501';\n  end if;"].join('\n')}
 ${action.requirements.isEmpty ? '' : _requirementsSql(action)}
+${routing?.body ?? ''}
+${recorded == null || recorded.from.isEmpty ? '' : "  if not (${[for (final MapEntry(key: name, value: constants) in recorded.from.entries) "current_row.${fields[name]!.columnName} in (${constants.map((constant) => _quote(snakeCase(constant))).join(', ')})"].join(' and ')}) then\n    raise exception ${_quote(recorded.fromMessage)} using errcode = '22023';\n  end if;"}
 ${checked == null ? '' : '''  if ${checked.name}(current_row.${spec.idField.columnName}) then
     raise exception 'This waits for a check: do it in Grittle so the reviewer is asked'
       using errcode = '42501';
   end if;'''}
 ${_pushSql(spec, operation: 'patch', entityId: 'current_row.${spec.idField.columnName}', patch: patch.join(', '), base: 'current_row.${spec.serverVersionField.columnName}')}
+${record == null ? '' : _recordSql(recorded!, record)}
   select * into current_row from public.$table item where item.${spec.idField.columnName} = current_row.${spec.idField.columnName};
   return $rowFunction(current_row);
 end;
 \$\$;
 ''',
     );
+  }
+
+  /// The `jsonb_build_object` entries [action] patches, reading the
+  /// parameters of [parameters] from the tool's arguments.
+  List<String> _actionPatch(ActionSpec action, ActionSpec parameters) {
+    final fields = {for (final field in spec.fields) field.name: field};
+    String parameterJson(String name) =>
+        parameters.parameters
+            .singleWhere((parameter) => parameter.name == name)
+            .dartType
+            .endsWith('?')
+        ? "coalesce(p_arguments -> ${_quote(name)}, 'null'::jsonb)"
+        : "public.agent_required(p_arguments, ${_quote(name)})";
+    return [
+      for (final parameter in action.parameters)
+        "${_quote(parameter.fieldName)}, ${parameterJson(parameter.name)}",
+      ...derivedActionPatch(action, (name) => fields[name]!, parameterJson),
+      for (final assignment in action.assignments)
+        "${_quote(assignment.fieldName)}, ${switch (assignment.kind) {
+          ActionValueKind.literal => _jsonLiteral(fields[assignment.fieldName]!.isEnum && assignment.literal is String ? snakeCase(assignment.literal! as String) : assignment.literal),
+          ActionValueKind.clockNow => 'public.agent_now()',
+          ActionValueKind.clear => "'null'::jsonb",
+        }}",
+    ];
+  }
+
+  /// Sends [action] to the accepted checker its edge waits for: a helper
+  /// reading the checker past row-level security, and the tool's branch
+  /// running the routed action and asking the checker.
+  ({String helper, String body}) _routeToCheck(
+    ActionSpec action,
+    ({String name, String sql})? checked,
+  ) {
+    final (routeName, requestClass) = action.routeToCheck!;
+    final route = spec.actions.singleWhere(
+      (candidate) => candidate.methodName == routeName,
+    );
+    for (final parameter in route.parameters) {
+      if (!action.parameters.any((each) => each.name == parameter.name)) {
+        throw InvalidGenerationSourceError(
+          'RouteToCheck: `${parameter.name}` of $routeName is not a '
+          'parameter of ${action.methodName}.',
+        );
+      }
+    }
+    final branches = <String>[];
+    String? referrerClass;
+    for (final assignment in action.assignments) {
+      if (assignment.kind != ActionValueKind.literal) continue;
+      final field = spec.fields.firstWhere(
+        (candidate) => candidate.name == assignment.fieldName,
+      );
+      if (field.transitions.isEmpty) continue;
+      final target = snakeCase(assignment.literal! as String);
+      for (final transition in field.transitions) {
+        if (transition.toWire != target) continue;
+        for (final blocker in transition.relationshipBlockers) {
+          referrerClass ??= blocker.className;
+          branches.add(
+            "(${activeReferrerSelectSql(blocker, 'current_row.${spec.idField.columnName}')} "
+            "and current_row.${field.columnName} = '${transition.fromWire}' limit 1)",
+          );
+        }
+      }
+    }
+    if (branches.isEmpty || referrerClass == null) {
+      throw InvalidGenerationSourceError(
+        'RouteToCheck on ${spec.className}.${action.methodName} needs an '
+        'edge declared relationshipBlockedBy.',
+      );
+    }
+    final referrer = graph.entities.singleWhere(
+      (entity) => entity.className == referrerClass,
+    );
+    final request = graph.entities.singleWhere(
+      (entity) => entity.className == requestClass,
+    );
+    final requestReference = request.fields.singleWhere(
+      (field) => field.reference?.targetClassName == referrerClass,
+    );
+    final ownerColumn = requestReference.isOwnerReference
+        ? requestReference.reference!.ownershipSourceColumnName
+        : referrer.ownerField.columnName;
+    final state = request.fields
+        .where((field) => field.isEnum && field.persistedDefaultValue != null)
+        .first;
+    final helper =
+        'public.agent_${snakeCase(action.methodName)}_${singular}_checker';
+    final readable = {
+      for (final grant in spec.security.grants)
+        if (grant.operation == RlsOperation.select)
+          principalByIdExpression(spec, grant.principal, 'p_id'),
+    }.join(' or ');
+    final requestValues = <String, String>{
+      request.ownerField.name: "checker -> 'owner'",
+      requestReference.name: "checker -> 'id'",
+    };
+    final requestPatch = [
+      "'${request.idField.name}', to_jsonb(gen_random_uuid())",
+      for (final field in request.createFields)
+        if (field.name != request.idField.name &&
+            field.name != EntityConventions.orderRankFieldName)
+          '${_quote(field.name)}, ${requestValues[field.name] ?? (field.persistedDefaultValue != null
+                  ? _jsonLiteral(field.isEnum ? snakeCase(field.persistedDefaultValue! as String) : field.persistedDefaultValue)
+                  : field.nullable
+                  ? "'null'::jsonb"
+                  : throw InvalidGenerationSourceError('RouteToCheck must give `${field.name}` of $requestClass a value.'))}',
+    ];
+    return (
+      helper:
+          '''
+create or replace function $helper(p_id uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as \$\$
+  select coalesce((
+    select jsonb_build_object(
+      'id', checker.id,
+      'owner', checker.$ownerColumn,
+      'pending', exists (
+        select 1 from public.${request.tableName} request
+        where request.${requestReference.columnName} = checker.id
+          and request.${state.columnName} = ${_quote(snakeCase(state.persistedDefaultValue! as String))}
+      )
+    )
+    from public.$table current_row
+    cross join lateral (${branches.join(' union all ')} limit 1) checker
+    where current_row.${spec.idField.columnName} = p_id and ($readable)
+  ), 'null'::jsonb)
+\$\$;
+
+revoke all on function $helper(uuid) from $_apiRoles;
+grant execute on function $helper(uuid) to authenticated;
+''',
+      body:
+          '''
+  declare
+    checker jsonb := $helper(current_row.${spec.idField.columnName});
+    request_patch jsonb;
+  begin
+    if checker <> 'null'::jsonb then
+${_pushSql(spec, operation: 'patch', entityId: 'current_row.${spec.idField.columnName}', patch: _actionPatch(route, action).join(', '), base: 'current_row.${spec.serverVersionField.columnName}', indent: '      ')}
+      if not (checker ->> 'pending')::boolean then
+        request_patch := jsonb_build_object(${requestPatch.join(', ')});
+${_pushSql(request, operation: 'create', entityId: "request_patch ->> 'id'", patchSql: 'request_patch', indent: '        ')}
+      end if;
+      select * into current_row from public.$table item where item.${spec.idField.columnName} = current_row.${spec.idField.columnName};
+      return $rowFunction(current_row);
+    end if;
+  end;''',
+    );
+  }
+
+  /// Creates the row an action records its run as.
+  String _recordSql(RecordedSpec recorded, EntitySpec record) {
+    final values = <String, String>{
+      record.ownerField.name:
+          'to_jsonb(current_row.${spec.ownerField.columnName})',
+      recorded.subjectFieldName:
+          'to_jsonb(current_row.${spec.idField.columnName})',
+      recorded.byFieldName: 'to_jsonb(auth.uid())',
+      if (recorded.commentFieldName case final comment?)
+        comment:
+            "coalesce(to_jsonb(nullif(btrim(p_arguments ->> ${_quote(comment)}), '')), 'null'::jsonb)",
+    };
+    final patch = [
+      "'${record.idField.name}', to_jsonb(gen_random_uuid())",
+      for (final field in record.createFields)
+        if (field.name != record.idField.name &&
+            field.name != EntityConventions.orderRankFieldName)
+          '${_quote(field.name)}, ${values[field.name] ?? (field.nullable ? "'null'::jsonb" : throw InvalidGenerationSourceError('A recorded action must give `${field.name}` of ${record.className} a value.'))}',
+    ];
+    return '''  declare
+    record_patch jsonb := jsonb_build_object(${patch.join(', ')});
+  begin
+    perform public.push_${record.tableName}_operations(jsonb_build_array(jsonb_build_object(
+      'operationId', gen_random_uuid(),
+      'operation', 'create',
+      'entityType', '${record.className}',
+      'entityId', record_patch ->> 'id',
+      'baseServerVersion', 0,
+      'protocolVersion', ${record.protocolVersion},
+      'patch', record_patch
+    )));
+  end;''';
   }
 }
 

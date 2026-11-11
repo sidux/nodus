@@ -102,7 +102,8 @@ String emitEntityGraph(
     )
     ..write(emitAcyclicDart(graph, '${graph.className}EntityGraph'))
     ..write(emitActionRequirementsDart(graph, '${graph.className}EntityGraph'))
-    ..write(emitAnswersDart(graph));
+    ..write(emitAnswersDart(graph))
+    ..write(emitRecordedActionsDart(graph, '${graph.className}EntityGraph'));
   buffer
     ..writeln()
     ..writeln('@TableIndex.sql(')

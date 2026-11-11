@@ -1450,6 +1450,8 @@ final class ActionSpec {
     required this.assignments,
     this.derivations = const {},
     this.requirements = const [],
+    this.recorded,
+    this.routeToCheck,
     this.agentRefusals = const [],
     this.bulk = false,
     this.rebase,
@@ -1467,6 +1469,12 @@ final class ActionSpec {
 
   /// Linked work that must be finished before the action runs.
   final List<RequireLinkedSpec> requirements;
+
+  /// The row each run is recorded as.
+  final RecordedSpec? recorded;
+
+  /// The action and request class an agent run takes to an accepted checker.
+  final (String action, String request)? routeToCheck;
 
   /// Row booleans that refuse the action's agent tool.
   final List<RefusalSpec> agentRefusals;
@@ -1599,6 +1607,26 @@ final class DayPartsSpec {
 
   final List<(String, int)> starts;
   final String wholeDay;
+}
+
+final class RecordedSpec {
+  const RecordedSpec({
+    required this.entityClassName,
+    required this.subjectFieldName,
+    required this.byFieldName,
+    required this.commentFieldName,
+    required this.from,
+    required this.fromMessage,
+  });
+
+  final String entityClassName;
+  final String subjectFieldName;
+  final String byFieldName;
+  final String? commentFieldName;
+
+  /// Field names with the enum constant names the action runs from.
+  final Map<String, List<String>> from;
+  final String fromMessage;
 }
 
 final class RequireLinkedSpec {
@@ -1943,6 +1971,9 @@ final class FieldSpec {
     this.minValue,
     this.maxValue,
     this.allowedValues = const [],
+    this.reserved = const [],
+    this.reservedUnless,
+    this.reservedMessage = 'This value is reserved.',
     this.greaterThan,
     this.greaterThanOrEqual,
     this.requires,
@@ -1998,6 +2029,12 @@ final class FieldSpec {
   final int? minValue;
   final int? maxValue;
   final List<String> allowedValues;
+
+  /// Values refused, ignoring case and surrounding whitespace, while
+  /// [reservedUnless] is unset.
+  final List<String> reserved;
+  final String? reservedUnless;
+  final String reservedMessage;
   final String? greaterThan;
   final String? greaterThanOrEqual;
   final String? requires;
@@ -2087,6 +2124,9 @@ final class FieldSpec {
     minValue: minValue,
     maxValue: maxValue,
     allowedValues: allowedValues,
+    reserved: reserved,
+    reservedUnless: reservedUnless,
+    reservedMessage: reservedMessage,
     greaterThan: greaterThan,
     greaterThanOrEqual: greaterThanOrEqual,
     requires: requires,

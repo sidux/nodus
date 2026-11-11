@@ -1569,6 +1569,17 @@ and the action's agent tool checks the same in the target. `@AgentTool`
 `refusals` keep agents from an action only the application completes, such
 as one sent to a checker.
 
+`recorded: Recorded(Entity, subject:, by:, comment:, from:)` records each run
+of an action as a row naming who acted and why, and runs it only from the
+declared states; the application calls the generated `<action>WithRecord`,
+and the agent tool takes the same `comment`. `routeToCheck` sends an agent's
+action whose edge waits for an accepted checker (`relationshipBlockedBy`) to
+that checker instead of refusing it: the tool takes the declared action and
+adds one pending request.
+
+A String field's `reserved` values are refused by every backend, ignoring
+case and surrounding whitespace, while its `reservedUnless` field is unset.
+
 A nullable self-reference may declare `hierarchy: true` only with cascade
 deletion. Generation then exposes `removeHierarchy`, `restoreHierarchy`, and,
 for `Archivable`, `setHierarchyArchived` on the entity set. Nodus validates the
