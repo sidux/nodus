@@ -11,6 +11,7 @@ final class ResolvedCheckIns {
     required this.subject,
     required this.owner,
     required this.undo,
+    required this.answers,
   });
 
   factory ResolvedCheckIns.of(EntitySpec log, EntityGraphSpec graph) {
@@ -35,6 +36,17 @@ final class ResolvedCheckIns {
       subject: entity(subjectClass, 'subject'),
       owner: entity(log.ownerClassName, 'owner'),
       undo: entity(spec.undoneAsClassName, 'UndoneAs'),
+      answers: graph.entities
+          .where(
+            (candidate) =>
+                candidate.answers != null &&
+                candidate.fields.any(
+                  (field) =>
+                      field.reference?.aggregateMember == true &&
+                      field.reference!.targetClassName == log.className,
+                ),
+          )
+          .firstOrNull,
     );
     resolved._validate();
     return resolved;
@@ -44,6 +56,13 @@ final class ResolvedCheckIns {
   final EntitySpec subject;
   final EntitySpec owner;
   final EntitySpec undo;
+
+  /// The entity answering the subject's questions with each check-in.
+  final EntitySpec? answers;
+
+  /// Records an agent's answers for one check-in, when there are answers.
+  String? get recordAnswers =>
+      answers == null ? null : 'public.${answers!.tableName}_answer';
 
   CheckInsSpec get spec => log.checkIns!;
   DayPartsSpec get dayParts => spec.dayParts;
@@ -59,6 +78,43 @@ final class ResolvedCheckIns {
   ];
   FieldSpec get undoComment => _field(undo, spec.undoCommentFieldName);
 
+  /// The subject's time field logging starts from, if declared.
+  FieldSpec? get since => spec.sinceFieldName == null
+      ? null
+      : _field(subject, spec.sinceFieldName!);
+
+  /// The subject variant case limiting loggable weekdays, with its field.
+  (PersistedVariantSpec, PersistedVariantCaseSpec, FieldSpec)? get days {
+    final name = spec.daysFieldName;
+    if (name == null) return null;
+    for (final variant in subject.persistedVariants) {
+      for (final variantCase in variant.cases) {
+        for (final field in variantCase.fields) {
+          if (field.name == name) return (variant, variantCase, field);
+        }
+      }
+    }
+    throw InvalidGenerationSourceError(
+      'CheckIns.days `$name` is not a variant case field of '
+      '${subject.className}.',
+    );
+  }
+
+  /// Subject variant cases that leave it unscheduled, with their field.
+  List<(PersistedVariantSpec, PersistedVariantCaseSpec, FieldSpec)>
+  get unscheduled => [
+    for (final name in spec.unscheduledFieldNames)
+      for (final variant in subject.persistedVariants)
+        for (final variantCase in variant.cases)
+          for (final field in variantCase.fields)
+            if (field.name == name) (variant, variantCase, field),
+  ];
+
+  String get owesFunction => 'public.${log.tableName}_owes_check_in';
+
+  /// The parts of the day other than the whole day, in hour order.
+  List<String> get parts => [for (final (name, _) in dayParts.starts) name];
+
   /// The part enum's Dart type, such as `TimeRange`.
   String get partType => part.dartType.replaceAll('?', '');
 
@@ -68,6 +124,7 @@ final class ResolvedCheckIns {
 
   String get checkInFunction => 'public.${log.tableName}_check_in';
   String get undoFunction => 'public.${log.tableName}_undo_check_in';
+  String get logDayFunction => 'public.${log.tableName}_log_day';
 
   /// The wire value of the part enum constant [name].
   String wire(String name) =>
@@ -155,6 +212,40 @@ final class ResolvedCheckIns {
     }
     intervals;
     details;
+    if (days case (_, _, final field)) {
+      const weekdays = [
+        'sunday',
+        'monday',
+        'tuesday',
+        'wednesday',
+        'thursday',
+        'friday',
+        'saturday',
+      ];
+      final flags = field.scalarValue?.flags;
+      if (flags == null || flags.join(',') != weekdays.join(',')) {
+        throw InvalidGenerationSourceError(
+          'CheckIns.days must be ScalarFlags naming the weekdays, sunday '
+          'first: `${field.name}`.',
+        );
+      }
+    }
+    if (since case final field? when field.dartType != 'DateTime') {
+      throw InvalidGenerationSourceError(
+        'CheckIns.since must be a DateTime field: `${field.name}`.',
+      );
+    }
+    if (unscheduled.length != spec.unscheduledFieldNames.length) {
+      throw InvalidGenerationSourceError(
+        'CheckIns.unscheduled names a field that is not a variant case field '
+        'of ${subject.className}.',
+      );
+    }
+    if (spec.loggedAtHour < 0 || spec.loggedAtHour > 23) {
+      throw InvalidGenerationSourceError(
+        'CheckIns.loggedAtHour must be an hour from 0 to 23.',
+      );
+    }
     for (final name in [
       spec.subjectFieldName,
       spec.dateFieldName,
@@ -168,7 +259,9 @@ final class ResolvedCheckIns {
         '${undo.className}.',
       );
     }
-    if ((spec.checkInTool != null || spec.undoTool != null) &&
+    if ((spec.checkInTool != null ||
+            spec.undoTool != null ||
+            spec.logTool != null) &&
         log.agentAccess == null) {
       throw InvalidGenerationSourceError(
         'Agent check-in tools need AgentAccess on ${log.className}.',
@@ -418,6 +511,10 @@ final class _DartCheckIns {
       ..writeln('  }')
       ..writeln()
       ..write(_undo())
+      ..writeln()
+      ..write(_logDay())
+      ..writeln()
+      ..write(_owes())
       ..writeln('}');
     return buffer.toString();
   }
@@ -522,6 +619,219 @@ final class _DartCheckIns {
       ..writeln('      }')
       ..writeln('    });')
       ..writeln('    return undone;')
+      ..writeln('  }');
+    return buffer.toString();
+  }
+
+  String _logDay() {
+    final subjectId = resolved.subjectField.name;
+    final date = resolved.date.name;
+    final part = resolved.part.name;
+    final at = resolved.at.name;
+    final flags = resolved.scheduledParts.name;
+    final hasIntervals = resolved.intervals.isNotEmpty;
+    final create = aggregate
+        ? '$draftType.create(entityGraph)'
+        : 'entityGraph.${log.setAccessor}.beginCreate()';
+    final edit = aggregate
+        ? 'await current.beginAggregateEdit(entityGraph)'
+        : 'current.beginEdit()';
+    final row = aggregate ? 'draft.root' : 'draft';
+    final available = <String>[
+      if (resolved.since case final since?)
+        '$date.compareTo(LocalDate.fromDateTime(this.${since.name}.toLocal())) >= 0',
+      if (resolved.days case (final variant, final variantCase, final field))
+        'switch (this.${variant.name}) { ${variantCase.className}(:final ${field.name}) => '
+            '${field.name}.toScalar() & (1 << day.weekday % 7) != 0, _ => true }',
+    ];
+    final buffer = StringBuffer()
+      ..writeln(
+        '  /// Starts logging [$date], a past day, for [$part] or else every '
+        'part',
+      )
+      ..writeln(
+        '  /// of the day this $subjectWords is scheduled for, skipping parts '
+        'already',
+      )
+      ..writeln(
+        '  /// logged; saving each returned draft records one. The check-ins '
+        'record',
+      )
+      ..writeln(
+        '  /// the time of day of [$at], or ${resolved.spec.loggedAtHour}:00.',
+      )
+      ..writeln('  Future<List<$draftType>> beginLogDay(')
+      ..writeln('    $entityGraphName entityGraph, {')
+      ..writeln('    required LocalDate $date,')
+      ..writeln('    $partType? $part,')
+      ..writeln('    DateTime? $at,')
+      ..writeln('  }) async {')
+      ..write(_requireLive('    '));
+    for (final refusal in resolved.spec.refusals) {
+      buffer
+        ..writeln('    if (this.${refusal.fieldName}) {')
+        ..writeln(_throw(subjectId, refusal.message, '      '))
+        ..writeln('    }');
+    }
+    buffer
+      ..writeln(
+        '    final today = LocalDate.fromDateTime(entityGraph.nowUtc().toLocal());',
+      )
+      ..writeln('    if ($date.compareTo(today) >= 0) {')
+      ..writeln(
+        _throw(date, 'Only a day before today can be logged.', '      '),
+      )
+      ..writeln('    }')
+      ..writeln('    final day = $date.toDateTime();');
+    if (available.isNotEmpty) {
+      buffer
+        ..writeln('    if (!(${available.join(' && ')})) {')
+        ..writeln(
+          _throw(
+            date,
+            'The $subjectWords is not available on this date.',
+            '      ',
+          ),
+        )
+        ..writeln('    }');
+    }
+    buffer
+      ..writeln('    final wholeDay = this.$flags.contains($wholeDay);')
+      ..writeln(
+        '    final scheduled = [for (final each in const [${[for (final name in resolved.parts) '$partType.$name'].join(', ')}]) if (this.$flags.contains(each)) each];',
+      )
+      ..writeln(
+        '    final interval = ${hasIntervals ? _intervalActive : 'false'};',
+      )
+      ..writeln('    final requested = wholeDay')
+      ..writeln('        ? [$wholeDay]')
+      ..writeln('        : $part != null')
+      ..writeln('        ? [$part]')
+      ..writeln('        : interval')
+      ..writeln('        ? scheduled.take(1).toList()')
+      ..writeln('        : scheduled;')
+      ..writeln(
+        '    if (requested.isEmpty || requested.any((each) => !wholeDay && !scheduled.contains(each))) {',
+      )
+      ..writeln(
+        _throw(
+          part,
+          'The $subjectWords is not scheduled for this $partWords.',
+          '      ',
+        ),
+      )
+      ..writeln('    }')
+      ..writeln('    final existing = await ${logType}List.owned(')
+      ..writeln('      entityGraph,')
+      ..writeln(
+        '      where: $fields.$subjectId.equals(id) & $fields.$date.equals($date),',
+      )
+      ..writeln('      orderBy: $fields.$at.descending(),')
+      ..writeln('      tombstones: TombstoneVisibility.include,')
+      ..writeln('    ).useAll((rows) => List.of(rows));')
+      ..writeln(
+        '    final live = {for (final row in existing) if (row.deletedAt == null) row.$part};',
+      )
+      ..writeln('    final logged = live.isEmpty')
+      ..writeln('        ? const <$partType>{}')
+      ..writeln('        : live.contains($wholeDay)')
+      ..writeln('        ? (wholeDay ? {$wholeDay} : scheduled.toSet())')
+      ..writeln('        : wholeDay')
+      ..writeln('        ? {$wholeDay}')
+      ..writeln('        : live.intersection(scheduled.toSet());')
+      ..writeln('    final time = $at?.toLocal();')
+      ..writeln('    final occurrence = DateTime(')
+      ..writeln('      day.year,')
+      ..writeln('      day.month,')
+      ..writeln('      day.day,')
+      ..writeln('      time?.hour ?? ${resolved.spec.loggedAtHour},')
+      ..writeln('      time?.minute ?? 0,')
+      ..writeln('      time?.second ?? 0,')
+      ..writeln('      time?.millisecond ?? 0,')
+      ..writeln('      time?.microsecond ?? 0,')
+      ..writeln('    ).toUtc();')
+      ..writeln('    final drafts = <$draftType>[];')
+      ..writeln('    for (final each in requested) {')
+      ..writeln('      if (!interval && logged.contains(each)) continue;')
+      ..writeln('      final current = interval')
+      ..writeln('          ? null')
+      ..writeln(
+        '          : existing.where((row) => row.$part == each).firstOrNull;',
+      )
+      ..writeln(
+        '      if (current?.deletedAt != null) await current!.restore();',
+      )
+      ..writeln('      final draft = current == null ? $create : $edit;')
+      ..writeln('      $row')
+      ..write('        ..$at = occurrence');
+    for (final field in resolved.details) {
+      buffer.write(
+        '\n        ..${field.name} = ${field.nullable ? 'null' : _default(field)}',
+      );
+    }
+    buffer
+      ..writeln(';')
+      ..writeln('      if (draft.isCreating) {')
+      ..writeln('        $row')
+      ..writeln('          ..$subjectId = id')
+      ..writeln('          ..$date = $date')
+      ..writeln('          ..$part = each;')
+      ..writeln('      }')
+      ..writeln('      drafts.add(draft);')
+      ..writeln('    }')
+      ..writeln('    return drafts;')
+      ..writeln('  }');
+    return buffer.toString();
+  }
+
+  /// Whether the subject is scheduled on a day and the owner has not yet
+  /// checked in every part of it.
+  String _owes() {
+    final subjectId = resolved.subjectField.name;
+    final date = resolved.date.name;
+    final part = resolved.part.name;
+    final flags = resolved.scheduledParts.name;
+    final free = [
+      for (final (variant, variantCase, _) in resolved.unscheduled)
+        'this.${variant.name} is ${variantCase.className}',
+      if (resolved.intervals.isNotEmpty) _intervalActive,
+    ];
+    final days = switch (resolved.days) {
+      (final variant, final variantCase, final field) =>
+        'switch (this.${variant.name}) { ${variantCase.className}(:final ${field.name}) => '
+            '${field.name}.toScalar() & (1 << day.toDateTime().weekday % 7) == 0, _ => false }',
+      null => null,
+    };
+    final buffer = StringBuffer()
+      ..writeln(
+        '  /// Whether this $subjectWords is due on [day] and the account has '
+        'not checked',
+      )
+      ..writeln('  /// in every part of the day it is scheduled for.')
+      ..writeln(
+        '  Future<bool> owesCheckInOn($entityGraphName entityGraph, LocalDate day) async {',
+      );
+    if (free.isNotEmpty) {
+      buffer.writeln('    if (${free.join(' || ')}) return false;');
+    }
+    if (days != null) buffer.writeln('    if ($days) return false;');
+    buffer
+      ..writeln('    final logged = await ${logType}List.owned(')
+      ..writeln('      entityGraph,')
+      ..writeln(
+        '      where: $fields.$subjectId.equals(id) & $fields.$date.equals(day),',
+      )
+      ..writeln('    ).useAll((rows) => {for (final row in rows) row.$part});')
+      ..writeln('    if (logged.isEmpty) return true;')
+      ..writeln(
+        '    if (logged.contains($wholeDay) || this.$flags.contains($wholeDay)) return false;',
+      )
+      ..writeln(
+        '    return const [${[for (final name in resolved.parts) '$partType.$name'].join(', ')}]',
+      )
+      ..writeln(
+        '        .any((each) => this.$flags.contains(each) && !logged.contains(each));',
+      )
       ..writeln('  }');
     return buffer.toString();
   }

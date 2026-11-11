@@ -63,6 +63,8 @@ const _memberOperationsChecker = TypeChecker.typeNamed(
   inPackage: 'nodus',
 );
 const _checkInsChecker = TypeChecker.typeNamed(CheckIns, inPackage: 'nodus');
+const _acyclicChecker = TypeChecker.typeNamed(Acyclic, inPackage: 'nodus');
+const _answersChecker = TypeChecker.typeNamed(Answers, inPackage: 'nodus');
 const _dayPartsChecker = TypeChecker.typeNamed(DayParts, inPackage: 'nodus');
 const _entityProcessChecker = TypeChecker.typeNamed(
   EntityProcess,
@@ -1301,6 +1303,22 @@ Future<EntitySpec?> parseEntityAsset(
     identity: _parseDerivedIdentity(annotation, classElement),
     memberOperations: _parseMemberOperations(classElement),
     checkIns: _parseCheckIns(classElement),
+    answers: _parseAnswers(classElement),
+    acyclic: switch (_acyclicChecker.firstAnnotationOf(classElement)) {
+      null => null,
+      final object => AcyclicSpec(
+        fromFieldName: ConstantReader(
+          object,
+        ).read('from').objectValue.toSymbolValue()!,
+        toFieldName: ConstantReader(
+          object,
+        ).read('to').objectValue.toSymbolValue()!,
+        cycleMessage: ConstantReader(object).read('cycle').stringValue,
+        hierarchyMessage: ConstantReader(object).read('hierarchy').isNull
+            ? null
+            : ConstantReader(object).read('hierarchy').stringValue,
+      ),
+    },
   );
   _validateConvergentCreates(spec, classElement);
   final invalidDraftOverride = fields
@@ -4760,6 +4778,62 @@ List<ActionSpec> _parseActions(
         ),
       );
     }
+    final derivations = <String, StartingValueSpec>{};
+    for (final entry in annotation.read('derive').mapValue.entries) {
+      final fieldName = entry.key!.toSymbolValue()!;
+      final field = fieldsByName[fieldName];
+      if (field == null) {
+        throw InvalidGenerationSourceError(
+          'Entity action `${method.name}` derives `$fieldName`, which is not '
+          'a persisted field.',
+          element: method,
+        );
+      }
+      if (!targets.add(fieldName)) {
+        throw InvalidGenerationSourceError(
+          'Entity action `${method.name}` sets `$fieldName` more than once.',
+          element: method,
+        );
+      }
+      _validateActionTarget(
+        field,
+        method,
+        isAbstract: declarationsByName[fieldName]?.isAbstract ?? false,
+      );
+      final value = _parseStartingValue(entry.value!, method);
+      final source = switch (value) {
+        CopyOfSpec(:final fieldName) => fieldName,
+        BandedSpec(:final fieldName) => fieldName,
+        ClockNowSpec() => null,
+        WeekdayAverageSpec() => throw InvalidGenerationSourceError(
+          'An entity action derives from its parameters; WeekdayAverage '
+          'reads other rows.',
+          element: method,
+        ),
+      };
+      if (source != null && !parameters.any((p) => p.name == source)) {
+        throw InvalidGenerationSourceError(
+          'Entity action `${method.name}` derives `$fieldName` from '
+          '`$source`, which is not one of its parameters.',
+          element: method,
+        );
+      }
+      if (value is ClockNowSpec &&
+          field.dartType.replaceAll('?', '') != 'DateTime') {
+        throw InvalidGenerationSourceError(
+          'ClockNow derives a DateTime field: `$fieldName`.',
+          element: method,
+        );
+      }
+      derivations[fieldName] = value;
+    }
+    if (derivations.isNotEmpty && !annotation.read('rebase').isNull) {
+      throw InvalidGenerationSourceError(
+        'Entity action `${method.name}` cannot both derive values and '
+        'declare a rebase.',
+        element: method,
+      );
+    }
     if (targets.isEmpty) {
       throw InvalidGenerationSourceError(
         'Entity action `${method.name}` must mutate at least one field.',
@@ -4771,6 +4845,25 @@ List<ActionSpec> _parseActions(
         methodName: method.name!,
         parameters: List.unmodifiable(parameters),
         assignments: List.unmodifiable(assignments),
+        derivations: Map.unmodifiable(derivations),
+        requirements: [
+          for (final requirement in annotation.read('requires').listValue)
+            _parseRequireLinked(ConstantReader(requirement), method),
+        ],
+        agentRefusals: switch (_agentToolChecker.firstAnnotationOf(method)) {
+          final tool? => [
+            for (final refusal in ConstantReader(
+              tool,
+            ).read('refusals').listValue)
+              RefusalSpec(
+                fieldName: ConstantReader(
+                  refusal,
+                ).read('field').objectValue.toSymbolValue()!,
+                message: ConstantReader(refusal).read('message').stringValue,
+              ),
+          ],
+          null => const [],
+        },
         bulk: annotation.read('bulk').boolValue,
         rebase: _parseActionRebase(
           annotation.peek('rebase'),
@@ -4780,6 +4873,11 @@ List<ActionSpec> _parseActions(
           assignments: assignments,
         ),
         agentTool: _agentToolChecker.hasAnnotationOf(method),
+        agentToolName: switch (_agentToolChecker.firstAnnotationOf(method)) {
+          final tool? when !ConstantReader(tool).read('name').isNull =>
+            ConstantReader(tool).read('name').stringValue,
+          _ => null,
+        },
         documentation: _documentation(method.documentationComment),
       ),
     );
@@ -6600,6 +6698,18 @@ AgentAccessSpec? _parseAgentAccess(ClassElement classElement) {
       for (final field in annotation.read('hide').listValue)
         field.toSymbolValue()!,
     },
+    locked: [
+      for (final field in annotation.read('locked').listValue)
+        field.toSymbolValue()!,
+    ],
+    linkTool: annotation.read('linkTool').isNull
+        ? null
+        : annotation.read('linkTool').stringValue,
+    unlinkTool: annotation.read('unlinkTool').isNull
+        ? null
+        : annotation.read('unlinkTool').stringValue,
+    liftChildren: annotation.read('liftChildren').boolValue,
+    reorder: annotation.read('reorder').boolValue,
   );
 }
 
@@ -6764,8 +6874,69 @@ CheckInsSpec? _parseCheckIns(ClassElement classElement) {
     ],
     undoneAsClassName: undoneType.getDisplayString(),
     undoCommentFieldName: symbol(undoneAs, 'comment'),
+    daysFieldName: annotation.read('days').isNull
+        ? null
+        : symbol(annotation, 'days'),
+    sinceFieldName: annotation.read('since').isNull
+        ? null
+        : symbol(annotation, 'since'),
+    unscheduledFieldNames: [
+      for (final field in annotation.read('unscheduled').listValue)
+        field.toSymbolValue()!,
+    ],
+    loggedAtHour: annotation.read('loggedAtHour').intValue,
     checkInTool: text('checkInTool'),
     undoTool: text('undoTool'),
+    logTool: text('logTool'),
+  );
+}
+
+AnswersSpec? _parseAnswers(ClassElement classElement) {
+  final object = _answersChecker.firstAnnotationOf(classElement);
+  if (object == null) return null;
+  final reader = ConstantReader(object);
+  String? symbol(String name) => reader.read(name).isNull
+      ? null
+      : reader.read(name).objectValue.toSymbolValue();
+  return AnswersSpec(
+    questionFieldName: symbol('question')!,
+    kindFieldName: symbol('kind')!,
+    cases: {
+      for (final entry in reader.read('cases').mapValue.entries)
+        entry.key!.variable?.name ??
+            (throw InvalidGenerationSourceError(
+              'Answers.cases keys are enum constants.',
+              element: classElement,
+            )): entry.value!
+            .toSymbolValue()!,
+    },
+    labelFieldName: symbol('label')!,
+    numberFieldName: symbol('number'),
+    minFieldName: symbol('min'),
+    maxFieldName: symbol('max'),
+    optionFieldName: symbol('option'),
+    optionQuestionFieldName: symbol('optionQuestion'),
+  );
+}
+
+RequireLinkedSpec _parseRequireLinked(ConstantReader reader, Element element) {
+  Map<String, List<String>> values(String name) => {
+    for (final entry in reader.read(name).mapValue.entries)
+      entry.key!.toSymbolValue()!: [
+        for (final value in entry.value!.toListValue()!)
+          value.variable?.name ??
+              (throw InvalidGenerationSourceError(
+                'RequireLinked.$name takes enum constants.',
+                element: element,
+              )),
+      ],
+  };
+  return RequireLinkedSpec(
+    linkClassName: reader.read('link').typeValue.getDisplayString(),
+    label: reader.read('label').stringValue,
+    done: values('done'),
+    counting: values('counting'),
+    checkedIn: reader.read('checkedIn').boolValue,
   );
 }
 
@@ -6795,57 +6966,59 @@ DayPartsSpec _parseDayParts(ConstantReader reader, Element element) {
   );
 }
 
-DayRootSpec _parseDayRoot(ConstantReader root, ClassElement element) {
-  StartingValueSpec value(DartObject object) {
-    final reader = ConstantReader(object);
-    switch (object.type?.element?.name) {
-      case 'WeekdayAverage':
-        return WeekdayAverageSpec(
-          fieldName: reader.read('field').objectValue.toSymbolValue()!,
-          presentFieldName: reader.read('present').objectValue.toSymbolValue()!,
-          days: reader.read('days').intValue,
-          minimum: reader.read('minimum').intValue,
-          fallback: reader.read('fallback').intValue,
+StartingValueSpec _parseStartingValue(DartObject object, Element element) {
+  final reader = ConstantReader(object);
+  switch (object.type?.element?.name) {
+    case 'ClockNow':
+      return const ClockNowSpec();
+    case 'WeekdayAverage':
+      return WeekdayAverageSpec(
+        fieldName: reader.read('field').objectValue.toSymbolValue()!,
+        presentFieldName: reader.read('present').objectValue.toSymbolValue()!,
+        days: reader.read('days').intValue,
+        minimum: reader.read('minimum').intValue,
+        fallback: reader.read('fallback').intValue,
+      );
+    case 'CopyOf':
+      return CopyOfSpec(reader.read('field').objectValue.toSymbolValue()!);
+    case 'Banded':
+      final bounds = [
+        for (final bound in reader.read('bounds').listValue)
+          bound.toIntValue()!,
+      ];
+      final values = [
+        for (final value in reader.read('values').listValue)
+          value.variable?.name ??
+              (throw InvalidGenerationSourceError(
+                'Banded takes enum constants.',
+                element: element,
+              )),
+      ];
+      if (values.length != bounds.length + 1) {
+        throw InvalidGenerationSourceError(
+          'Banded needs one more value than bounds.',
+          element: element,
         );
-      case 'CopyOf':
-        return CopyOfSpec(reader.read('field').objectValue.toSymbolValue()!);
-      case 'Banded':
-        final bounds = [
-          for (final bound in reader.read('bounds').listValue)
-            bound.toIntValue()!,
-        ];
-        final values = [
-          for (final value in reader.read('values').listValue)
-            value.variable?.name ??
-                (throw InvalidGenerationSourceError(
-                  'Banded takes enum constants.',
-                  element: element,
-                )),
-        ];
-        if (values.length != bounds.length + 1) {
-          throw InvalidGenerationSourceError(
-            'Banded needs one more value than bounds.',
-            element: element,
-          );
-        }
-        return BandedSpec(
-          fieldName: reader.read('field').objectValue.toSymbolValue()!,
-          bounds: bounds,
-          values: values,
-        );
-    }
-    throw InvalidGenerationSourceError(
-      'Unsupported starting value `${object.type}`.',
-      element: element,
-    );
+      }
+      return BandedSpec(
+        fieldName: reader.read('field').objectValue.toSymbolValue()!,
+        bounds: bounds,
+        values: values,
+      );
   }
+  throw InvalidGenerationSourceError(
+    'Unsupported starting value `${object.type}`.',
+    element: element,
+  );
+}
 
+DayRootSpec _parseDayRoot(ConstantReader root, ClassElement element) {
   return DayRootSpec(
     dateFieldName: root.read('date').objectValue.toSymbolValue()!,
     timezoneFieldName: root.read('timezone').objectValue.toSymbolValue()!,
     initial: {
       for (final entry in root.read('initial').mapValue.entries)
-        entry.key!.toSymbolValue()!: value(entry.value!),
+        entry.key!.toSymbolValue()!: _parseStartingValue(entry.value!, element),
     },
   );
 }

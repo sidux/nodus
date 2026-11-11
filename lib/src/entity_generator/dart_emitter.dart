@@ -2313,7 +2313,10 @@ void _emitAction(StringBuffer buffer, EntitySpec spec, ActionSpec action) {
     buffer.writeln(
       '    final old${field.capitalizedName} = _${field.name}Store.value;',
     );
-    final nextValue = assignment == null
+    final derivation = action.derivations[field.name];
+    final nextValue = derivation != null
+        ? _actionDerivationExpression(spec, field, derivation)
+        : assignment == null
         ? _normalizedEntityValueExpression(field, field.name)
         : _actionAssignmentExpression(field, assignment);
     buffer.writeln('    final next${field.capitalizedName} = $nextValue;');
@@ -2705,6 +2708,26 @@ String _principalListLiteral(Iterable<RlsPrincipal> principals) {
   if (values.isEmpty) return 'const <RlsPrincipal>[]';
   return 'const [${values.map((value) => 'RlsPrincipal.${value.name}').join(', ')}]';
 }
+
+/// The value an action derives for [field] from its parameters.
+String _actionDerivationExpression(
+  EntitySpec spec,
+  FieldSpec field,
+  StartingValueSpec value,
+) => switch (value) {
+  ClockNowSpec() => '_generatedActionTime',
+  CopyOfSpec(:final fieldName) => _normalizedEntityValueExpression(
+    field,
+    fieldName,
+  ),
+  BandedSpec(:final fieldName, :final bounds, :final values) => [
+    for (var index = 0; index < bounds.length; index++)
+      '$fieldName < ${bounds[index]} ? '
+          '${field.dartType.replaceAll('?', '')}.${values[index]} : ',
+    '${field.dartType.replaceAll('?', '')}.${values.last}',
+  ].join(),
+  WeekdayAverageSpec() => throw StateError('Rejected by the parser.'),
+};
 
 String _actionAssignmentExpression(
   FieldSpec field,

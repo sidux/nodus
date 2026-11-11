@@ -976,9 +976,25 @@ final class OwnerReference {
 /// Name the action for its domain meaning; the generic name `edit` is reserved
 /// for ordinary generated draft behavior.
 final class Action {
-  const Action({this.values = const [], this.bulk = false, this.rebase});
+  const Action({
+    this.values = const [],
+    this.derive = const {},
+    this.requires = const [],
+    this.bulk = false,
+    this.rebase,
+  });
 
   final List<ActionValue> values;
+
+  /// Linked work that must be finished first; the generated
+  /// `require<Action>` checks it, and so does the action's agent tool.
+  final List<RequireLinked> requires;
+
+  /// Fields the action sets from its parameters, so every caller derives
+  /// them alike: a [CopyOf] or [Banded] of a parameter, or [ClockNow]. The
+  /// generated method and agent tool compute them; the method does not take
+  /// them.
+  final Map<Symbol, StartingValue> derive;
 
   /// Moves this action's values onto a new base when the state it was made
   /// on changes under it before the server applies it: a convergent create
@@ -1054,6 +1070,11 @@ final class AgentAccess {
     this.remove = false,
     this.archive = false,
     this.hide = const [],
+    this.locked = const [],
+    this.linkTool,
+    this.unlinkTool,
+    this.liftChildren = false,
+    this.reorder = false,
   });
 
   final bool create;
@@ -1077,13 +1098,62 @@ final class AgentAccess {
   /// Fields agents may read but never set, such as one only the
   /// application manages.
   final List<Symbol> hide;
+
+  /// Fields that, while set (non-null, or true), lock a row against agents:
+  /// they may read it but not edit, remove, archive, or act on it, such as a
+  /// row the application provides.
+  final List<Symbol> locked;
+
+  /// Names the [link] tools instead of `link_<target>_to_<owner>` and
+  /// `unlink_<target>_from_<owner>`, for a relationship whose ends read
+  /// alike.
+  final String? linkTool;
+  final String? unlinkTool;
+
+  /// Deleting a row of a hierarchy moves its children up to its parent
+  /// instead of deleting them with it.
+  final bool liftChildren;
+
+  /// Adds a `move_<entity>` tool to an ordered entity, placing a row first,
+  /// last, or next to another row of its list.
+  final bool reorder;
 }
 
 /// Exposes a declared [Action] of an [AgentAccess] entity as an agent tool.
 ///
 /// The action's documentation comment becomes the tool description.
 final class AgentTool {
-  const AgentTool();
+  const AgentTool({this.name, this.refusals = const []});
+
+  /// The tool's name instead of `<action>_<entity>`.
+  final String? name;
+
+  /// Boolean fields of the row that refuse the tool, for an action only the
+  /// application completes, such as one sent to a checker.
+  final List<Refusal> refusals;
+}
+
+/// Refuses an [Action] while a row linked to this one through the [link]
+/// entity is still open. A linked row counts only while its fields hold
+/// one of the [counting] values, and is done when they hold one of the
+/// [done] values, or, with [checkedIn], once it owes no check-in today
+/// under its entity's [CheckIns]. Archived and deleted rows do not count.
+final class RequireLinked {
+  const RequireLinked(
+    this.link, {
+    required this.label,
+    this.done = const {},
+    this.counting = const {},
+    this.checkedIn = false,
+  });
+
+  final Type link;
+
+  /// What the linked rows are called in the refusal, in the plural.
+  final String label;
+  final Map<Symbol, List<Object>> done;
+  final Map<Symbol, List<Object>> counting;
+  final bool checkedIn;
 }
 
 /// Declares that the ordered rows of this entity form a document's plain text.
@@ -1171,6 +1241,11 @@ final class WeekdayAverage extends StartingValue {
   final int days;
   final int minimum;
   final int fallback;
+}
+
+/// The current time of the writer's clock.
+final class ClockNow extends StartingValue {
+  const ClockNow();
 }
 
 /// The starting value of another [field] declared before it.
@@ -1428,6 +1503,10 @@ final class DayParts {
 /// part: checking in again updates it, and checking in after an undo brings
 /// it back. With one, each check-in is a new row and is refused until the
 /// interval since the owner's latest has passed.
+///
+/// `beginLogDay` records a past day: one the subject existed on ([since])
+/// and is scheduled on ([days]), for the part given or else every part it
+/// is scheduled for, skipping parts already logged that day.
 final class CheckIns {
   const CheckIns({
     required this.subject,
@@ -1441,8 +1520,13 @@ final class CheckIns {
     this.refusals = const [],
     this.agentRefusals = const [],
     this.details = const [],
+    this.days,
+    this.since,
+    this.unscheduled = const [],
+    this.loggedAtHour = 12,
     this.checkInTool,
     this.undoTool,
+    this.logTool,
   });
 
   /// The reference to the scheduled subject.
@@ -1486,6 +1570,25 @@ final class CheckIns {
 
   /// Exposes undoing a check-in to agents under this tool name.
   final String? undoTool;
+
+  /// A subject variant field of [ScalarFlags] naming the weekdays, sunday
+  /// first, that limits which past days can be logged while it is set.
+  final Symbol? days;
+
+  /// The subject's time field before whose local day nothing is logged.
+  final Symbol? since;
+
+  /// Subject variant case fields that, while their case is active, leave
+  /// the subject with no scheduled days: it owes no check-in on any day.
+  /// An [intervals] case owes none either; `owesCheckInOn` is true only for
+  /// a scheduled day the owner has not fully checked in.
+  final List<Symbol> unscheduled;
+
+  /// The local hour a logged past day records when no time is given.
+  final int loggedAtHour;
+
+  /// Exposes logging a past day to agents under this tool name.
+  final String? logTool;
 }
 
 /// A subject variant case whose check-ins are spaced by its [field].
@@ -1515,4 +1618,67 @@ final class UndoneAs {
 
   final Type entity;
   final Symbol comment;
+}
+
+/// Declares that the active links of the [Activatable] entity it annotates,
+/// each from one row to another of the same entity, never form a cycle: no
+/// row reaches itself by following links from [from] to [to]. With
+/// [hierarchy], a link also never joins a row to one of its ancestors or
+/// descendants in that entity's hierarchy.
+///
+/// Every schema-capable target enforces it on every write, and the
+/// application checks it first through the generated `require<Entity>`.
+final class Acyclic {
+  const Acyclic({
+    required this.from,
+    required this.to,
+    required this.cycle,
+    this.hierarchy,
+  });
+
+  final Symbol from;
+  final Symbol to;
+
+  /// The message refusing a link that would close a cycle.
+  final String cycle;
+
+  /// The message refusing a link along the hierarchy; enforces that rule
+  /// when set.
+  final String? hierarchy;
+}
+
+/// Declares that each row of the entity it annotates answers the question
+/// row its [question] reference names: the answer's variant case is the
+/// field [cases] maps the question's [kind] to, a [number] keeps within the
+/// question's [min] and [max], and a chosen [option] belongs to the question
+/// through the option's [optionQuestion] reference.
+///
+/// Every schema-capable target enforces it on each write of an answer; the
+/// application checks it first through the generated `require<Entity>`.
+/// When the rows belong to a [CheckIns] log, its agent tools take answers
+/// keyed by question id.
+final class Answers {
+  const Answers({
+    required this.question,
+    required this.kind,
+    required this.cases,
+    required this.label,
+    this.number,
+    this.min,
+    this.max,
+    this.option,
+    this.optionQuestion,
+  });
+
+  final Symbol question;
+  final Symbol kind;
+  final Map<Object, Symbol> cases;
+
+  /// The question field naming it in refusals.
+  final Symbol label;
+  final Symbol? number;
+  final Symbol? min;
+  final Symbol? max;
+  final Symbol? option;
+  final Symbol? optionQuestion;
 }

@@ -1,6 +1,9 @@
 import 'package:dart_style/dart_style.dart';
 import 'package:nodus/nodus.dart';
 
+import 'action_requirements.dart';
+import 'acyclic.dart';
+import 'answers.dart';
 import 'check_ins.dart';
 import 'member_operations.dart';
 import 'model.dart';
@@ -96,7 +99,10 @@ String emitEntityGraph(
         '${graph.className}EntityGraph',
         _aggregateTypeNames(graph),
       ),
-    );
+    )
+    ..write(emitAcyclicDart(graph, '${graph.className}EntityGraph'))
+    ..write(emitActionRequirementsDart(graph, '${graph.className}EntityGraph'))
+    ..write(emitAnswersDart(graph));
   buffer
     ..writeln()
     ..writeln('@TableIndex.sql(')

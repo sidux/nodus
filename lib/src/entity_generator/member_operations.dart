@@ -852,6 +852,8 @@ String _dayRootDart(
   for (final entry in spec.initial.entries) {
     final target = field(entry.key);
     switch (entry.value) {
+      case ClockNowSpec():
+        buffer.writeln('  final ${entry.key} = entityGraph.nowUtc();');
       case WeekdayAverageSpec(
         :final fieldName,
         :final presentFieldName,

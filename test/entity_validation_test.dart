@@ -621,60 +621,75 @@ abstract class Watering implements OwnedBy<Watering, Account>, SoftDeletable {
       'nodus|lib/unwatering.dart': unwatering,
     };
 
-    test('generate the same rules for the application and the database', () async {
-      await testBuilder(
-        inferredEntityGraphBuilder(BuilderOptions.empty),
-        sources(),
-        rootPackage: 'nodus',
-        outputs: {
-          'nodus|lib/nodus.g.dart': decodedMatches(anything),
-          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
-            anything,
-          ),
-          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
-          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
-            allOf([
-              contains('Part partAt(DateTime moment) {'),
-              contains('if (hour >= 17) return Part.evening;'),
-              contains('extension PlantCheckIns on Plant {'),
-              contains('Future<WateringMutationDraft> beginCheckIn('),
-              contains('int? litres,'),
-              contains('if (this.isSilk) {'),
-              contains("message: 'A silk plant needs no water.',"),
-              contains('final wholeDay = this.parts.contains(Part.allDay);'),
-              contains('HourlyRhythm(:final everyHours) =>'),
-              contains('if (local.isBefore(due)) {'),
-              contains('tombstones: TombstoneVisibility.include,'),
-              contains('Future<List<Watering>> undoCheckIn('),
-              contains('await entityGraph.unwaterings.create('),
-              contains('reason: reason,'),
-            ]),
-          ),
-          'nodus|supabase/nodus/schema.sql': decodedMatches(
-            allOf([
-              contains(
-                'create or replace function public.part_at('
-                'p_moment timestamptz, p_timezone text)',
-              ),
-              contains("when hour >= 17 then 'evening'"),
-              contains('create or replace function public.waterings_check_in('),
-              contains("raise exception 'A silk plant needs no water.'"),
-              contains('whole_day := (subject.parts & 4) <> 0;'),
-              contains('interval_active := (subject.every_hours is not null);'),
-              contains('make_interval(hours => subject.every_hours::int)'),
-              contains(
-                'create or replace function public.waterings_undo_check_in(',
-              ),
-              contains('perform public.push_unwaterings_operations('),
-              contains(
-                'create or replace function public.agent_tool_water_plant(',
-              ),
-              contains('"name": "unwater_plant"'),
-            ]),
-          ),
-        },
-      );
-    });
+    test(
+      'generate the same rules for the application and the database',
+      () async {
+        await testBuilder(
+          inferredEntityGraphBuilder(BuilderOptions.empty),
+          sources(),
+          rootPackage: 'nodus',
+          outputs: {
+            'nodus|lib/nodus.g.dart': decodedMatches(anything),
+            'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+              anything,
+            ),
+            'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+            'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+              allOf([
+                contains('Part partAt(DateTime moment) {'),
+                contains('if (hour >= 17) return Part.evening;'),
+                contains('extension PlantCheckIns on Plant {'),
+                contains('Future<WateringMutationDraft> beginCheckIn('),
+                contains('int? litres,'),
+                contains('if (this.isSilk) {'),
+                contains("message: 'A silk plant needs no water.',"),
+                contains('final wholeDay = this.parts.contains(Part.allDay);'),
+                contains('HourlyRhythm(:final everyHours) =>'),
+                contains('if (local.isBefore(due)) {'),
+                contains('tombstones: TombstoneVisibility.include,'),
+                contains('Future<List<Watering>> undoCheckIn('),
+                contains('await entityGraph.unwaterings.create('),
+                contains('Future<bool> owesCheckInOn('),
+                contains('Future<List<WateringMutationDraft>> beginLogDay('),
+                contains('reason: reason,'),
+              ]),
+            ),
+            'nodus|supabase/nodus/schema.sql': decodedMatches(
+              allOf([
+                contains(
+                  'create or replace function public.part_at('
+                  'p_moment timestamptz, p_timezone text)',
+                ),
+                contains("when hour >= 17 then 'evening'"),
+                contains(
+                  'create or replace function public.waterings_check_in(',
+                ),
+                contains("raise exception 'A silk plant needs no water.'"),
+                contains('whole_day := (subject.parts & 4) <> 0;'),
+                contains(
+                  'interval_active := (subject.every_hours is not null);',
+                ),
+                contains('make_interval(hours => subject.every_hours::int)'),
+                contains(
+                  'create or replace function public.waterings_undo_check_in(',
+                ),
+                contains('perform public.push_unwaterings_operations('),
+                contains(
+                  'create or replace function public.waterings_owes_check_in(',
+                ),
+                contains(
+                  'create or replace function public.waterings_log_day(',
+                ),
+                contains(
+                  'create or replace function public.agent_tool_water_plant(',
+                ),
+                contains('"name": "unwater_plant"'),
+              ]),
+            ),
+          },
+        );
+      },
+    );
 
     test('reject a part enum without day parts', () async {
       final result = await testBuilder(
@@ -9703,6 +9718,274 @@ abstract class TaskDependency
                 ) &&
                 !getTask.contains("'taskDependencies', coalesce((");
           }, 'names both lists of task dependencies after their field'),
+        ),
+      },
+    );
+  });
+
+  test('agent tools derive action values, lock provided rows, move rows, '
+      'and keep links free of cycles', () async {
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources('''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+enum Level { low, high }
+
+@AgentAccess(edit: true, reorder: true, locked: [#provided])
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Task implements OwnedBy<Task, Account>, SoftDeletable, Ordered {
+  abstract final String title;
+
+  @Persisted(defaultValue: false, editable: false)
+  abstract final bool provided;
+
+  @Persisted(defaultValue: 0, minValue: 0, maxValue: 100)
+  abstract final int score;
+
+  @Persisted(defaultValue: Level.low)
+  abstract final Level level;
+
+  abstract final DateTime? ratedAt;
+
+  /// Rates the task.
+  @AgentTool(name: 'rate_task')
+  @Action(
+    derive: {
+      #level: Banded(#score, bounds: [50], values: [Level.low, Level.high]),
+      #ratedAt: ClockNow(),
+    },
+  )
+  Future<void> rate({required int score});
+}
+''', fileName: 'task.dart')
+        ..['nodus|lib/task_dependency.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/task.dart';
+
+@AgentAccess(
+  link: true,
+  linkTool: 'add_task_blocker',
+  unlinkTool: 'remove_task_blocker',
+)
+@Acyclic(
+  from: #taskId,
+  to: #blockerTaskId,
+  cycle: 'That task already waits on this one.',
+)
+@Entity(
+  cardinality: Cardinality.unbounded,
+  indexes: [CompoundIndex([#taskId, #blockerTaskId], unique: true)],
+)
+abstract class TaskDependency
+    implements OwnedBy<TaskDependency, Account>, Activatable {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(inverse: 'blockerLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> taskId;
+
+  @Reference(inverse: 'blockedLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Task> blockerTaskId;
+}
+'''
+        ..['nodus|lib/account.dart'] = 'final class Account {}',
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          allOf([
+            contains('Future<void> requireTaskDependency('),
+            contains("message: 'That task already waits on this one.'"),
+            contains('TaskDependencyFields.active.equals(true)'),
+          ]),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            contains('create or replace function public.agent_tool_rate_task('),
+            contains(
+              "'level', to_jsonb(case when (public.agent_required(p_arguments, "
+              "'score') #>> '{}')::numeric < 50 then 'low' else 'high' end)",
+            ),
+            contains("'ratedAt', public.agent_now()"),
+            contains(
+              'This task is provided by the app and cannot be changed by an '
+              'agent',
+            ),
+            contains('create or replace function public.agent_tool_move_task('),
+            contains("'commandName', 'moveInOrder'"),
+            contains(
+              'create or replace function public.agent_tool_add_task_blocker(',
+            ),
+            contains('create trigger task_dependencies_acyclic'),
+            contains("raise exception 'That task already waits on this one.'"),
+          ]),
+        ),
+      },
+    );
+  });
+
+  test('actions require finished linked work and answers match their '
+      'questions', () async {
+    final sources =
+        _sources('''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/job.dart';
+import 'package:nodus/project_job.dart';
+
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Project implements OwnedBy<Project, Account>, SoftDeletable {
+  @Persisted(defaultValue: false)
+  abstract final bool finished;
+
+  @Action(
+    values: [ActionValue(#finished, true)],
+    requires: [
+      RequireLinked(ProjectJob, label: 'jobs', done: {#state: [JobState.done]}),
+    ],
+  )
+  Future<void> finish();
+}
+''', fileName: 'project.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}'
+          ..['nodus|lib/job.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+enum JobState { open, done }
+
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Job implements OwnedBy<Job, Account>, SoftDeletable {
+  @Persisted(defaultValue: JobState.open)
+  abstract final JobState state;
+}
+'''
+          ..['nodus|lib/project_job.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/job.dart';
+import 'package:nodus/project.dart';
+
+@Entity(
+  cardinality: Cardinality.unbounded,
+  indexes: [CompoundIndex([#projectId, #jobId], unique: true)],
+)
+abstract class ProjectJob implements OwnedBy<ProjectJob, Account>, Activatable {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(inverse: 'jobLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Project> projectId;
+
+  @Reference(inverse: 'projectLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Job> jobId;
+}
+'''
+          ..['nodus|lib/question.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+enum QuestionKind { number, choice }
+
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Question implements OwnedBy<Question, Account>, SoftDeletable {
+  abstract final QuestionKind kind;
+  abstract final String label;
+  abstract final double? minValue;
+  abstract final double? maxValue;
+}
+'''
+          ..['nodus|lib/choice.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/question.dart';
+
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Choice implements OwnedBy<Choice, Account>, SoftDeletable {
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Question> questionId;
+}
+'''
+          ..['nodus|lib/reply.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/choice.dart';
+import 'package:nodus/question.dart';
+
+sealed class ReplyValue {
+  const ReplyValue();
+}
+
+final class NumberReply extends ReplyValue {
+  const NumberReply(this.numberValue);
+  final double numberValue;
+}
+
+final class ChoiceReply extends ReplyValue {
+  const ChoiceReply(this.choiceId);
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  final LocalId<Choice> choiceId;
+}
+
+@Answers(
+  question: #questionId,
+  kind: #kind,
+  cases: {QuestionKind.number: #numberValue, QuestionKind.choice: #choiceId},
+  label: #label,
+  number: #numberValue,
+  min: #minValue,
+  max: #maxValue,
+  option: #choiceId,
+  optionQuestion: #questionId,
+)
+@Entity(cardinality: Cardinality.unbounded)
+abstract class Reply implements OwnedBy<Reply, Account>, SoftDeletable {
+  @Reference(onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Question> questionId;
+
+  @PersistedVariant()
+  abstract final ReplyValue value;
+}
+''';
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          allOf([
+            contains('Future<void> requireFinish('),
+            contains('const {JobState.done}.contains(row.state)'),
+            contains(
+              r"'Cannot finish project with incomplete $kind. "
+              r"Finish all linked $kind first.'",
+            ),
+            contains('void requireReply({'),
+            contains('QuestionKind.number => value is NumberReply,'),
+            contains('is outside its valid range.'),
+            contains('option.questionId != question.id'),
+          ]),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            contains(
+              'create or replace function public.projects_finish_unfinished(',
+            ),
+            contains("target.state in ('done')"),
+            contains('create trigger replies_answers'),
+            contains("raise exception '% has an answer of the wrong kind.'"),
+            contains("raise exception '% has an invalid option.'"),
+          ]),
         ),
       },
     );

@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'package:nodus/nodus.dart';
 import 'package:source_gen/source_gen.dart';
 
+import 'action_requirements.dart';
 import 'check_ins.dart';
 import 'member_operations.dart';
-import 'member_operations_sql.dart';
+import 'member_operations_sql.dart'
+    show MemberOperationsSql, derivedActionPatch;
 import 'model.dart';
 import 'sql_emitter.dart' show activeReferrerExistsSql, principalByIdExpression;
 
@@ -57,10 +59,15 @@ String emitAgentSurfaceSql(EntityGraphSpec graph) {
       if (log.checkIns != null) ResolvedCheckIns.of(log, graph),
   ];
   for (final log in checkIns) {
-    if (log.spec.checkInTool == null && log.spec.undoTool == null) continue;
+    if (log.spec.checkInTool == null &&
+        log.spec.undoTool == null &&
+        log.spec.logTool == null) {
+      continue;
+    }
     writable
       ..add(log.log.className)
       ..add(log.undo.className);
+    if (log.answers case final answers?) writable.add(answers.className);
   }
   final tools = [
     for (final entity in entities) ...entity.tools(entities),
@@ -296,7 +303,7 @@ grant execute on function public.agent_session_active() to authenticated;
 }
 
 final class _AgentEntity {
-  _AgentEntity(this.spec, this.texts);
+  _AgentEntity(this.spec, this.texts, this.graph);
 
   factory _AgentEntity.resolve(EntitySpec spec, EntityGraphSpec graph) {
     final texts = <_AgentTextField>[];
@@ -317,13 +324,14 @@ final class _AgentEntity {
       if (content == null) continue;
       texts.add(_AgentTextField(field, document, content));
     }
-    final entity = _AgentEntity(spec, texts);
+    final entity = _AgentEntity(spec, texts, graph);
     entity._validate();
     return entity;
   }
 
   final EntitySpec spec;
   final List<_AgentTextField> texts;
+  final EntityGraphSpec graph;
 
   AgentAccessSpec get access => spec.agentAccess!;
   String get table => spec.tableName;
@@ -481,7 +489,98 @@ as \$\$
     if (access.link) ..._linkTools(),
     if (access.remove) ..._removeTools(),
     if (access.archive) ..._archiveTools(),
+    if (access.reorder) _moveTool(),
   ];
+
+  /// Moves a row within its ordered list: first, last, or next to another
+  /// row of the same list.
+  _AgentTool _moveTool() {
+    if (!spec.hasOrderedCapability) {
+      throw InvalidGenerationSourceError(
+        'AgentAccess.reorder needs an ordered entity: ${spec.className}.',
+      );
+    }
+    final name = 'move_$singular';
+    final id = spec.idField.columnName;
+    final scope = [
+      for (final field in spec.orderScopeFieldNames ?? const <String>[])
+        spec.fields.singleWhere((candidate) => candidate.name == field),
+    ];
+    final sameList = [
+      'candidate.${spec.ownerField.columnName} = current_row.${spec.ownerField.columnName}',
+      for (final field in scope)
+        'candidate.${field.columnName} is not distinct from current_row.${field.columnName}',
+      if (spec.hasSoftDeletableCapability) 'candidate.deleted_at is null',
+    ].join(' and ');
+    final properties = <String, Object?>{
+      'id': {'type': 'string', 'format': 'uuid'},
+      'beforeId': {
+        'type': 'string',
+        'format': 'uuid',
+        'description': 'Place it just before this $label of the same list.',
+      },
+      'afterId': {
+        'type': 'string',
+        'format': 'uuid',
+        'description': 'Place it just after this $label of the same list.',
+      },
+      'placement': {
+        'type': 'string',
+        'enum': ['first', 'last'],
+        'description': 'Place it first or last instead.',
+      },
+    };
+    return _AgentTool(
+      name: name,
+      title: 'Move ${_words(spec.className)}',
+      description:
+          'Moves a $label within its list: before or after another $label of '
+          'the same list, or first or last. Name exactly one of beforeId, '
+          'afterId, placement.',
+      properties: properties,
+      required: const ['id'],
+      readOnly: false,
+      destructive: false,
+      idempotent: true,
+      functionSql:
+          '''
+create or replace function public.agent_tool_$name(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  current_row public.$table;
+  anchor public.$table;
+  placement text;
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
+  if num_nonnulls(p_arguments ->> 'beforeId', p_arguments ->> 'afterId', p_arguments ->> 'placement') <> 1 then
+    raise exception 'Name exactly one of beforeId, afterId, placement' using errcode = '22023';
+  end if;
+${_selectRowSql('current_row')}
+  placement := coalesce(p_arguments ->> 'placement', case when p_arguments ? 'beforeId' then 'before' else 'after' end);
+  if placement not in ('first', 'last', 'before', 'after') then
+    raise exception 'Unknown placement "%"', placement using errcode = '22023';
+  end if;
+  if placement in ('before', 'after') then
+    select * into anchor from public.$table candidate
+    where candidate.$id = coalesce(p_arguments ->> 'beforeId', p_arguments ->> 'afterId')::uuid
+      and candidate.$id <> current_row.$id and $sameList;
+    if anchor.$id is null then
+      raise exception 'The $label to move next to is not in the same list' using errcode = '22023';
+    end if;
+  end if;
+${_pushSql(spec, operation: 'command', command: 'moveInOrder', entityId: 'current_row.$id', patch: "'placement', placement, 'anchorId', to_jsonb(anchor.$id), 'scopeBaseVersion', 0", base: 'current_row.${spec.serverVersionField.columnName}')}
+  select * into current_row from public.$table item where item.$id = current_row.$id;
+  return $rowFunction(current_row);
+end;
+\$\$;
+''',
+    );
+  }
 
   /// Delete and restore tools: a hierarchy goes with its descendants, and a
   /// restore brings back only what that removal took.
@@ -509,8 +608,22 @@ as \$\$
           '(select item.${spec.serverVersionField.columnName} from public.$table item where item.$id = $entityId)',
       indent: indent,
     );
+    final lift = parent != null && spec.agentAccess!.liftChildren;
+    final scope = [
+      for (final field in spec.orderScopeTransferFields)
+        "${_quote(field.name)}, to_jsonb(current_row.${field.columnName})",
+    ].join(', ');
     final descendants = parent == null
         ? ''
+        : lift
+        ? '''
+  for child_id in
+    select child.$id from public.$table child
+    where child.${parent.columnName} = current_row.$id and child.deleted_at is null
+    order by child.order_rank, child.$id
+  loop
+${_pushSql(spec, operation: 'command', entityId: 'child_id', patch: "'targetScope', jsonb_build_object($scope), 'placement', 'last', 'sourceScopeBaseVersion', 0, 'targetScopeBaseVersion', 0", base: '(select item.${spec.serverVersionField.columnName} from public.$table item where item.$id = child_id)', command: 'transferInOrder', indent: '    ')}
+  end loop;'''
         : '''
   for child_id in
     with recursive tree as (
@@ -525,7 +638,7 @@ as \$\$
 ${delete('child_id', 'public.agent_now()', indent: '    ')}
     removed := removed + 1;
   end loop;''';
-    final restoredDescendants = parent == null
+    final restoredDescendants = parent == null || lift
         ? ''
         : '''
   for child_id in
@@ -553,7 +666,11 @@ ${delete('child_id', "'null'::jsonb", indent: '    ')}
   end if;''';
     final deleteName = 'delete_$singular';
     final restoreName = 'restore_$singular';
-    final hierarchy = parent == null ? '' : ' with everything under it';
+    final hierarchy = parent == null
+        ? ''
+        : lift
+        ? '; what is under it moves up a level'
+        : ' with everything under it';
     return [
       _AgentTool(
         name: deleteName,
@@ -881,8 +998,10 @@ $body
 end;
 \$\$;
 ''';
-    final linkName = 'link_${targetRole}_to_$ownerRole';
-    final unlinkName = 'unlink_${targetRole}_from_$ownerRole';
+    final linkName =
+        spec.agentAccess!.linkTool ?? 'link_${targetRole}_to_$ownerRole';
+    final unlinkName =
+        spec.agentAccess!.unlinkTool ?? 'unlink_${targetRole}_from_$ownerRole';
     final active = relationship.activeField.columnName;
     return [
       _AgentTool(
@@ -1033,14 +1152,51 @@ end;
     );
   }
 
-  String _selectRowSql(String into) =>
-      '''
+  String _selectRowSql(String into, {bool write = true}) {
+    final locks = [
+      for (final name in spec.agentAccess?.locked ?? const <String>[])
+        switch (spec.fields.singleWhere((field) => field.name == name)) {
+          final field when field.dartType == 'bool' =>
+            'coalesce($into.${field.columnName}, false)',
+          final field => '$into.${field.columnName} is not null',
+        },
+    ];
+    final lockSql = !write || locks.isEmpty
+        ? ''
+        : '''
+
+  if ${locks.join(' or ')} then
+    raise exception 'This $label is provided by the app and cannot be changed by an agent'
+      using errcode = '42501';
+  end if;''';
+    return '''
   select * into $into from public.$table item
   where item.${spec.idField.columnName} = (public.agent_required(p_arguments, 'id') #>> '{}')::uuid
     and $liveCondition;
   if not found then
     raise exception '${_capitalized(label)} not found' using errcode = 'P0002';
-  end if;''';
+  end if;$lockSql''';
+  }
+
+  /// Refuses the action while its declared linked work is unfinished.
+  String _requirementsSql(ActionSpec action) {
+    final resolved = ResolvedActionRequirements(spec, action, graph);
+    final message = resolved.message('%');
+    return '''
+  declare
+    unfinished text[] := ${resolved.sqlFunction}(current_row.${spec.idField.columnName});
+    kind text := case when cardinality(unfinished) = 1 then unfinished[1] else 'items' end;
+  begin
+    if cardinality(unfinished) > 0 then
+      raise exception ${_quote(message)}, kind, kind using errcode = '22023';
+    end if;
+  end;''';
+  }
+
+  /// The function giving the caller's root for today, when this entity is
+  /// a `DayRoot`.
+  String? get _dayRootFunction =>
+      spec.memberOperations?.root == null ? null : 'public.${table}_for_today';
 
   _AgentTool _getTool(List<_AgentEntity> all) {
     final name = 'get_$singular';
@@ -1103,7 +1259,7 @@ declare
 begin
   perform public.agent_require_access();
   perform public.agent_check_arguments(p_arguments, array['id']);
-${_selectRowSql('current_row')}
+${_selectRowSql('current_row', write: false)}
   return $rowFunction(current_row)$relatedSql;
 end;
 \$\$;
@@ -1281,6 +1437,7 @@ end;
       final field = spec.fields.firstWhere(
         (candidate) => candidate.name == assignment.fieldName,
       );
+      if (field.transitions.isEmpty) continue;
       final target = snakeCase(assignment.literal! as String);
       for (final transition in field.transitions) {
         if (transition.toWire != target ||
@@ -1341,11 +1498,18 @@ grant execute on function $name(uuid) to authenticated;
         '${spec.className}.${action.methodName}.',
       );
     }
-    final name = '${snakeCase(action.methodName)}_$singular';
+    final name =
+        action.agentToolName ?? '${snakeCase(action.methodName)}_$singular';
     final fields = {for (final field in spec.fields) field.name: field};
     final checked = _checkedEdges(action);
+    final today = _dayRootFunction;
     final properties = <String, Object?>{
-      'id': {'type': 'string', 'format': 'uuid'},
+      'id': {
+        'type': 'string',
+        'format': 'uuid',
+        if (today != null)
+          'description': 'The $label; today\'s by default, made when missing.',
+      },
       for (final parameter in action.parameters)
         parameter.name:
             _schema(fields[parameter.fieldName]!) ??
@@ -1354,9 +1518,17 @@ grant execute on function $name(uuid) to authenticated;
               '${spec.className}.${action.methodName} has an unsupported type.',
             )),
     };
+    String parameterJson(String name) =>
+        action.parameters
+            .singleWhere((parameter) => parameter.name == name)
+            .dartType
+            .endsWith('?')
+        ? "coalesce(p_arguments -> ${_quote(name)}, 'null'::jsonb)"
+        : "public.agent_required(p_arguments, ${_quote(name)})";
     final patch = [
       for (final parameter in action.parameters)
-        "${_quote(parameter.fieldName)}, ${parameter.dartType.endsWith('?') ? "coalesce(p_arguments -> ${_quote(parameter.name)}, 'null'::jsonb)" : "public.agent_required(p_arguments, ${_quote(parameter.name)})"}",
+        "${_quote(parameter.fieldName)}, ${parameterJson(parameter.name)}",
+      ...derivedActionPatch(action, (name) => fields[name]!, parameterJson),
       for (final assignment in action.assignments)
         "${_quote(assignment.fieldName)}, ${switch (assignment.kind) {
           ActionValueKind.literal => _jsonLiteral(fields[assignment.fieldName]!.isEnum && assignment.literal is String ? snakeCase(assignment.literal! as String) : assignment.literal),
@@ -1371,7 +1543,7 @@ grant execute on function $name(uuid) to authenticated;
           '${action.documentation?.replaceAll('\n', ' ') ?? '${_capitalized(_words(action.methodName))} a $label.'}$_summary',
       properties: properties,
       required: [
-        'id',
+        if (today == null) 'id',
         for (final parameter in action.parameters)
           if (!parameter.dartType.endsWith('?')) parameter.name,
       ],
@@ -1391,7 +1563,10 @@ declare
 begin
   perform public.agent_require_access();
   perform public.agent_check_arguments(p_arguments, array[${properties.keys.map(_quote).join(', ')}]);
+${today == null ? '' : "  if p_arguments ->> 'id' is null then\n    p_arguments := p_arguments || jsonb_build_object('id', $today());\n  end if;"}
 ${_selectRowSql('current_row')}
+${[for (final refusal in action.agentRefusals) "  if coalesce(current_row.${fields[refusal.fieldName]!.columnName}, false) then\n    raise exception ${_quote(refusal.message)} using errcode = '42501';\n  end if;"].join('\n')}
+${action.requirements.isEmpty ? '' : _requirementsSql(action)}
 ${checked == null ? '' : '''  if ${checked.name}(current_row.${spec.idField.columnName}) then
     raise exception 'This waits for a check: do it in Grittle so the reviewer is asked'
       using errcode = '42501';
@@ -1887,7 +2062,11 @@ List<_AgentTool> _checkInTools(
   List<_AgentEntity> entities,
 ) {
   final spec = checkIns.spec;
-  if (spec.checkInTool == null && spec.undoTool == null) return const [];
+  if (spec.checkInTool == null &&
+      spec.undoTool == null &&
+      spec.logTool == null) {
+    return const [];
+  }
   final log =
       entities
           .where((entity) => entity.spec.className == checkIns.log.className)
@@ -1931,7 +2110,65 @@ $body
 end;
 \$\$;
 ''';
+  final agentRefusals = [
+    for (final refusal in spec.agentRefusals)
+      '  if coalesce((select subject_row.${subject.fields.firstWhere((field) => field.name == refusal.fieldName).columnName} '
+          'from public.${subject.tableName} subject_row where subject_row.id = subject_id), false) then\n'
+          "    raise exception ${_quote(refusal.message)} using errcode = '42501';\n"
+          '  end if;',
+  ].join('\n');
+  final answers = <String, Object?>{
+    if (checkIns.answers != null)
+      'answers': {
+        'type': 'object',
+        'description':
+            "Answers to the $subjectLabel's questions, keyed by question id: "
+            'a number, text, true or false, a date (YYYY-MM-DD), a date and '
+            'time, minutes after midnight for a time, or the chosen option '
+            'id. Questions left out keep no answer.',
+      },
+  };
   final tools = <_AgentTool>[];
+  final logTool = spec.logTool;
+  if (logTool != null) {
+    final properties = <String, Object?>{
+      subjectArgument: subjectProperty,
+      checkIns.date.name: schema(checkIns.date, 'The past day to log.'),
+      part.name: schema(
+        part,
+        'The part of the day to log; every part the $subjectLabel is '
+        'scheduled for by default.',
+      ),
+      checkIns.at.name: schema(
+        checkIns.at,
+        'Its time of day is recorded; ${spec.loggedAtHour}:00 by default.',
+      ),
+      ...answers,
+    };
+    tools.add(
+      _AgentTool(
+        name: logTool,
+        title: 'Log $subjectLabel day',
+        description:
+            'Records a $subjectLabel as done on a past day, as the app logs a '
+            'missed day: only a day it existed on and was scheduled for, and '
+            'parts of the day already logged stay as they are. Returns the '
+            'new check-ins.',
+        properties: properties,
+        required: [subjectArgument, checkIns.date.name],
+        readOnly: false,
+        destructive: false,
+        idempotent: true,
+        functionSql: function(
+          logTool,
+          properties,
+          '$agentRefusals\n'
+          '  ids := ${checkIns.logDayFunction}(subject_id, p_arguments);\n'
+          '  return ${rows('ids')};',
+        ),
+      ),
+    );
+  }
   final checkInTool = spec.checkInTool;
   if (checkInTool != null) {
     final properties = <String, Object?>{
@@ -1944,14 +2181,8 @@ end;
       ),
       for (final field in checkIns.details)
         field.name: schema(field, 'Recorded with the check-in.'),
+      ...answers,
     };
-    final refusals = [
-      for (final refusal in spec.agentRefusals)
-        '  if coalesce((select subject_row.${subject.fields.firstWhere((field) => field.name == refusal.fieldName).columnName} '
-            'from public.${subject.tableName} subject_row where subject_row.id = subject_id), false) then\n'
-            "    raise exception ${_quote(refusal.message)} using errcode = '42501';\n"
-            '  end if;',
-    ];
     tools.add(
       _AgentTool(
         name: checkInTool,
@@ -1968,7 +2199,7 @@ end;
         destructive: false,
         idempotent: false,
         functionSql: function(checkInTool, properties, '''
-${refusals.join('\n')}
+$agentRefusals
   ids := array[${checkIns.checkInFunction}(subject_id, p_arguments)];
   return ${rows('ids')} -> 0;'''),
       ),
@@ -2007,6 +2238,7 @@ ${refusals.join('\n')}
         functionSql: function(
           undoTool,
           properties,
+          '$agentRefusals\n'
           '  ids := ${checkIns.undoFunction}(subject_id, p_arguments);\n'
           '  return ${rows('ids')};',
         ),

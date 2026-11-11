@@ -1553,6 +1553,22 @@ semantics MUST use a proved-bounded aggregate transaction; work requiring
 restart recovery, external I/O, progress, or cancellation MUST use a durable
 process. A caller MUST NOT call `useAll` merely to run one mutation per item.
 
+An action whose fields follow from its parameters declares them with
+`derive`, such as `#energyLevel: Banded(#energyScore, ...)`,
+`#energyBase: CopyOf(#energyScore)`, or `#energyBaseAt: ClockNow()`. The
+generated method takes only the parameters and computes the derived fields,
+and the agent tool computes the same in the target, so no caller derives
+them by hand.
+
+An action that needs linked work finished first declares
+`requires: [RequireLinked(LinkEntity, label:, done:, counting:, checkedIn:)]`:
+a linked row counts while its fields hold a `counting` value and is done
+when they hold a `done` value or, with `checkedIn`, once it owes no check-in
+today. The application calls the generated `require<Action>` before acting,
+and the action's agent tool checks the same in the target. `@AgentTool`
+`refusals` keep agents from an action only the application completes, such
+as one sent to a checker.
+
 A nullable self-reference may declare `hierarchy: true` only with cascade
 deletion. Generation then exposes `removeHierarchy`, `restoreHierarchy`, and,
 for `Archivable`, `setHierarchyArchived` on the entity set. Nodus validates the
@@ -1858,6 +1874,36 @@ passed. Undoing removes the matching rows and records each with the
 application completes, such as one sent to a checker. The application reads
 its clock and zone; a target reads its clock and the owner's declared
 timezone.
+
+`beginLogDay` records a past day: one after the subject's `since` day and on
+a weekday its `days` allow, for the part given or else every part the
+subject is scheduled for, keeping parts already logged that day, at the time
+of day given or `loggedAtHour`. `owesCheckInOn(day)` is true while the
+subject is scheduled that day (not in an `unscheduled` or interval case, and
+on one of its `days`) and the owner has not checked in every part of it;
+targets have the same function.
+
+#### Declared answers
+
+An entity whose rows answer question rows declares `@Answers(question:,
+kind:, cases:, label:, number:, min:, max:, option:, optionQuestion:)`: the
+answer's variant case is the one `cases` maps the question's kind to, a
+number keeps within the question's bounds, and a chosen option belongs to
+the question. A schema-capable target enforces it with a trigger on every
+write of an answer, from any writer; the application calls the generated
+`require<Answer>` before saving one. When the answers belong to a `CheckIns`
+log, its agent tools take `answers` keyed by question id and replace the
+check-in's answers with them.
+
+#### Declared no-cycle links
+
+An activatable link entity between two rows of one entity declares
+`@Acyclic(from:, to:, cycle:, hierarchy:)` when its active links must never
+close a cycle, and, with `hierarchy`, never join a row to its ancestors or
+descendants. A schema-capable target enforces it with a trigger on every
+write, reading past row-level security because a cycle may pass through
+links the writer cannot see; the application checks it first through the
+generated `require<Link>`, with the same messages.
 
 
 ## 7. Collections, queries, and identity
@@ -2807,9 +2853,15 @@ others. An agent may not take a status edge declared `relationshipBlockedBy`
 while its check is pending.
 A member operation with an `agentTool` name joins the surface; it runs on the
 caller's `DayRoot` for today and returns the root's members in order.
-A `checkInTool` or `undoTool` on `@CheckIns` joins it too: checking in
-runs the declared rules on the target's clock and the owner's timezone, and
-returns the check-in; undoing returns the undone check-ins.
+A `checkInTool`, `undoTool`, or `logTool` on `@CheckIns` joins it too:
+each runs the declared rules on the target's clock and the owner's timezone
+and returns the check-ins it recorded or undid. `locked` names fields that,
+while set, keep agents from changing a row the application provides;
+`reorder` adds a `move_<entity>` tool placing a row first, last, or next to
+another row of its list; `liftChildren` makes deleting a hierarchy row move
+its children up a level; `linkTool`/`unlinkTool` and `@AgentTool(name:)`
+name tools whose default names read poorly. An action of a `DayRoot` entity
+acts on the caller's root for today unless the agent names one.
 
 A token issued to an OAuth client is an agent request. Generated push
 functions refuse it outside the declared writable set, graph and entity pull

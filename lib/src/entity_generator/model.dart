@@ -40,6 +40,8 @@ final class EntitySpec {
     this.identity,
     this.memberOperations,
     this.checkIns,
+    this.acyclic,
+    this.answers,
   });
 
   final String className;
@@ -93,6 +95,12 @@ final class EntitySpec {
 
   /// How this log entity records check-ins of a scheduled subject.
   final CheckInsSpec? checkIns;
+
+  /// The no-cycle rule of this link entity.
+  final AcyclicSpec? acyclic;
+
+  /// How rows of this entity answer questions.
+  final AnswersSpec? answers;
 
   String get sourceBaseName =>
       inputImport.split('/').last.replaceFirst(RegExp(r'\.dart$'), '');
@@ -615,6 +623,8 @@ final class EntitySpec {
       identity: identity,
       memberOperations: memberOperations,
       checkIns: checkIns,
+      acyclic: acyclic,
+      answers: answers,
     );
   }
 
@@ -1438,15 +1448,28 @@ final class ActionSpec {
     required this.methodName,
     required this.parameters,
     required this.assignments,
+    this.derivations = const {},
+    this.requirements = const [],
+    this.agentRefusals = const [],
     this.bulk = false,
     this.rebase,
     this.agentTool = false,
+    this.agentToolName,
     this.documentation,
   });
 
   final String methodName;
   final List<ActionParameterSpec> parameters;
   final List<ActionAssignmentSpec> assignments;
+
+  /// Fields the action derives from its parameters, in declaration order.
+  final Map<String, StartingValueSpec> derivations;
+
+  /// Linked work that must be finished before the action runs.
+  final List<RequireLinkedSpec> requirements;
+
+  /// Row booleans that refuse the action's agent tool.
+  final List<RefusalSpec> agentRefusals;
   final bool bulk;
 
   /// Dart expression naming the declared rebase function, if any.
@@ -1455,12 +1478,16 @@ final class ActionSpec {
   /// Whether agents may call this action through a generated tool.
   final bool agentTool;
 
+  /// The tool's declared name, if not the default.
+  final String? agentToolName;
+
   /// The action's documentation comment, without comment markers.
   final String? documentation;
 
   List<String> get targetFields => [
     ...parameters.map((parameter) => parameter.fieldName),
     ...assignments.map((assignment) => assignment.fieldName),
+    ...derivations.keys,
   ];
 }
 
@@ -1474,6 +1501,48 @@ final class DerivedIdentitySpec {
 
   final String namespace;
   final List<String> keyFieldNames;
+}
+
+/// A declared answer rule; see `Answers`.
+final class AnswersSpec {
+  const AnswersSpec({
+    required this.questionFieldName,
+    required this.kindFieldName,
+    required this.cases,
+    required this.labelFieldName,
+    this.numberFieldName,
+    this.minFieldName,
+    this.maxFieldName,
+    this.optionFieldName,
+    this.optionQuestionFieldName,
+  });
+
+  final String questionFieldName;
+  final String kindFieldName;
+
+  /// Kind enum constant names with the answer field each uses.
+  final Map<String, String> cases;
+  final String labelFieldName;
+  final String? numberFieldName;
+  final String? minFieldName;
+  final String? maxFieldName;
+  final String? optionFieldName;
+  final String? optionQuestionFieldName;
+}
+
+/// A declared no-cycle rule; see `Acyclic`.
+final class AcyclicSpec {
+  const AcyclicSpec({
+    required this.fromFieldName,
+    required this.toFieldName,
+    required this.cycleMessage,
+    this.hierarchyMessage,
+  });
+
+  final String fromFieldName;
+  final String toFieldName;
+  final String cycleMessage;
+  final String? hierarchyMessage;
 }
 
 /// A declared check-in log; see `CheckIns`.
@@ -1492,8 +1561,13 @@ final class CheckInsSpec {
     required this.detailFieldNames,
     required this.undoneAsClassName,
     required this.undoCommentFieldName,
+    this.daysFieldName,
+    this.sinceFieldName,
+    this.unscheduledFieldNames = const [],
+    this.loggedAtHour = 12,
     this.checkInTool,
     this.undoTool,
+    this.logTool,
   });
 
   final String subjectFieldName;
@@ -1509,8 +1583,13 @@ final class CheckInsSpec {
   final List<String> detailFieldNames;
   final String undoneAsClassName;
   final String undoCommentFieldName;
+  final String? daysFieldName;
+  final String? sinceFieldName;
+  final List<String> unscheduledFieldNames;
+  final int loggedAtHour;
   final String? checkInTool;
   final String? undoTool;
+  final String? logTool;
 }
 
 /// The declared parts of a day: enum constant names with their start hours,
@@ -1520,6 +1599,24 @@ final class DayPartsSpec {
 
   final List<(String, int)> starts;
   final String wholeDay;
+}
+
+final class RequireLinkedSpec {
+  const RequireLinkedSpec({
+    required this.linkClassName,
+    required this.label,
+    required this.done,
+    required this.counting,
+    required this.checkedIn,
+  });
+
+  final String linkClassName;
+  final String label;
+
+  /// Field names with the enum constant names that make a row done.
+  final Map<String, List<String>> done;
+  final Map<String, List<String>> counting;
+  final bool checkedIn;
 }
 
 final class EverySpec {
@@ -1581,6 +1678,10 @@ final class WeekdayAverageSpec extends StartingValueSpec {
   final int days;
   final int minimum;
   final int fallback;
+}
+
+final class ClockNowSpec extends StartingValueSpec {
+  const ClockNowSpec();
 }
 
 final class CopyOfSpec extends StartingValueSpec {
@@ -1751,6 +1852,11 @@ final class AgentAccessSpec {
     this.remove = false,
     this.archive = false,
     this.hidden = const {},
+    this.locked = const [],
+    this.linkTool,
+    this.unlinkTool,
+    this.liftChildren = false,
+    this.reorder = false,
   });
 
   final bool link;
@@ -1759,6 +1865,18 @@ final class AgentAccessSpec {
 
   /// Field names agents may read but never set.
   final Set<String> hidden;
+
+  /// Field names that, while set, lock a row against agent writes.
+  final List<String> locked;
+
+  final String? linkTool;
+  final String? unlinkTool;
+
+  /// Deleting moves children up to the parent instead of deleting them.
+  final bool liftChildren;
+
+  /// Adds a tool moving a row within its ordered list.
+  final bool reorder;
 
   final bool create;
   final bool edit;

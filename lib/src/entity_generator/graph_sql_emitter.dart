@@ -1,5 +1,8 @@
 import 'package:nodus/nodus.dart';
 
+import 'action_requirements.dart';
+import 'acyclic.dart';
+import 'answers.dart';
 import 'check_ins_sql.dart';
 import 'graph_agent_sql_emitter.dart';
 import 'member_operations_sql.dart';
@@ -226,6 +229,9 @@ $principalRetirementSql
 
 ${emitMemberOperationsSql(graph)}
 ${emitCheckInsSql(graph)}
+${emitAcyclicSql(graph)}
+${emitActionRequirementsSql(graph)}
+${emitAnswersSql(graph)}
 ${emitAgentSurfaceSql(graph)}''';
 }
 

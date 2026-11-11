@@ -375,9 +375,13 @@ end;
     Map<String, OperationValueSpec> arguments, {
     required bool fillParameters,
   }) {
+    String parameterJson(String name) => arguments[name] == null
+        ? _defaultJson(resolved.field(name))
+        : _value(operation, arguments[name]!);
     final entries = <String>[
       for (final parameter in action.parameters)
-        '${_quote(parameter.fieldName)}, ${arguments[parameter.name] == null ? _defaultJson(resolved.field(parameter.fieldName)) : _value(operation, arguments[parameter.name]!)}',
+        '${_quote(parameter.fieldName)}, ${parameterJson(parameter.name)}',
+      ...derivedActionPatch(action, resolved.field, parameterJson),
       for (final assignment in action.assignments)
         '${_quote(assignment.fieldName)}, ${switch (assignment.kind) {
           ActionValueKind.literal => _jsonLiteral(resolved.field(assignment.fieldName).isEnum && assignment.literal is String ? snakeCase(assignment.literal! as String) : assignment.literal),
@@ -608,6 +612,8 @@ end;
 
   String _startingSql(StartingValueSpec value, Map<String, String> earlier) {
     switch (value) {
+      case ClockNowSpec():
+        return 'now()';
       case WeekdayAverageSpec():
         final field = rootField(value.fieldName);
         final present = rootField(value.presentFieldName);
@@ -655,6 +661,22 @@ end;
     }
   }
 }
+
+/// The `jsonb_build_object` entries of the fields [action] derives, where
+/// [parameter] gives a parameter's JSON value.
+List<String> derivedActionPatch(
+  ActionSpec action,
+  FieldSpec Function(String name) field,
+  String Function(String name) parameter,
+) => [
+  for (final MapEntry(key: name, :value) in action.derivations.entries)
+    '${_quote(name)}, ${switch (value) {
+      ClockNowSpec() => 'public.agent_now()',
+      CopyOfSpec(:final fieldName) => parameter(fieldName),
+      BandedSpec(:final fieldName, :final bounds, :final values) => "to_jsonb(case ${[for (var index = 0; index < bounds.length; index++) 'when (${parameter(fieldName)} #>> \'{}\')::numeric < ${bounds[index]} then ${_quote(field(name).isEnum ? snakeCase(values[index]) : values[index])}'].join(' ')} else ${_quote(field(name).isEnum ? snakeCase(values.last) : values.last)} end)",
+      WeekdayAverageSpec() => throw StateError('Rejected by the parser.'),
+    }}',
+];
 
 String _push(
   EntitySpec entity, {

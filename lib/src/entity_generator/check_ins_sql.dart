@@ -27,10 +27,14 @@ String emitCheckInsSql(EntityGraphSpec graph) {
     }
     buffer
       ..writeln(log.checkInSql())
+      ..writeln(log.logDaySql())
+      ..writeln(log.owesSql())
       ..writeln(log.undoSql());
     signatures
       ..add('${log.resolved.checkInFunction}(uuid, jsonb)')
-      ..add('${log.resolved.undoFunction}(uuid, jsonb)');
+      ..add('${log.resolved.undoFunction}(uuid, jsonb)')
+      ..add('${log.resolved.logDayFunction}(uuid, jsonb)')
+      ..add('${log.resolved.owesFunction}(uuid, date)');
   }
   for (final signature in signatures) {
     buffer
@@ -191,7 +195,161 @@ ${_push(log, operation: 'delete', entityId: 'item.id', patch: "'deletedAt', 'nul
     end if;
 ${_push(log, operation: 'patch', entityId: 'item.id', patch: detailPatch, base: 'item.server_version', indent: '    ')}
   end if;
+${resolved.recordAnswers == null ? '' : "  perform ${resolved.recordAnswers}(item.id, p_arguments -> 'answers');"}
   return item.id;
+end;
+\$\$;
+''';
+  }
+
+  String logDaySql() {
+    final subjectWords = _words(subject.className);
+    final partWords = _words(resolved.part.name);
+    final flags = resolved.scheduledParts.columnName;
+    final at = resolved.at.columnName;
+    final whole = _quote(resolved.wire(resolved.dayParts.wholeDay));
+    final scheduled =
+        'array(select listed.part from unnest(array[${[for (final name in resolved.parts) _quote(resolved.wire(name))].join(', ')}]) '
+        'with ordinality listed(part, position) '
+        'where (subject.$flags & (case listed.part ${_bitCases()} end)) <> 0 order by listed.position)';
+    final available = [
+      if (resolved.since case final since?)
+        'day >= (subject.${since.columnName} at time zone zone)::date',
+      if (resolved.days case (_, _, final field))
+        '(subject.${field.columnName} is null or (subject.${field.columnName} & (1 << extract(dow from day)::int)) <> 0)',
+    ];
+    final detailPatch = [
+      "${_quote(resolved.at.name)}, to_jsonb(logged_at)",
+      for (final field in resolved.details)
+        '${_quote(field.name)}, ${_defaultJson(field)}',
+    ].join(', ');
+    return '''
+create or replace function ${resolved.logDayFunction}(
+  p_subject_id uuid,
+  p_arguments jsonb
+)
+returns uuid[]
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+${_prelude(resolved.part.name, declarations: ['day date;', 'parts text[];', 'scheduled text[];', 'live text[];', 'logged text[];', 'logged_at timestamptz;', 'part text;'])}
+${[for (final refusal in resolved.spec.refusals) "  if subject.${_column(subject, refusal.fieldName)} then\n    raise exception ${_quote(refusal.message)} using errcode = '22023';\n  end if;"].join('\n')}
+  day := (public.agent_required(p_arguments, ${_quote(resolved.date.name)}) #>> '{}')::date;
+  if day >= today then
+    raise exception 'Only a day before today can be logged.' using errcode = '22023';
+  end if;
+${available.isEmpty ? '' : '''  if not (${available.join(' and ')}) then
+    raise exception ${_quote('The $subjectWords is not available on this date.')} using errcode = '22023';
+  end if;'''}
+  scheduled := $scheduled;
+  parts := case
+    when whole_day then array[$whole]
+    when nullif(p_arguments ->> ${_quote(resolved.part.name)}, '') is not null then array[requested]
+    when interval_active then scheduled[1:1]
+    else scheduled
+  end;
+  if cardinality(parts) = 0 or (not whole_day and not (parts <@ scheduled)) then
+    raise exception ${_quote('The $subjectWords is not scheduled for this $partWords.')} using errcode = '22023';
+  end if;
+  live := array(
+    select distinct log_row.${resolved.part.columnName} from $logTable log_row
+    where log_row.${resolved.subjectField.columnName} = p_subject_id
+      and log_row.${log.ownerField.columnName} = auth.uid()
+      and log_row.${resolved.date.columnName} = day
+      and log_row.deleted_at is null
+  );
+  logged := case
+    when cardinality(live) = 0 then '{}'::text[]
+    when $whole = any(live) then case when whole_day then array[$whole] else scheduled end
+    when whole_day then array[$whole]
+    else array(select unnest(live) intersect select unnest(scheduled))
+  end;
+  logged_at := (day + coalesce(
+    (nullif(p_arguments ->> ${_quote(resolved.at.name)}, '')::timestamptz at time zone zone)::time,
+    make_time(${resolved.spec.loggedAtHour}, 0, 0)
+  )) at time zone zone;
+  foreach part in array parts loop
+    continue when not interval_active and part = any(logged);
+    item := null;
+    if not interval_active then
+      select * into item from $logTable log_row
+      where log_row.${resolved.subjectField.columnName} = p_subject_id
+        and log_row.${log.ownerField.columnName} = auth.uid()
+        and log_row.${resolved.date.columnName} = day
+        and log_row.${resolved.part.columnName} = part
+      order by log_row.$at desc, log_row.id desc limit 1;
+    end if;
+    if item.id is null then
+      item.id := gen_random_uuid();
+${_push(
+      log,
+      operation: 'create',
+      entityId: 'item.id',
+      patch: _createPatch(date: 'day', part: 'part', at: 'logged_at', detailsFromArguments: false),
+      indent: '      ',
+    )}
+    else
+      if item.deleted_at is not null then
+${_push(log, operation: 'delete', entityId: 'item.id', patch: "'deletedAt', 'null'::jsonb", base: 'item.server_version', indent: '        ')}
+        select * into item from $logTable log_row where log_row.id = item.id;
+      end if;
+${_push(log, operation: 'patch', entityId: 'item.id', patch: detailPatch, base: 'item.server_version', indent: '      ')}
+    end if;
+${resolved.recordAnswers == null ? '' : "    perform ${resolved.recordAnswers}(item.id, p_arguments -> 'answers');"}
+    result := result || item.id;
+  end loop;
+  return result;
+end;
+\$\$;
+''';
+  }
+
+  /// Whether the caller owes the subject a check-in on a day: it is
+  /// scheduled then and not every part of it is checked in.
+  String owesSql() {
+    final flags = resolved.scheduledParts.columnName;
+    final free = [
+      for (final (_, _, field) in resolved.unscheduled)
+        'subject.${field.columnName} is not null',
+      for (final (_, _, _, field) in resolved.intervals)
+        'subject.${field.columnName} is not null',
+      if (resolved.days case (_, _, final field))
+        '(subject.${field.columnName} is not null and (subject.${field.columnName} & (1 << extract(dow from p_day)::int)) = 0)',
+    ];
+    final whole = _quote(resolved.wire(resolved.dayParts.wholeDay));
+    return '''
+create or replace function ${resolved.owesFunction}(p_subject_id uuid, p_day date)
+returns boolean
+language plpgsql
+stable
+set search_path = ''
+as \$\$
+declare
+  subject $subjectTable;
+  logged text[];
+begin
+  select * into subject from $subjectTable subject_row where subject_row.id = p_subject_id;
+  if subject.id is null${free.isEmpty ? '' : ' or ${free.join(' or ')}'} then
+    return false;
+  end if;
+  logged := array(
+    select log_row.${resolved.part.columnName} from $logTable log_row
+    where log_row.${resolved.subjectField.columnName} = p_subject_id
+      and log_row.${log.ownerField.columnName} = auth.uid()
+      and log_row.${resolved.date.columnName} = p_day
+      and log_row.deleted_at is null
+  );
+  if cardinality(logged) = 0 then
+    return true;
+  end if;
+  if $whole = any(logged) or (subject.$flags & ${resolved.bit(resolved.dayParts.wholeDay)}) <> 0 then
+    return false;
+  end if;
+  return exists (
+    select 1 from unnest(array[${[for (final name in resolved.parts) _quote(resolved.wire(name))].join(', ')}]) part
+    where (subject.$flags & (case part ${_bitCases()} end)) <> 0 and not (part = any(logged))
+  );
 end;
 \$\$;
 ''';
@@ -203,16 +361,22 @@ end;
     'else ${resolved.bit(resolved.dayParts.wholeDay)}',
   ].join(' ');
 
-  String _createPatch() {
+  String _createPatch({
+    String date = 'today',
+    String part = 'slot',
+    String at = 'now_at',
+    bool detailsFromArguments = true,
+  }) {
     final values = <String, String>{
       log.ownerField.name: 'to_jsonb(auth.uid())',
       resolved.subjectField.name: 'to_jsonb(p_subject_id)',
-      resolved.date.name: 'to_jsonb(today)',
-      resolved.part.name: 'to_jsonb(slot)',
-      resolved.at.name: 'to_jsonb(now_at)',
+      resolved.date.name: 'to_jsonb($date)',
+      resolved.part.name: 'to_jsonb($part)',
+      resolved.at.name: 'to_jsonb($at)',
       for (final field in resolved.details)
-        field.name:
-            'coalesce(p_arguments -> ${_quote(field.name)}, ${_defaultJson(field)})',
+        field.name: detailsFromArguments
+            ? 'coalesce(p_arguments -> ${_quote(field.name)}, ${_defaultJson(field)})'
+            : _defaultJson(field),
     };
     final entries = <String>["'${log.idField.name}', to_jsonb(item.id)"];
     for (final field in log.createFields) {
