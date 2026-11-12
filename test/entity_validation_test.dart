@@ -9733,7 +9733,7 @@ import 'package:nodus/account.dart';
 
 enum Level { low, high }
 
-@AgentAccess(edit: true, reorder: true, locked: [#provided])
+@AgentAccess(edit: true, reorder: true, list: false, locked: [#provided])
 @Entity(cardinality: Cardinality.unbounded)
 abstract class Task implements OwnedBy<Task, Account>, SoftDeletable, Ordered {
   abstract final String title;
@@ -9818,6 +9818,8 @@ abstract class TaskDependency
               'agent',
             ),
             contains('create or replace function public.agent_tool_move_task('),
+            isNot(contains('public.agent_tool_list_tasks(')),
+            contains('create or replace function public.agent_tool_get_task('),
             contains("'commandName', 'moveInOrder'"),
             contains(
               'create or replace function public.agent_tool_add_task_blocker(',

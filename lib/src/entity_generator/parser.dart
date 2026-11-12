@@ -6767,6 +6767,45 @@ AgentAccessSpec? _parseAgentAccess(ClassElement classElement) {
         : annotation.read('unlinkTool').stringValue,
     liftChildren: annotation.read('liftChildren').boolValue,
     reorder: annotation.read('reorder').boolValue,
+    list: annotation.read('list').boolValue,
+    invite: annotation.read('invite').isNull
+        ? null
+        : AgentInviteSpec(
+            tool: annotation.read('invite').read('tool').stringValue,
+            revokeTool: annotation
+                .read('invite')
+                .read('revokeTool')
+                .stringValue,
+            fieldNames: [
+              for (final field
+                  in annotation.read('invite').read('fields').listValue)
+                field.toSymbolValue()!,
+            ],
+            topLevelOnly: annotation.read('invite').read('topLevelOnly').isNull
+                ? null
+                : annotation.read('invite').read('topLevelOnly').stringValue,
+            inviteesLinkedBy: switch (annotation
+                .read('invite')
+                .read('inviteesLinkedBy')) {
+              final reader when reader.isNull => null,
+              final reader => InviteesLinkedBySpec(
+                entityClassName: reader
+                    .read('entity')
+                    .typeValue
+                    .getDisplayString(),
+                fromFieldName: reader.read('from').objectValue.toSymbolValue()!,
+                toFieldName: reader.read('to').objectValue.toSymbolValue()!,
+                when: {
+                  for (final entry in reader.read('when').mapValue.entries)
+                    entry.key!.toSymbolValue()!: [
+                      for (final value in entry.value!.toListValue()!)
+                        value.variable!.name!,
+                    ],
+                },
+                message: reader.read('message').stringValue,
+              ),
+            },
+          ),
   );
 }
 

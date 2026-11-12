@@ -1511,6 +1511,39 @@ final class DerivedIdentitySpec {
   final List<String> keyFieldNames;
 }
 
+final class AgentInviteSpec {
+  const AgentInviteSpec({
+    required this.tool,
+    required this.revokeTool,
+    required this.fieldNames,
+    this.topLevelOnly,
+    this.inviteesLinkedBy,
+  });
+
+  final String tool;
+  final String revokeTool;
+  final List<String> fieldNames;
+  final String? topLevelOnly;
+  final InviteesLinkedBySpec? inviteesLinkedBy;
+}
+
+/// Whom an agent may invite; see `InviteesLinkedBy`.
+final class InviteesLinkedBySpec {
+  const InviteesLinkedBySpec({
+    required this.entityClassName,
+    required this.fromFieldName,
+    required this.toFieldName,
+    required this.when,
+    required this.message,
+  });
+
+  final String entityClassName;
+  final String fromFieldName;
+  final String toFieldName;
+  final Map<String, List<String>> when;
+  final String message;
+}
+
 /// A declared answer rule; see `Answers`.
 final class AnswersSpec {
   const AnswersSpec({
@@ -1885,6 +1918,8 @@ final class AgentAccessSpec {
     this.unlinkTool,
     this.liftChildren = false,
     this.reorder = false,
+    this.list = true,
+    this.invite,
   });
 
   final bool link;
@@ -1905,6 +1940,12 @@ final class AgentAccessSpec {
 
   /// Adds a tool moving a row within its ordered list.
   final bool reorder;
+
+  /// Whether agents may list the rows rather than only get one by id.
+  final bool list;
+
+  /// Invite and revoke tools of a workflow membership.
+  final AgentInviteSpec? invite;
 
   final bool create;
   final bool edit;

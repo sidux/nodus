@@ -360,6 +360,8 @@ final class _AgentEntity {
       access.link ||
       access.remove ||
       access.archive ||
+      access.reorder ||
+      access.invite != null ||
       actions.isNotEmpty;
 
   _AgentTextField? textFor(FieldSpec field) =>
@@ -490,7 +492,7 @@ as \$\$
   }
 
   List<_AgentTool> tools(List<_AgentEntity> all) => [
-    _listTool(),
+    if (access.list) _listTool(),
     _getTool(all),
     if (access.create) _createTool(),
     if (access.edit) _editTool(),
@@ -502,7 +504,222 @@ as \$\$
     if (access.remove) ..._removeTools(),
     if (access.archive) ..._archiveTools(),
     if (access.reorder) _moveTool(),
+    if (access.invite != null) ..._inviteTools(),
   ];
+
+  /// Invites an account to a workflow membership's target, as the
+  /// application's `inviteOrReuse` does, and takes the invitation back.
+  List<_AgentTool> _inviteTools() {
+    final invite = access.invite!;
+    final membership =
+        spec.workflowMembership ??
+        (throw InvalidGenerationSourceError(
+          'AgentAccess.invite needs a workflow membership: ${spec.className}.',
+        ));
+    final targetRef = membership.targetReference;
+    final member = membership.participant;
+    final status = membership.status;
+    for (final state in ['pending', 'accepted', 'declined', 'revoked']) {
+      if (!status.enumWireValues.contains(state)) {
+        throw InvalidGenerationSourceError(
+          'AgentAccess.invite needs a `$state` membership state: '
+          '${spec.className}.',
+        );
+      }
+    }
+    final target = graph.entities.singleWhere(
+      (entity) => entity.className == membership.targetClassName,
+    );
+    final targetLabel = _words(target.className);
+    final extras = [
+      for (final name in invite.fieldNames)
+        spec.fields.singleWhere((field) => field.name == name),
+    ];
+    final id = spec.idField.columnName;
+    final targetColumn = targetRef.columnName;
+    final memberColumn = member.columnName;
+    final live = spec.hasSoftDeletableCapability
+        ? ' and item.deleted_at is null'
+        : '';
+    final oneActive = spec.compoundIndexes
+        .where(
+          (index) =>
+              index.unique &&
+              index.fields.length == 1 &&
+              index.fields.single == targetRef.name &&
+              index.condition?.field == status.name,
+        )
+        .firstOrNull;
+    final properties = <String, Object?>{
+      targetRef.name: {
+        'type': 'string',
+        'format': 'uuid',
+        'description': 'The $targetLabel.',
+      },
+      member.name: {
+        'type': 'string',
+        'format': 'uuid',
+        'description':
+            'The account to invite: a friend, by the account id '
+            'list_friendships gives.',
+      },
+    };
+    final inviteProperties = {
+      ...properties,
+      for (final field in extras)
+        field.name: {
+          ...?_schema(field, spec),
+          if (field.documentation case final doc?)
+            'description': doc.replaceAll('\n', ' '),
+        },
+    };
+    String select(String into) =>
+        '''
+  select * into $into from public.$table item
+  where item.$targetColumn = (public.agent_required(p_arguments, ${_quote(targetRef.name)}) #>> '{}')::uuid
+    and item.$memberColumn = (public.agent_required(p_arguments, ${_quote(member.name)}) #>> '{}')::uuid$live
+  order by item.${spec.serverVersionField.columnName} desc limit 1;''';
+    final extrasPatch = [
+      for (final field in extras)
+        "${_quote(field.name)}, coalesce(p_arguments -> ${_quote(field.name)}, ${_defaultSql(field)})",
+    ];
+    final ownerSource = targetRef.reference!.ownershipSourceColumnName;
+    final created = [
+      "'${spec.idField.name}', to_jsonb(gen_random_uuid())",
+      "'${spec.ownerField.name}', to_jsonb(target_row.$ownerSource)",
+      for (final field in createPayloadFields)
+        if (field.name != spec.idField.name)
+          '${_quote(field.name)}, ${field.name == spec.ownerField.name
+              ? 'to_jsonb(target_row.$ownerSource)'
+              : field.name == targetRef.name
+              ? 'to_jsonb(target_row.id)'
+              : field.name == member.name
+              ? "public.agent_required(p_arguments, ${_quote(member.name)})"
+              : field.name == status.name
+              ? "'\"pending\"'::jsonb"
+              : extras.any((extra) => extra.name == field.name)
+              ? "coalesce(p_arguments -> ${_quote(field.name)}, ${_defaultSql(field)})"
+              : _defaultSql(field)}',
+    ];
+    final linked = invite.inviteesLinkedBy;
+    final linkCheck = linked == null
+        ? ''
+        : () {
+            final link = graph.entities.singleWhere(
+              (entity) => entity.className == linked.entityClassName,
+            );
+            String column(String name) => link.fields
+                .singleWhere((field) => field.name == name)
+                .columnName;
+            final from = column(linked.fromFieldName);
+            final to = column(linked.toFieldName);
+            final conditions = [
+              for (final MapEntry(key: name, value: constants)
+                  in linked.when.entries)
+                'link.${column(name)} in (${constants.map((constant) => _quote(snakeCase(constant))).join(', ')})',
+              if (link.hasSoftDeletableCapability) 'link.deleted_at is null',
+              "((link.$from = auth.uid() and link.$to = (p_arguments ->> ${_quote(member.name)})::uuid) or "
+                  "(link.$to = auth.uid() and link.$from = (p_arguments ->> ${_quote(member.name)})::uuid))",
+            ];
+            return '''
+  if not exists (
+    select 1 from public.${link.tableName} link
+    where ${conditions.join('\n      and ')}
+  ) then
+    raise exception ${_quote(linked.message)} using errcode = '22023';
+  end if;''';
+          }();
+    final parent = target.hierarchyParentField;
+    final topLevel = invite.topLevelOnly == null || parent == null
+        ? ''
+        : '''
+  if target_row.${parent.columnName} is not null then
+    raise exception ${_quote(invite.topLevelOnly!)} using errcode = '22023';
+  end if;''';
+    final revokeOthers = oneActive == null
+        ? ''
+        : '''
+  for other_row in
+    select * from public.$table item
+    where item.$targetColumn = target_row.id
+      and item.$memberColumn <> (p_arguments ->> ${_quote(member.name)})::uuid
+      and item.${status.columnName} in (${oneActive.condition!.values.map((value) => _quote(snakeCase(value as String))).join(', ')})$live
+  loop
+${_pushSql(spec, operation: 'patch', entityId: 'other_row.$id', patch: "${_quote(status.name)}, '\"revoked\"'::jsonb", base: 'other_row.${spec.serverVersionField.columnName}', indent: '    ')}
+  end loop;''';
+    String function(String name, Map<String, Object?> args, String body) =>
+        '''
+create or replace function public.agent_tool_$name(p_arguments jsonb)
+returns jsonb
+language plpgsql
+volatile
+set search_path = ''
+as \$\$
+declare
+  current_row public.$table;
+  other_row public.$table;
+  target_row public.${target.tableName};
+  created_patch jsonb;
+begin
+  perform public.agent_require_access();
+  perform public.agent_check_arguments(p_arguments, array[${args.keys.map(_quote).join(', ')}]);
+  select * into target_row from public.${target.tableName} target
+  where target.id = (public.agent_required(p_arguments, ${_quote(targetRef.name)}) #>> '{}')::uuid${target.hasSoftDeletableCapability ? ' and target.deleted_at is null' : ''};
+  if target_row.id is null then
+    raise exception '${_capitalized(targetLabel)} not found' using errcode = 'P0002';
+  end if;
+$body
+${select('current_row')}
+  return case when current_row.$id is null then null else $rowFunction(current_row) end;
+end;
+\$\$;
+''';
+    return [
+      _AgentTool(
+        name: invite.tool,
+        title: _capitalized(_words(invite.tool.replaceAll('_', ' '))),
+        description:
+            'Invites a friend to a $targetLabel; they accept or decline it in '
+            'the app. Inviting them again changes nothing while the '
+            'invitation stands, and invites them anew after they declined or '
+            'it was revoked.$_summary',
+        properties: inviteProperties,
+        required: [targetRef.name, member.name],
+        readOnly: false,
+        destructive: false,
+        idempotent: true,
+        functionSql: function(invite.tool, inviteProperties, '''
+$linkCheck
+$topLevel
+$revokeOthers
+${select('current_row')}
+  if current_row.$id is null then
+    created_patch := jsonb_build_object(${created.join(', ')});
+${_pushSql(spec, operation: 'create', entityId: "(created_patch ->> 'id')::uuid", patchSql: 'created_patch', indent: '    ')}
+  elsif current_row.${status.columnName} in ('declined', 'revoked') then
+${extrasPatch.isEmpty ? '' : _pushSql(spec, operation: 'patch', entityId: 'current_row.$id', patch: extrasPatch.join(', '), base: 'current_row.${spec.serverVersionField.columnName}', indent: '    ')}
+${extrasPatch.isEmpty ? '' : '  ${select('current_row')}'}
+${_pushSql(spec, operation: 'patch', entityId: 'current_row.$id', patch: "${_quote(status.name)}, '\"pending\"'::jsonb", base: 'current_row.${spec.serverVersionField.columnName}', indent: '    ')}
+  end if;'''),
+      ),
+      _AgentTool(
+        name: invite.revokeTool,
+        title: _capitalized(_words(invite.revokeTool.replaceAll('_', ' '))),
+        description:
+            'Takes back an invitation to a $targetLabel, accepted or not.',
+        properties: properties,
+        required: [targetRef.name, member.name],
+        readOnly: false,
+        destructive: true,
+        idempotent: true,
+        functionSql: function(invite.revokeTool, properties, '''
+${select('current_row')}
+  if current_row.$id is not null and current_row.${status.columnName} in ('pending', 'accepted') then
+${_pushSql(spec, operation: 'patch', entityId: 'current_row.$id', patch: "${_quote(status.name)}, '\"revoked\"'::jsonb", base: 'current_row.${spec.serverVersionField.columnName}', indent: '    ')}
+  end if;'''),
+      ),
+    ];
+  }
 
   /// Moves a row within its ordered list: first, last, or next to another
   /// row of the same list.

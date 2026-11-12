@@ -1099,6 +1099,8 @@ final class AgentAccess {
     this.unlinkTool,
     this.liftChildren = false,
     this.reorder = false,
+    this.list = true,
+    this.invite,
   });
 
   final bool create;
@@ -1141,6 +1143,58 @@ final class AgentAccess {
   /// Adds a `move_<entity>` tool to an ordered entity, placing a row first,
   /// last, or next to another row of its list.
   final bool reorder;
+
+  /// Whether agents may list the rows, or only read one they already know
+  /// by id, such as the profile of a friend or a collaborator.
+  final bool list;
+
+  /// Adds tools inviting an account to the target of a workflow membership
+  /// entity, and revoking that invitation.
+  final AgentInvite? invite;
+}
+
+/// Agent tools for a workflow membership: [tool] invites an account to the
+/// target, as the application's `inviteOrReuse` does, and [revokeTool]
+/// takes the invitation back. [fields] are other membership fields the
+/// agent may give, such as a comment. With [topLevelOnly], a target inside
+/// its hierarchy is refused with that message. A target that allows one
+/// active membership at a time has its other one revoked first. With
+/// [inviteesLinkedBy], an agent invites only accounts linked to the caller
+/// that way, such as accepted friends.
+final class AgentInvite {
+  const AgentInvite({
+    required this.tool,
+    required this.revokeTool,
+    this.fields = const [],
+    this.topLevelOnly,
+    this.inviteesLinkedBy,
+  });
+
+  final String tool;
+  final String revokeTool;
+  final List<Symbol> fields;
+  final String? topLevelOnly;
+  final InviteesLinkedBy? inviteesLinkedBy;
+}
+
+/// The accounts an agent may invite: those sharing an [entity] row with the
+/// caller whose [from] and [to] name the two of them, either way round, and
+/// whose fields hold one of the [when] values, such as an accepted
+/// friendship. Other invitations are refused with [message].
+final class InviteesLinkedBy {
+  const InviteesLinkedBy(
+    this.entity, {
+    required this.from,
+    required this.to,
+    required this.when,
+    required this.message,
+  });
+
+  final Type entity;
+  final Symbol from;
+  final Symbol to;
+  final Map<Symbol, List<Object>> when;
+  final String message;
 }
 
 /// Exposes a declared [Action] of an [AgentAccess] entity as an agent tool.

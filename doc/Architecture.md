@@ -2897,7 +2897,14 @@ while set, keep agents from changing a row the application provides;
 another row of its list; `liftChildren` makes deleting a hierarchy row move
 its children up a level; `linkTool`/`unlinkTool` and `@AgentTool(name:)`
 name tools whose default names read poorly. An action of a `DayRoot` entity
-acts on the caller's root for today unless the agent names one.
+acts on the caller's root for today unless the agent names one. `list: false`
+leaves an entity readable by id only, for rows anyone may read, such as
+profiles, that an agent must not enumerate. `invite: AgentInvite(...)` on a
+workflow membership adds tools inviting an account to the target and taking
+the invitation back, as the application's `inviteOrReuse` and `revoke` do;
+`inviteesLinkedBy` limits an agent's invitations to accounts linked to the
+caller, such as accepted friends, and `topLevelOnly` refuses a target inside
+its hierarchy.
 
 A token issued to an OAuth client is an agent request. Generated push
 functions refuse it outside the declared writable set, graph and entity pull
