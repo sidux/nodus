@@ -1114,6 +1114,20 @@ void main() {
     expect(sql, contains("select p_entity_type = any(array['WorkItem'])"));
     expect(sql, contains('create policy "secrets_agent_scope"'));
     expect(sql, isNot(contains('"work_items_agent_scope"')));
+    expect(
+      sql,
+      contains(
+        'create policy "work_items_agent_session"\n'
+        'on public.work_items\n'
+        'as restrictive\n'
+        'for all\n'
+        'to authenticated\n'
+        'using (not (select public.is_agent_request()) or '
+        '(select public.agent_session_active()))',
+      ),
+      reason: 'a revoked agent cannot read before its token expires',
+    );
+    expect(sql, isNot(contains('"secrets_agent_session"')));
     expect(sql, contains("'Agents read through run_agent_tool'"));
     expect(
       sql,
@@ -1128,6 +1142,15 @@ void main() {
         "public.is_agent_request() and not public.agent_writable("
         "'WorkItem')",
       ),
+    );
+    expect(
+      emitSupabaseSql(exposed),
+      contains(
+        '  if public.is_agent_request() and not '
+        'public.agent_session_active() then\n'
+        "    raise exception 'Agent access was revoked' using errcode = '42501';",
+      ),
+      reason: 'a revoked agent cannot write before its token expires',
     );
   });
 
@@ -1314,6 +1337,36 @@ void main() {
       reason: 'Entity and audience histories each retain one latest snapshot.',
     );
     expect(sql, contains('local_entity_changes_identity_idx'));
+    expect(
+      sql,
+      contains(
+        'create index if not exists local_entity_changes_operation_idx on '
+        'public.local_entity_changes (operation_id, sequence) '
+        'where operation_id is not null;',
+      ),
+      reason: 'every push finds the change of its operation',
+    );
+    expect(
+      sql,
+      contains(
+        'local_entity_changes_owner_idx on public.local_entity_changes '
+        '(owner_id);',
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        'local_entity_changes_audience_idx on public.local_entity_changes '
+        '(audience_user_id) where audience_user_id is not null;',
+      ),
+    );
+    expect(
+      sql,
+      contains(
+        'local_entity_operation_receipts_user_idx on '
+        'public.local_entity_operation_receipts (user_id);',
+      ),
+    );
     expect(
       sql,
       contains(

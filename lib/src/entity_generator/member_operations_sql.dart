@@ -136,7 +136,7 @@ ${_keyDeclarations('key', "p_arguments -> ${_quote(resolved.key.name)}")}
 ${[for (final name in anchors) _keyDeclarations(snakeCase(name), "p_arguments -> ${_quote(name)}")].join('\n')}
 ${values.join('\n')}
 begin
-  if not exists (
+${operation.agentTool == null ? _agentRefusal : ''}  if not exists (
     select 1 from public.${root.tableName} root_row where root_row.id = p_root_id
   ) then
     raise exception '${_capitalized(_words(root.className))} not found' using errcode = 'P0002';
@@ -151,6 +151,13 @@ end;
 \$\$;
 ''';
   }
+
+  /// Agents run only the operations an `agentTool` name puts on their
+  /// surface.
+  static const _agentRefusal = '''  if public.is_agent_request() then
+    raise exception 'Agents cannot run this operation' using errcode = '42501';
+  end if;
+''';
 
   String _parameterVariable(String name) => 'param_${snakeCase(name)}';
 

@@ -2230,13 +2230,25 @@ grant execute on function public.run_agent_tool(text, jsonb) to authenticated;
 ''';
 }
 
-/// Tables outside the agent surface refuse agent tokens outright. Generated
-/// access helpers are security definers, so permission checks still read
-/// them on the agent's behalf.
+/// Tables outside the agent surface refuse agent tokens outright, and the
+/// readable ones refuse an agent whose access was revoked before its token
+/// expires. Generated access helpers are security definers, so permission
+/// checks still read them on the agent's behalf.
 String _scopePoliciesSql(EntityGraphSpec graph, Set<String> readable) {
   final buffer = StringBuffer();
   for (final entity in graph.entities) {
-    if (readable.contains(entity.className)) continue;
+    if (readable.contains(entity.className)) {
+      buffer.writeln('''
+create policy "${entity.tableName}_agent_session"
+on public.${entity.tableName}
+as restrictive
+for all
+to authenticated
+using (not (select public.is_agent_request()) or (select public.agent_session_active()))
+with check (not (select public.is_agent_request()) or (select public.agent_session_active()));
+''');
+      continue;
+    }
     buffer.writeln('''
 create policy "${entity.tableName}_agent_scope"
 on public.${entity.tableName}
