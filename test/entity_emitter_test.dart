@@ -1113,6 +1113,7 @@ void main() {
     expect(sql, isNot(contains('agent_tool_list_secrets')));
     expect(sql, contains("select p_entity_type = any(array['WorkItem'])"));
     expect(sql, contains('create policy "secrets_agent_scope"'));
+    expect(sql, contains('create policy "local_entity_changes_agent_scope"'));
     expect(sql, isNot(contains('"work_items_agent_scope"')));
     expect(
       sql,

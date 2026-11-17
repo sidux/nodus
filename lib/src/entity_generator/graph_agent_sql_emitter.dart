@@ -2259,6 +2259,16 @@ using (not public.is_agent_request())
 with check (not public.is_agent_request());
 ''');
   }
+  // Agents read through run_agent_tool, and the pull refuses them, so the
+  // change log's addressed copies stay closed to them as well.
+  buffer.writeln('''
+create policy "local_entity_changes_agent_scope"
+on public.local_entity_changes
+as restrictive
+for select
+to authenticated
+using (not (select public.is_agent_request()));
+''');
   return buffer.toString();
 }
 
