@@ -461,6 +461,24 @@ abstract class Slot implements OwnedBy<Slot, Account>, SoftDeletable, Ordered {
                 'p_owner_id uuid, p_day date)',
               ),
               contains('create or replace function public.days_pin_slot('),
+              contains(
+                "      if uuid_extract_version((current_operation ->> 'entityId')::uuid) = 5\n"
+                "          and (current_operation ->> 'entityId')::uuid is distinct from "
+                "public.days_id_for((current_operation -> 'patch' -> 'ownerId' #>> '{}')::uuid, "
+                "(current_operation -> 'patch' -> 'day' #>> '{}')::date) then\n"
+                "        raise exception 'Create identity does not derive from its key' "
+                "using errcode = '22023';",
+              ),
+              contains(
+                "public.slots_id_for((current_operation -> 'patch' -> 'dayId' #>> '{}')::uuid, "
+                "current_operation -> 'patch' -> 'label' #>> '{}') then",
+              ),
+              contains(
+                'begin\n'
+                '  if public.is_agent_request() then\n'
+                "    raise exception 'Agents cannot run this operation' "
+                "using errcode = '42501';",
+              ),
               contains("'operation', 'create',"),
               contains("'commandName', 'moveInOrder',"),
               contains("member.lane in ('pinned')"),

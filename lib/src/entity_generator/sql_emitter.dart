@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:nodus/nodus.dart';
 
+import 'member_operations.dart' show ResolvedIdentity;
 import 'model.dart';
 
 const supabaseApiRoles = 'public, anon, authenticated, service_role';
@@ -1319,8 +1320,20 @@ ${_convergentCreateSql(spec, '''${createOrderScopeLock.isEmpty ? '' : '$createOr
 /// convergent entity meeting the row its identity already names is accepted
 /// as that row instead of inserting it again. The row must have the same
 /// owner and unique key; any other row under that identity stays taken.
+///
+/// A UUIDv5 identity of an entity with a [DerivedIdentitySpec] must be the
+/// one its key derives, so no account can take another's derived identity
+/// first. Random identities of older clients keep the ordinary create.
 String _convergentCreateSql(EntitySpec spec, String insert) {
   if (!spec.convergentCreates) return insert;
+  final identity = spec.identity == null ? null : ResolvedIdentity.of(spec);
+  final derivation = identity == null
+      ? ''
+      : '''      if uuid_extract_version((current_operation ->> 'entityId')::uuid) = 5
+          and (current_operation ->> 'entityId')::uuid is distinct from ${identity.sqlFunction}(${[for (final column in identity.sqlColumns) _jsonCast("current_operation -> 'patch' -> '${column.name}'", column)].join(', ')}) then
+        raise exception 'Create identity does not derive from its key' using errcode = '22023';
+      end if;
+''';
   final keyFields = <FieldSpec>[
     spec.ownerField,
     for (final index in spec.postgresIndexes)
@@ -1337,7 +1350,7 @@ String _convergentCreateSql(EntitySpec spec, String insert) {
       .split('\n')
       .map((line) => line.isEmpty ? line : '  $line')
       .join('\n');
-  return '''      perform pg_advisory_xact_lock(
+  return '''$derivation      perform pg_advisory_xact_lock(
         hashtextextended('${spec.className}:' || (current_operation ->> 'entityId'), 0)
       );
       select * into canonical from public.${spec.tableName}
@@ -2695,6 +2708,10 @@ void _emitSyncInfrastructure(
       ..writeln('  accepted_at timestamptz not null default now()')
       ..writeln(');')
       ..writeln(
+        'create index if not exists local_entity_operation_receipts_user_idx '
+        'on public.local_entity_operation_receipts (user_id);',
+      )
+      ..writeln(
         'alter table public.local_entity_operation_receipts enable row level security;',
       )
       ..writeln(
@@ -2752,6 +2769,22 @@ void _emitSyncInfrastructure(
         'create index if not exists local_entity_changes_identity_idx on '
         'public.local_entity_changes '
         '(entity_type, entity_id, audience_user_id, sequence);',
+      )
+      // Every push finds the change its operation captured.
+      ..writeln(
+        'create index if not exists local_entity_changes_operation_idx on '
+        'public.local_entity_changes (operation_id, sequence) '
+        'where operation_id is not null;',
+      )
+      // Principal retirement purges the changes of one owner or audience.
+      ..writeln(
+        'create index if not exists local_entity_changes_owner_idx on '
+        'public.local_entity_changes (owner_id);',
+      )
+      ..writeln(
+        'create index if not exists local_entity_changes_audience_idx on '
+        'public.local_entity_changes (audience_user_id) '
+        'where audience_user_id is not null;',
       )
       ..writeln(
         'alter table public.local_entity_changes enable row level security;',
@@ -3110,6 +3143,15 @@ void _emitEntityFunctions(
       )
       ..writeln(
         "    raise exception 'Agents cannot change this entity' "
+        "using errcode = '42501';",
+      )
+      ..writeln('  end if;')
+      ..writeln(
+        '  if public.is_agent_request() and not '
+        'public.agent_session_active() then',
+      )
+      ..writeln(
+        "    raise exception 'Agent access was revoked' "
         "using errcode = '42501';",
       )
       ..writeln('  end if;')
