@@ -1739,11 +1739,10 @@ grant execute on function $name(uuid) to authenticated;
             (candidate) => candidate.className == recorded.entityClassName,
           );
     final properties = <String, Object?>{
-      if (recorded?.commentFieldName case final comment?)
-        comment: {
-          'type': 'string',
-          'description': 'Why, kept with the record of it.',
-        },
+      ?recorded?.commentFieldName: {
+        'type': 'string',
+        'description': 'Why, kept with the record of it.',
+      },
       'id': {
         'type': 'string',
         'format': 'uuid',
@@ -1965,16 +1964,18 @@ ${_pushSql(request, operation: 'create', entityId: "request_patch ->> 'id'", pat
 
   /// Creates the row an action records its run as.
   String _recordSql(RecordedSpec recorded, EntitySpec record) {
+    final comment = recorded.commentFieldName;
     final values = <String, String>{
       record.ownerField.name:
           'to_jsonb(current_row.${spec.ownerField.columnName})',
       recorded.subjectFieldName:
           'to_jsonb(current_row.${spec.idField.columnName})',
       recorded.byFieldName: 'to_jsonb(auth.uid())',
-      if (recorded.commentFieldName case final comment?)
-        comment:
-            "coalesce(to_jsonb(nullif(btrim(p_arguments ->> ${_quote(comment)}), '')), 'null'::jsonb)",
     };
+    if (comment != null) {
+      values[comment] =
+          "coalesce(to_jsonb(nullif(btrim(p_arguments ->> ${_quote(comment)}), '')), 'null'::jsonb)";
+    }
     final patch = [
       "'${record.idField.name}', to_jsonb(gen_random_uuid())",
       for (final field in record.createFields)
