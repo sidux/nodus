@@ -848,6 +848,9 @@ void _emitGraphLookups(StringBuffer buffer, EntityGraphSpec graph) {
           '${entity.className}Fields.${field.name}.equals(${field.name})',
         if (index.condition case final condition?)
           '${entity.className}Fields.${condition.field}.isIn({${condition.values.map((value) => _graphIndexConditionLiteral(entity.fields.singleWhere((field) => field.name == condition.field), value)).join(', ')}})',
+        if (index.condition case final condition?)
+          for (final name in condition.absentFields)
+            '${entity.className}Fields.$name.isNull',
       ];
       final hasOptionalParameters =
           !index.activeOnly ||

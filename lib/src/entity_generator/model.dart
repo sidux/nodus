@@ -452,6 +452,11 @@ final class EntitySpec {
         'where',
         fields.singleWhere((field) => field.name == condition.field).columnName,
         _generatedIndexConditionToken(condition.values),
+        for (final name in condition.absentFields) ...[
+          'and',
+          fields.singleWhere((field) => field.name == name).columnName,
+          'null',
+        ],
       ],
     ],
   );
@@ -932,10 +937,17 @@ final class IndexSpec {
 }
 
 final class IndexConditionSpec {
-  const IndexConditionSpec({required this.field, required this.values});
+  const IndexConditionSpec({
+    required this.field,
+    required this.values,
+    this.absentFields = const [],
+  });
 
   final String field;
   final List<Object> values;
+
+  /// Nullable fields an indexed row leaves null.
+  final List<String> absentFields;
 }
 
 /// Derives one stable SQLite/PostgreSQL index identifier.

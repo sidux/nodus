@@ -2513,9 +2513,34 @@ List<CompoundIndexSpec> _parseCompoundIndexes(
           element: element,
         );
       }
+      final absentFields = [
+        for (final value in conditionReader.read('absent').listValue)
+          value.toSymbolValue(),
+      ];
+      for (final absentName in absentFields) {
+        final absentField = absentName == null
+            ? null
+            : persistedByName[absentName];
+        if (absentField == null ||
+            !absentField.nullable ||
+            absentName == fieldName) {
+          throw InvalidGenerationSourceError(
+            'IndexCondition absent fields must be nullable persisted field '
+            'symbols other than its value field.',
+            element: element,
+          );
+        }
+      }
+      if (absentFields.toSet().length != absentFields.length) {
+        throw InvalidGenerationSourceError(
+          'IndexCondition absent fields must be unique.',
+          element: element,
+        );
+      }
       condition = IndexConditionSpec(
         field: fieldName!,
         values: List.unmodifiable(values),
+        absentFields: List.unmodifiable(absentFields.cast<String>()),
       );
     }
     final names = unordered

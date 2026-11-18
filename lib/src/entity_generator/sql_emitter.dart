@@ -229,7 +229,8 @@ String emitSupabaseSql(
         : condition == null
         ? ''
         : ' where ${spec.fields.singleWhere((field) => field.name == condition.field).columnName} '
-              'in (${condition.values.map(_sqlLiteral).join(', ')})';
+              'in (${condition.values.map(_sqlLiteral).join(', ')})'
+              '${condition.absentFields.map((name) => ' and ${spec.fields.singleWhere((field) => field.name == name).columnName} is null').join()}';
     buffer.writeln(
       'create ${unique}index if not exists '
       '$name '

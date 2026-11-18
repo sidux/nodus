@@ -675,13 +675,18 @@ final class EntityUniqueConstraintCondition {
   const EntityUniqueConstraintCondition({
     required this.fieldName,
     required this.values,
+    this.absentFieldNames = const [],
   });
 
   final String fieldName;
   final List<Object?> values;
 
+  /// Fields a covered record leaves null.
+  final List<String> absentFieldNames;
+
   bool matches(JsonMap record) =>
-      values.any((value) => entityValuesEqual(record[fieldName], value));
+      values.any((value) => entityValuesEqual(record[fieldName], value)) &&
+      absentFieldNames.every((name) => record[name] == null);
 }
 
 /// Generated marker for an entity whose creates converge: a create meeting

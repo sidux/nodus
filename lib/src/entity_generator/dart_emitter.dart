@@ -609,8 +609,14 @@ void _emitDescriptor(StringBuffer buffer, EntitySpec spec) {
         buffer
           ..writeln('      condition: EntityUniqueConstraintCondition(')
           ..writeln("        fieldName: '${condition.field}',")
-          ..writeln('        values: ${_dartLiteral(condition.values)},')
-          ..writeln('      ),');
+          ..writeln('        values: ${_dartLiteral(condition.values)},');
+        if (condition.absentFields.isNotEmpty) {
+          buffer.writeln(
+            '        absentFieldNames: '
+            '${_dartLiteral(condition.absentFields)},',
+          );
+        }
+        buffer.writeln('      ),');
       }
       buffer.writeln('    ),');
     }
@@ -766,8 +772,13 @@ String _indexConditionSql(EntitySpec spec, IndexSpec index) {
   final column = spec.fields
       .singleWhere((field) => field.name == condition.field)
       .columnName;
+  final absent = condition.absentFields.map(
+    (name) =>
+        ' AND ${spec.fields.singleWhere((field) => field.name == name).columnName} '
+        'IS NULL',
+  );
   return ' WHERE $column IN '
-      '(${condition.values.map(_indexSqlLiteral).join(', ')})';
+      '(${condition.values.map(_indexSqlLiteral).join(', ')})${absent.join()}';
 }
 
 String _indexSqlLiteral(Object value) => switch (value) {
@@ -4381,6 +4392,9 @@ void _emitUniqueLookups(StringBuffer buffer, EntitySpec spec) {
           )
           .join(' || ');
       conditions.add('($matches)');
+      for (final name in condition.absentFields) {
+        conditions.add('entity.$name == null');
+      }
     }
 
     buffer

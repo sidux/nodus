@@ -529,16 +529,20 @@ final class CompoundIndex {
 }
 
 /// Restricts an index to rows whose scalar field has one of the declared
-/// values.
+/// values and, when [absent] names any, whose nullable fields are all null.
 ///
 /// Conditions are physical storage policy and must be repeated by any query
 /// intended to use the partial index. Values are compile-time checked against
 /// the persisted field type and encoded by the generated field codec.
 final class IndexCondition {
-  const IndexCondition.oneOf(this.field, this.values);
+  const IndexCondition.oneOf(this.field, this.values, {this.absent = const []});
 
   final Symbol field;
   final List<Object> values;
+
+  /// Nullable persisted fields a row must leave null to be indexed, such as
+  /// an optional target that moves the row under another unique key.
+  final List<Symbol> absent;
 }
 
 /// Excludes an instance field from convention-based entity persistence.

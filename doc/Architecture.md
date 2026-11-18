@@ -2029,7 +2029,9 @@ A conditional unique index generates a singular API only when the declaration
 opts into an exact lookup and its complete predicate is representable in Dart,
 Drift, and PostgreSQL. The derived live-entity predicate of an unconditional
 unique index is canonical and needs no opt-in; an enum-backed
-`IndexCondition.oneOf` is the canonical finite condition. The
+`IndexCondition.oneOf` is the canonical finite condition, and its `absent`
+fields additionally require nullable fields to be null, so one optional target
+can move a row under another unique key. The
 same predicate MUST constrain the in-memory computed index, acquired lookup,
 local unique validation, schema index, remote validation, and synchronization.
 Unsupported predicate combinations fail compilation rather than weakening a

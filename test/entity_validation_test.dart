@@ -6863,6 +6863,74 @@ final class Account {}
     );
   });
 
+  test(
+    'a conditional unique index can require nullable fields to be absent',
+    () async {
+      const source = r'''
+import 'package:nodus/nodus.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  indexes: [
+    CompoundIndex(
+      [#taskKey],
+      unique: true,
+      condition: IndexCondition.oneOf(
+        #status,
+        [AssignmentStatus.pending],
+        absent: [#occurrenceKey],
+      ),
+      exactLookup: true,
+    ),
+  ],
+)
+abstract class Assignment implements OwnedBy<Assignment, Account> {
+  final String taskKey = '';
+  final String? occurrenceKey = null;
+  final AssignmentStatus status = AssignmentStatus.pending;
+}
+
+enum AssignmentStatus { pending, accepted }
+final class Account {}
+''';
+
+      await testBuilder(
+        localEntityBuilder(BuilderOptions.empty),
+        _sources(source),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/note.entity.g.dart': decodedMatches(
+            allOf([
+              contains(
+                r"WHERE status IN (\'pending\') AND occurrence_key IS NULL",
+              ),
+              contains("absentFieldNames: const ['occurrenceKey']"),
+              contains('entity.occurrenceKey == null'),
+            ]),
+          ),
+        },
+      );
+      await testBuilder(
+        inferredEntityGraphBuilder(BuilderOptions.empty),
+        _sources(source),
+        rootPackage: 'nodus',
+        outputs: {
+          'nodus|lib/nodus.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+            anything,
+          ),
+          'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+          'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+            anything,
+          ),
+          'nodus|supabase/nodus/schema.sql': decodedMatches(
+            contains("where status in ('pending') and occurrence_key is null"),
+          ),
+        },
+      );
+    },
+  );
+
   test('a tombstone never holds an unconditional unique key', () async {
     const source = r'''
 import 'package:nodus/nodus.dart';
@@ -6928,6 +6996,11 @@ final class Account {}
       (
         'IndexCondition.oneOf(#status, [OtherStatus.pending])',
         'constants of its exact persisted type',
+      ),
+      (
+        'IndexCondition.oneOf(#status, [AssignmentStatus.pending], '
+            'absent: [#taskKey])',
+        'absent fields must be nullable persisted field symbols',
       ),
     ];
 
