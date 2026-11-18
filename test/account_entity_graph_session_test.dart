@@ -58,6 +58,36 @@ void main() {
     ]);
   });
 
+  test('an open from signed out is reported before switchAccount returns, '
+      'once', () async {
+    final open = Completer<_TestEntityGraph>();
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (_) => open.future,
+      close: (_) async {},
+    );
+    addTearDown(session.dispose);
+    final states = session.changes.toList();
+
+    final switching = session.switchAccount(_accountId);
+
+    expect(
+      session.state,
+      isA<AccountEntityGraphOpening<_TestEntityGraph, _TestAccount>>().having(
+        (state) => state.accountId,
+        'accountId',
+        _accountId,
+      ),
+    );
+    open.complete(_TestEntityGraph(_accountId));
+    await switching;
+    await session.dispose();
+    expect(await states, [
+      isA<AccountEntityGraphOpening<_TestEntityGraph, _TestAccount>>(),
+      isA<AccountEntityGraphReady<_TestEntityGraph, _TestAccount>>(),
+      isA<AccountEntityGraphSignedOut<_TestEntityGraph, _TestAccount>>(),
+    ]);
+  });
+
   test('a superseded open is closed and never becomes ready', () async {
     final firstOpen = Completer<_TestEntityGraph>();
     final opened = <String>[];

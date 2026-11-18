@@ -254,11 +254,21 @@ final class AccountEntityGraphSession<G, A> {
     };
   });
 
+  /// Opens [accountId]'s entity graph, closing the current one, or signs out
+  /// when it is null.
+  ///
+  /// An account opening from signed out is reported as
+  /// [AccountEntityGraphOpening] before this returns, so a caller may show
+  /// its app without awaiting the open, which can include local migrations:
+  /// readers see the account coming rather than nobody signed in.
   Future<void> switchAccount(LocalId<A>? accountId) {
     if (_disposing || _disposed) {
       throw StateError('The account entity-graph session is disposed.');
     }
     final generation = ++_requestGeneration;
+    if (accountId != null && _state is AccountEntityGraphSignedOut<G, A>) {
+      _emit(AccountEntityGraphOpening(accountId));
+    }
     return _enqueue(() => _transition(accountId, generation));
   }
 
@@ -317,7 +327,11 @@ final class AccountEntityGraphSession<G, A> {
       return;
     }
 
-    _emit(AccountEntityGraphOpening(accountId));
+    // switchAccount may already have reported this open.
+    if (_state is! AccountEntityGraphOpening<G, A> ||
+        _state.accountId != accountId) {
+      _emit(AccountEntityGraphOpening(accountId));
+    }
     try {
       await _closeCurrent();
     } catch (error, stackTrace) {
