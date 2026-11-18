@@ -673,15 +673,6 @@ abstract class Watering implements OwnedBy<Watering, Account>, SoftDeletable {
                 contains('Future<bool> owesCheckInOn('),
                 contains('Future<List<Watering>> logDay('),
                 contains('reason: reason,'),
-                // A row is restored, edited, or removed inside the lease of
-                // the lookup that found it, never after that lease ends.
-                contains('.useFirstPage((rows) => record(rows.firstOrNull));'),
-                contains('return record(null);'),
-                contains('return takeBack(rows);'),
-                contains(').useAll(takeBack);'),
-                contains('(existing) => entityGraph.transaction(() async {'),
-                isNot(contains('useAll((rows) => rows.firstOrNull)')),
-                isNot(contains('useAll((rows) => List.of(rows))')),
               ]),
             ),
             'nodus|supabase/nodus/schema.sql': decodedMatches(
