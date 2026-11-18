@@ -1342,10 +1342,18 @@ void main() {
       sql,
       contains(
         'create index if not exists local_entity_changes_operation_idx on '
-        'public.local_entity_changes (operation_id, sequence) '
+        'public.local_entity_changes (operation_id, written_by, sequence) '
         'where operation_id is not null;',
       ),
-      reason: 'every push finds the change of its operation',
+      reason: 'every push finds the change of its account\'s operation',
+    );
+    expect(
+      sql,
+      contains(
+        'changes.operation_id = operation_uuid and '
+        'changes.written_by = auth.uid()',
+      ),
+      reason: 'another account may reuse the operation id',
     );
     expect(
       sql,

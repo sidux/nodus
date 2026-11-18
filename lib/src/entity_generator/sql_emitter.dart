@@ -2755,6 +2755,10 @@ void _emitSyncInfrastructure(
       ..writeln('  owner_id uuid not null,')
       ..writeln('  server_version bigint not null,')
       ..writeln('  operation_id uuid,')
+      // The account whose request wrote the change. Operation ids are only
+      // unique per account, and the entity owner is not the author of a
+      // collaborator's change.
+      ..writeln('  written_by uuid default auth.uid(),')
       ..writeln('  audience_user_id uuid,')
       ..writeln('  is_revocation boolean not null default false,')
       ..writeln('  record jsonb not null,')
@@ -2769,10 +2773,10 @@ void _emitSyncInfrastructure(
         'public.local_entity_changes '
         '(entity_type, entity_id, audience_user_id, sequence);',
       )
-      // Every push finds the change its operation captured.
+      // Every push finds the change its account's operation captured.
       ..writeln(
         'create index if not exists local_entity_changes_operation_idx on '
-        'public.local_entity_changes (operation_id, sequence) '
+        'public.local_entity_changes (operation_id, written_by, sequence) '
         'where operation_id is not null;',
       )
       // Principal retirement purges the changes of one owner or audience.
@@ -3256,7 +3260,8 @@ void _emitEntityFunctions(
       ..writeln(
         '    select changes.sequence into change_sequence from '
         'public.local_entity_changes changes where '
-        'changes.operation_id = operation_uuid${hasMultiRowCommand ? " and changes.entity_type = '${spec.className}' and changes.entity_id = canonical.${spec.idField.columnName}" : ''} '
+        'changes.operation_id = operation_uuid and '
+        'changes.written_by = auth.uid()${hasMultiRowCommand ? " and changes.entity_type = '${spec.className}' and changes.entity_id = canonical.${spec.idField.columnName}" : ''} '
         'order by changes.sequence desc '
         'limit 1;',
       )
@@ -3279,6 +3284,7 @@ void _emitEntityFunctions(
                   'into related_changes '
                   'from public.local_entity_changes changes '
                   'where changes.operation_id = operation_uuid '
+                  'and changes.written_by = auth.uid() '
                   'and changes.audience_user_id is null '
                   'and not changes.is_revocation '
                   "and not (changes.entity_type = '${spec.className}' "
