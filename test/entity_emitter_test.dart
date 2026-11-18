@@ -1363,10 +1363,8 @@ void main() {
     );
     expect(
       sql,
-      contains(
-        'local_entity_operation_receipts_user_idx on '
-        'public.local_entity_operation_receipts (user_id);',
-      ),
+      contains('  primary key (user_id, operation_id)\n);'),
+      reason: 'each account owns its own operation id space',
     );
     expect(
       sql,

@@ -2700,17 +2700,16 @@ void _emitSyncInfrastructure(
       ..writeln(
         'create table if not exists public.local_entity_operation_receipts (',
       )
-      ..writeln('  operation_id uuid primary key,')
+      ..writeln('  operation_id uuid not null,')
       ..writeln('  user_id uuid not null,')
       ..writeln('  entity_type text not null,')
       ..writeln('  entity_id uuid not null,')
       ..writeln('  result jsonb not null,')
-      ..writeln('  accepted_at timestamptz not null default now()')
+      ..writeln('  accepted_at timestamptz not null default now(),')
+      // Operation ids are client-chosen, so each account owns its own id
+      // space: another account reusing an id never collides with this one.
+      ..writeln('  primary key (user_id, operation_id)')
       ..writeln(');')
-      ..writeln(
-        'create index if not exists local_entity_operation_receipts_user_idx '
-        'on public.local_entity_operation_receipts (user_id);',
-      )
       ..writeln(
         'alter table public.local_entity_operation_receipts enable row level security;',
       )
