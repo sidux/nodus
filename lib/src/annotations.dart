@@ -1604,7 +1604,7 @@ final class DayParts {
 
 /// Declares how the log entity it annotates records check-ins of a
 /// scheduled subject, such as a habit: the rules are written once and
-/// generated into `beginCheckIn` and `undoCheckIn` on the subject and into
+/// generated into `checkIn` and `undoCheckIn` on the subject and into
 /// every schema-capable target, so the application and an agent apply the
 /// same rules.
 ///
@@ -1620,7 +1620,7 @@ final class DayParts {
 /// it back. With one, each check-in is a new row and is refused until the
 /// interval since the owner's latest has passed.
 ///
-/// `beginLogDay` records a past day: one the subject existed on ([since])
+/// `logDay` records a past day: one the subject existed on ([since])
 /// and is scheduled on ([days]), for the part given or else every part it
 /// is scheduled for, skipping parts already logged that day.
 final class CheckIns {

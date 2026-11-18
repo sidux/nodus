@@ -3830,6 +3830,50 @@ void main() {
     expect(releasedPages, 2);
   });
 
+  test('Given a query used inside a lease on the same specification, When the '
+      'inner use ends first, Then the outer lease keeps its rows retained and '
+      'live', () async {
+    final invalidations =
+        StreamController<EntityProjectionChange<_Item>>.broadcast(sync: true);
+    addTearDown(invalidations.close);
+    var records = [_Item('A')];
+    var loads = 0;
+    var retainedPages = 0;
+    final cache = LocalEntityQueryCache<_Item>.database(
+      invalidations: invalidations.stream,
+      loader: (spec, {required after, required limit}) async {
+        loads++;
+        retainedPages++;
+        return EntityQueryPage(
+          items: records,
+          hasMore: false,
+          release: () => retainedPages--,
+        );
+      },
+    );
+    addTearDown(cache.dispose);
+    final spec = EntityQuerySpec<_Item>(pageSize: 1);
+
+    final outer = cache.acquire(spec);
+    await outer.useFirstPage((page) async {
+      final inner = await cache.acquire(spec).useAll((items) => items);
+
+      expect(inner.single, same(page.single), reason: 'one shared load');
+      expect(loads, 1);
+      expect(retainedPages, 1);
+
+      records = [_Item('B')];
+      invalidations.add(const EntityProjectionChange<_Item>.unknown());
+      await Future<void>.delayed(Duration.zero);
+
+      expect(outer.items.single.name, 'B');
+      expect(loads, 2);
+      expect(retainedPages, 1);
+    });
+
+    expect(retainedPages, 0);
+  });
+
   test('Given an obsolete asynchronous page, When a newer refresh wins, '
       'Then the stale page releases its retention', () async {
     final invalidations =

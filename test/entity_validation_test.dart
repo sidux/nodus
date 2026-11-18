@@ -657,8 +657,11 @@ abstract class Watering implements OwnedBy<Watering, Account>, SoftDeletable {
                 contains('Part partAt(DateTime moment) {'),
                 contains('if (hour >= 17) return Part.evening;'),
                 contains('extension PlantCheckIns on Plant {'),
-                contains('Future<WateringMutationDraft> beginCheckIn('),
+                contains('Future<Watering> checkIn('),
                 contains('int? litres,'),
+                contains(
+                  'FutureOr<void> Function(WateringMutationDraft draft)? fill,',
+                ),
                 contains('if (this.isSilk) {'),
                 contains("message: 'A silk plant needs no water.',"),
                 contains('final wholeDay = this.parts.contains(Part.allDay);'),
@@ -668,8 +671,17 @@ abstract class Watering implements OwnedBy<Watering, Account>, SoftDeletable {
                 contains('Future<List<Watering>> undoCheckIn('),
                 contains('await entityGraph.unwaterings.create('),
                 contains('Future<bool> owesCheckInOn('),
-                contains('Future<List<WateringMutationDraft>> beginLogDay('),
+                contains('Future<List<Watering>> logDay('),
                 contains('reason: reason,'),
+                // A row is restored, edited, or removed inside the lease of
+                // the lookup that found it, never after that lease ends.
+                contains('.useFirstPage((rows) => record(rows.firstOrNull));'),
+                contains('return record(null);'),
+                contains('return takeBack(rows);'),
+                contains(').useAll(takeBack);'),
+                contains('(existing) => entityGraph.transaction(() async {'),
+                isNot(contains('useAll((rows) => rows.firstOrNull)')),
+                isNot(contains('useAll((rows) => List.of(rows))')),
               ]),
             ),
             'nodus|supabase/nodus/schema.sql': decodedMatches(

@@ -279,7 +279,10 @@ FieldSpec _field(EntitySpec entity, String name) =>
 String _words(String camel) => snakeCase(camel).replaceAll('_', ' ');
 
 /// Generated Dart for every declared check-in log: the part-of-day function
-/// of each part enum, and `beginCheckIn` and `undoCheckIn` on the subject.
+/// of each part enum, and `checkIn`, `undoCheckIn`, `logDay`, and
+/// `owesCheckInOn` on the subject. Those that write change the rows they
+/// looked up inside that lookup's lease, while the rows are still the loaded
+/// identities.
 String emitCheckInsDart(
   EntityGraphSpec graph,
   String entityGraphName,
@@ -383,20 +386,25 @@ final class _DartCheckIns {
         'extension ${subject.className}CheckIns on ${subject.className} {',
       )
       ..writeln(
-        '  /// Starts checking this $subjectWords in now; saving the returned '
-        'draft records',
+        '  /// Checks this $subjectWords in now and returns the check-in. '
+        '[${resolved.part.name}]',
       )
       ..writeln(
-        '  /// it. [${resolved.part.name}] defaults to the current part of the '
-        'day.',
+        '  /// defaults to the current part of the day; [fill] completes the '
+        'check-in\'s',
       )
-      ..writeln('  Future<$draftType> beginCheckIn(')
+      ..writeln(
+        '  /// draft before it is saved, while the rows it updates stay '
+        'loaded.',
+      )
+      ..writeln('  Future<$logType> checkIn(')
       ..writeln('    $entityGraphName entityGraph, {')
       ..writeln('    $partType? ${resolved.part.name},');
     for (final parameter in detailParameters) {
       buffer.writeln('    $parameter');
     }
     buffer
+      ..writeln('    FutureOr<void> Function($draftType draft)? fill,')
       ..writeln('  }) async {')
       ..write(_requireLive('    '));
     for (final refusal in spec.refusals) {
@@ -435,56 +443,7 @@ final class _DartCheckIns {
         ),
       )
       ..writeln('    }')
-      ..writeln('    final part = wholeDay ? $wholeDay : requested;')
-      ..writeln('    $logType? existing;');
-    final slot =
-        '      existing = await ${logType}List.owned(\n'
-        '        entityGraph,\n'
-        '        where:\n'
-        '            $fields.$subjectId.equals(id) &\n'
-        '            $fields.${resolved.date.name}.equals(today) &\n'
-        '            $fields.${resolved.part.name}.equals(part),\n'
-        '        orderBy: $fields.${resolved.at.name}.descending(),\n'
-        '        tombstones: TombstoneVisibility.include,\n'
-        '        pageSize: 1,\n'
-        '      ).useAll((rows) => rows.firstOrNull);\n'
-        '      if (existing?.deletedAt != null) await existing!.restore();\n';
-    if (hasIntervals) {
-      buffer
-        ..writeln('    final interval = $_intervalSwitch;')
-        ..writeln('    if (interval != null) {')
-        ..writeln('      final latest = await ${logType}List.owned(')
-        ..writeln('        entityGraph,')
-        ..writeln('        where: $fields.$subjectId.equals(id),')
-        ..writeln('        orderBy: $fields.${resolved.at.name}.descending(),')
-        ..writeln('        pageSize: 1,')
-        ..writeln('      ).useAll((rows) => rows.firstOrNull);')
-        ..writeln('      if (latest != null) {')
-        ..writeln('        final last = latest.${resolved.at.name}.toLocal();')
-        ..writeln('        final due = interval.days')
-        ..writeln(
-          '            ? DateTime(last.year, last.month, last.day + interval.amount)',
-        )
-        ..writeln('            : last.add(Duration(hours: interval.amount));')
-        ..writeln('        if (local.isBefore(due)) {')
-        ..writeln(
-          _throw(
-            resolved.at.name,
-            'The $subjectWords is not due yet.',
-            '          ',
-          ),
-        )
-        ..writeln('        }')
-        ..writeln('      }')
-        ..writeln('    } else {')
-        ..write(slot)
-        ..writeln('    }');
-    } else {
-      buffer
-        ..writeln('    {')
-        ..write(slot)
-        ..writeln('    }');
-    }
+      ..writeln('    final part = wholeDay ? $wholeDay : requested;');
     final create = aggregate
         ? '$draftType.create(entityGraph)'
         : 'entityGraph.${log.setAccessor}.beginCreate()';
@@ -493,21 +452,75 @@ final class _DartCheckIns {
         : 'existing.beginEdit()';
     final row = aggregate ? 'draft.root' : 'draft';
     buffer
-      ..writeln('    final draft = existing == null ? $create : $edit;')
-      ..writeln('    $row')
-      ..write('      ..${resolved.at.name} = now');
+      ..writeln(
+        '    // Runs while the lookup that found [existing] keeps it loaded.',
+      )
+      ..writeln('    Future<$logType> record($logType? existing) =>')
+      ..writeln('        entityGraph.transaction(() async {')
+      ..writeln(
+        '          if (existing?.deletedAt != null) await existing!.restore();',
+      )
+      ..writeln('          final draft = existing == null ? $create : $edit;')
+      ..writeln('          $row')
+      ..write('            ..${resolved.at.name} = now');
     for (final field in details) {
-      buffer.write('\n      ..${field.name} = ${field.name}');
+      buffer.write('\n            ..${field.name} = ${field.name}');
     }
     buffer
       ..writeln(';')
-      ..writeln('    if (draft.isCreating) {')
-      ..writeln('      $row')
-      ..writeln('        ..$subjectId = id')
-      ..writeln('        ..${resolved.date.name} = today')
-      ..writeln('        ..${resolved.part.name} = part;')
-      ..writeln('    }')
-      ..writeln('    return draft;')
+      ..writeln('          if (draft.isCreating) {')
+      ..writeln('            $row')
+      ..writeln('              ..$subjectId = id')
+      ..writeln('              ..${resolved.date.name} = today')
+      ..writeln('              ..${resolved.part.name} = part;')
+      ..writeln('          }')
+      ..write(_fillAndSave('          ', (value) => 'return $value;'))
+      ..writeln('        });');
+    if (hasIntervals) {
+      buffer
+        ..writeln('    final interval = $_intervalSwitch;')
+        ..writeln('    if (interval != null) {')
+        ..writeln('      return ${logType}List.owned(')
+        ..writeln('        entityGraph,')
+        ..writeln('        where: $fields.$subjectId.equals(id),')
+        ..writeln('        orderBy: $fields.${resolved.at.name}.descending(),')
+        ..writeln('        pageSize: 1,')
+        ..writeln('      ).useFirstPage((rows) {')
+        ..writeln('        final latest = rows.firstOrNull;')
+        ..writeln('        if (latest != null) {')
+        ..writeln(
+          '          final last = latest.${resolved.at.name}.toLocal();',
+        )
+        ..writeln('          final due = interval.days')
+        ..writeln(
+          '              ? DateTime(last.year, last.month, last.day + interval.amount)',
+        )
+        ..writeln('              : last.add(Duration(hours: interval.amount));')
+        ..writeln('          if (local.isBefore(due)) {')
+        ..writeln(
+          _throw(
+            resolved.at.name,
+            'The $subjectWords is not due yet.',
+            '            ',
+          ),
+        )
+        ..writeln('          }')
+        ..writeln('        }')
+        ..writeln('        return record(null);')
+        ..writeln('      });')
+        ..writeln('    }');
+    }
+    buffer
+      ..writeln('    return ${logType}List.owned(')
+      ..writeln('      entityGraph,')
+      ..writeln('      where:')
+      ..writeln('          $fields.$subjectId.equals(id) &')
+      ..writeln('          $fields.${resolved.date.name}.equals(today) &')
+      ..writeln('          $fields.${resolved.part.name}.equals(part),')
+      ..writeln('      orderBy: $fields.${resolved.at.name}.descending(),')
+      ..writeln('      tombstones: TombstoneVisibility.include,')
+      ..writeln('      pageSize: 1,')
+      ..writeln('    ).useFirstPage((rows) => record(rows.firstOrNull));')
       ..writeln('  }')
       ..writeln()
       ..write(_undo())
@@ -529,6 +542,16 @@ final class _DartCheckIns {
         '$indent  );\n'
         '$indent}\n';
   }
+
+  /// Lets the caller's `fill` complete `draft`, saves it, and passes the
+  /// saved row to [onSaved]; a draft left unsaved is discarded.
+  String _fillAndSave(String indent, String Function(String value) onSaved) =>
+      '${indent}try {\n'
+      '$indent  await fill?.call(draft);\n'
+      '$indent  ${onSaved('await draft.save()')}\n'
+      '$indent} finally {\n'
+      '$indent  if (!draft.isConsumed) draft.discard();\n'
+      '$indent}\n';
 
   String _undo() {
     final subjectId = resolved.subjectField.name;
@@ -563,62 +586,66 @@ final class _DartCheckIns {
       ..writeln(
         '    final slot = wholeDay ? $wholeDay : ($part ?? ${resolved.partAtDart}(local));',
       )
-      ..writeln('    final List<$logType> undone;');
-    final ownSlots =
-        '      undone = await ${logType}List.owned(\n'
-        '        entityGraph,\n'
-        '        where:\n'
-        '            $fields.$subjectId.equals(id) &\n'
-        '            $fields.$date.equals(day) &\n'
-        '            (wholeDay\n'
-        '                ? EntityPredicate<$logType>.all()\n'
-        '                : $fields.$part.isIn({slot, $wholeDay})),\n'
-        '        orderBy: $fields.$at.descending(),\n'
-        '      ).useAll((rows) => List.of(rows));\n';
+      ..writeln(
+        '    // Runs while the lookup that found [rows] keeps them loaded.',
+      )
+      ..writeln(
+        '    Future<List<$logType>> takeBack(List<$logType> rows) async {',
+      )
+      ..writeln('      if (rows.isEmpty) return const [];')
+      ..writeln('      await entityGraph.transaction(() async {')
+      ..writeln('        for (final row in rows) {')
+      ..writeln('          await row.remove();')
+      ..writeln(
+        '          await entityGraph.${resolved.undo.setAccessor}.create(',
+      )
+      ..writeln('            $subjectId: row.$subjectId,')
+      ..writeln('            $date: row.$date,')
+      ..writeln('            $part: row.$part,')
+      ..writeln(
+        '            ${resolved.undoComment.name}: ${resolved.undoComment.name},',
+      )
+      ..writeln('          );')
+      ..writeln('        }')
+      ..writeln('      });')
+      ..writeln('      return rows;')
+      ..writeln('    }');
     if (hasIntervals) {
       buffer
         ..writeln('    if ($_intervalActive) {')
-        ..writeln('      final latest = await ${logType}List.all(')
+        ..writeln('      return ${logType}List.all(')
         ..writeln('        entityGraph,')
         ..writeln('        where: $fields.$subjectId.equals(id),')
         ..writeln('        orderBy: $fields.$at.descending(),')
         ..writeln('        pageSize: 1,')
-        ..writeln('      ).useAll((rows) => rows.firstOrNull);')
-        ..writeln('      if (latest == null) return const [];')
-        ..writeln('      if (latest.ownerId != entityGraph.accountId) {')
+        ..writeln('      ).useFirstPage((rows) {')
+        ..writeln('        final latest = rows.firstOrNull;')
+        ..writeln(
+          '        if (latest != null && latest.ownerId != entityGraph.accountId) {',
+        )
         ..writeln(
           _throw(
             'ownerId',
             "The latest check-in is a collaborator's to undo.",
-            '        ',
+            '          ',
           ),
         )
-        ..writeln('      }')
-        ..writeln('      undone = [latest];')
-        ..writeln('    } else {')
-        ..write(ownSlots)
+        ..writeln('        }')
+        ..writeln('        return takeBack(rows);')
+        ..writeln('      });')
         ..writeln('    }');
-    } else {
-      buffer.write(ownSlots.replaceFirst('      ', '    '));
     }
     buffer
-      ..writeln('    if (undone.isEmpty) return const [];')
-      ..writeln('    await entityGraph.transaction(() async {')
-      ..writeln('      for (final row in undone) {')
-      ..writeln('        await row.remove();')
-      ..writeln(
-        '        await entityGraph.${resolved.undo.setAccessor}.create(',
-      )
-      ..writeln('          $subjectId: row.$subjectId,')
-      ..writeln('          $date: row.$date,')
-      ..writeln('          $part: row.$part,')
-      ..writeln(
-        '          ${resolved.undoComment.name}: ${resolved.undoComment.name},',
-      )
-      ..writeln('        );')
-      ..writeln('      }')
-      ..writeln('    });')
-      ..writeln('    return undone;')
+      ..writeln('    return ${logType}List.owned(')
+      ..writeln('      entityGraph,')
+      ..writeln('      where:')
+      ..writeln('          $fields.$subjectId.equals(id) &')
+      ..writeln('          $fields.$date.equals(day) &')
+      ..writeln('          (wholeDay')
+      ..writeln('              ? EntityPredicate<$logType>.all()')
+      ..writeln('              : $fields.$part.isIn({slot, $wholeDay})),')
+      ..writeln('      orderBy: $fields.$at.descending(),')
+      ..writeln('    ).useAll(takeBack);')
       ..writeln('  }');
     return buffer.toString();
   }
@@ -646,25 +673,27 @@ final class _DartCheckIns {
     ];
     final buffer = StringBuffer()
       ..writeln(
-        '  /// Starts logging [$date], a past day, for [$part] or else every '
-        'part',
+        '  /// Logs [$date], a past day, for [$part] or else every part of the '
+        'day',
       )
       ..writeln(
-        '  /// of the day this $subjectWords is scheduled for, skipping parts '
-        'already',
+        '  /// this $subjectWords is scheduled for, skipping parts already '
+        'logged, and',
       )
       ..writeln(
-        '  /// logged; saving each returned draft records one. The check-ins '
-        'record',
+        '  /// returns the check-ins it records at the time of day of [$at], '
+        'or',
       )
       ..writeln(
-        '  /// the time of day of [$at], or ${resolved.spec.loggedAtHour}:00.',
+        '  /// ${resolved.spec.loggedAtHour}:00. [fill] completes each '
+        'check-in\'s draft before it is saved.',
       )
-      ..writeln('  Future<List<$draftType>> beginLogDay(')
+      ..writeln('  Future<List<$logType>> logDay(')
       ..writeln('    $entityGraphName entityGraph, {')
       ..writeln('    required LocalDate $date,')
       ..writeln('    $partType? $part,')
       ..writeln('    DateTime? $at,')
+      ..writeln('    FutureOr<void> Function($draftType draft)? fill,')
       ..writeln('  }) async {')
       ..write(_requireLive('    '));
     for (final refusal in resolved.spec.refusals) {
@@ -721,24 +750,6 @@ final class _DartCheckIns {
         ),
       )
       ..writeln('    }')
-      ..writeln('    final existing = await ${logType}List.owned(')
-      ..writeln('      entityGraph,')
-      ..writeln(
-        '      where: $fields.$subjectId.equals(id) & $fields.$date.equals($date),',
-      )
-      ..writeln('      orderBy: $fields.$at.descending(),')
-      ..writeln('      tombstones: TombstoneVisibility.include,')
-      ..writeln('    ).useAll((rows) => List.of(rows));')
-      ..writeln(
-        '    final live = {for (final row in existing) if (row.deletedAt == null) row.$part};',
-      )
-      ..writeln('    final logged = live.isEmpty')
-      ..writeln('        ? const <$partType>{}')
-      ..writeln('        : live.contains($wholeDay)')
-      ..writeln('        ? (wholeDay ? {$wholeDay} : scheduled.toSet())')
-      ..writeln('        : wholeDay')
-      ..writeln('        ? {$wholeDay}')
-      ..writeln('        : live.intersection(scheduled.toSet());')
       ..writeln('    final time = $at?.toLocal();')
       ..writeln('    final occurrence = DateTime(')
       ..writeln('      day.year,')
@@ -750,36 +761,58 @@ final class _DartCheckIns {
       ..writeln('      time?.millisecond ?? 0,')
       ..writeln('      time?.microsecond ?? 0,')
       ..writeln('    ).toUtc();')
-      ..writeln('    final drafts = <$draftType>[];')
-      ..writeln('    for (final each in requested) {')
-      ..writeln('      if (!interval && logged.contains(each)) continue;')
-      ..writeln('      final current = interval')
-      ..writeln('          ? null')
       ..writeln(
-        '          : existing.where((row) => row.$part == each).firstOrNull;',
+        '    // Runs while the lookup that found [existing] keeps it loaded.',
+      )
+      ..writeln('    return ${logType}List.owned(')
+      ..writeln('      entityGraph,')
+      ..writeln(
+        '      where: $fields.$subjectId.equals(id) & $fields.$date.equals($date),',
+      )
+      ..writeln('      orderBy: $fields.$at.descending(),')
+      ..writeln('      tombstones: TombstoneVisibility.include,')
+      ..writeln('    ).useAll((existing) => entityGraph.transaction(() async {')
+      ..writeln(
+        '      final live = {for (final row in existing) if (row.deletedAt == null) row.$part};',
+      )
+      ..writeln('      final logged = live.isEmpty')
+      ..writeln('          ? const <$partType>{}')
+      ..writeln('          : live.contains($wholeDay)')
+      ..writeln('          ? (wholeDay ? {$wholeDay} : scheduled.toSet())')
+      ..writeln('          : wholeDay')
+      ..writeln('          ? {$wholeDay}')
+      ..writeln('          : live.intersection(scheduled.toSet());')
+      ..writeln('      final saved = <$logType>[];')
+      ..writeln('      for (final each in requested) {')
+      ..writeln('        if (!interval && logged.contains(each)) continue;')
+      ..writeln('        final current = interval')
+      ..writeln('            ? null')
+      ..writeln(
+        '            : existing.where((row) => row.$part == each).firstOrNull;',
       )
       ..writeln(
-        '      if (current?.deletedAt != null) await current!.restore();',
+        '        if (current?.deletedAt != null) await current!.restore();',
       )
-      ..writeln('      final draft = current == null ? $create : $edit;')
-      ..writeln('      $row')
-      ..write('        ..$at = occurrence');
+      ..writeln('        final draft = current == null ? $create : $edit;')
+      ..writeln('        $row')
+      ..write('          ..$at = occurrence');
     for (final field in resolved.details) {
       buffer.write(
-        '\n        ..${field.name} = ${field.nullable ? 'null' : _default(field)}',
+        '\n          ..${field.name} = ${field.nullable ? 'null' : _default(field)}',
       );
     }
     buffer
       ..writeln(';')
-      ..writeln('      if (draft.isCreating) {')
-      ..writeln('        $row')
-      ..writeln('          ..$subjectId = id')
-      ..writeln('          ..$date = $date')
-      ..writeln('          ..$part = each;')
+      ..writeln('        if (draft.isCreating) {')
+      ..writeln('          $row')
+      ..writeln('            ..$subjectId = id')
+      ..writeln('            ..$date = $date')
+      ..writeln('            ..$part = each;')
+      ..writeln('        }')
+      ..write(_fillAndSave('        ', (value) => 'saved.add($value);'))
       ..writeln('      }')
-      ..writeln('      drafts.add(draft);')
-      ..writeln('    }')
-      ..writeln('    return drafts;')
+      ..writeln('      return List<$logType>.unmodifiable(saved);')
+      ..writeln('    }));')
       ..writeln('  }');
     return buffer.toString();
   }

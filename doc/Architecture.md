@@ -1880,8 +1880,8 @@ handwritten application code and is not exposed to targets.
 
 Recording that a scheduled subject was done, such as a habit's check-in, is
 declared once on the log entity with `@CheckIns` and generated alike:
-`beginCheckIn` and `undoCheckIn` on the subject for the application, and a
-check-in and an undo function in every schema-capable target.
+`checkIn`, `undoCheckIn`, and `logDay` on the subject for the application,
+and a check-in and an undo function in every schema-capable target.
 
 ```dart
 @CheckIns(
@@ -1911,7 +1911,14 @@ application completes, such as one sent to a checker. The application reads
 its clock and zone; a target reads its clock and the owner's declared
 timezone.
 
-`beginLogDay` records a past day: one after the subject's `since` day and on
+The generated methods restore, edit, and remove rows inside the lease of the
+lookup that found them, in one graph transaction, and return the saved rows.
+`checkIn` and `logDay` take an optional `fill` callback that completes each
+check-in's draft, such as its aggregate parts, before it is saved; they never
+return a draft, because a draft saved after the lookup's lease ended would
+edit a row no lease keeps loaded.
+
+`logDay` records a past day: one after the subject's `since` day and on
 a weekday its `days` allow, for the part given or else every part the
 subject is scheduled for, keeping parts already logged that day, at the time
 of day given or `loggedAtHour`. `owesCheckInOn(day)` is true while the
