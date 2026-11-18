@@ -61,3 +61,11 @@ enabled = false
 
 [analytics]
 enabled = false
+
+[experimental]
+# Runs the local stack natively, so `nodus migrate` diffs the declarative
+# schema with pg-delta without Docker.
+stack = true
+
+[experimental.pgdelta]
+enabled = true

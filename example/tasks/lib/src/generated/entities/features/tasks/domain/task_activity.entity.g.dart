@@ -303,31 +303,66 @@ final class TaskActivityRecord extends TaskActivity
   final LocalId<TaskActivity> id;
   final Observable<LocalId<Account>> _ownerIdStore;
   @override
-  LocalId<Account> get ownerId => _ownerIdStore.value;
+  LocalId<Account> get ownerId {
+    assert(debugEntityFieldRead('TaskActivity', 'ownerId'));
+    return _ownerIdStore.value;
+  }
+
   final Observable<LocalId<Task>> _subjectIdStore;
   @override
-  LocalId<Task> get subjectId => _subjectIdStore.value;
+  LocalId<Task> get subjectId {
+    assert(debugEntityFieldRead('TaskActivity', 'subjectId'));
+    return _subjectIdStore.value;
+  }
+
   final Observable<LocalId<Account>> _actorIdStore;
   @override
-  LocalId<Account> get actorId => _actorIdStore.value;
+  LocalId<Account> get actorId {
+    assert(debugEntityFieldRead('TaskActivity', 'actorId'));
+    return _actorIdStore.value;
+  }
+
   final Observable<ActivityOperation> _operationStore;
   @override
-  ActivityOperation get operation => _operationStore.value;
+  ActivityOperation get operation {
+    assert(debugEntityFieldRead('TaskActivity', 'operation'));
+    return _operationStore.value;
+  }
+
   final Observable<String> _labelStore;
   @override
-  String get label => _labelStore.value;
+  String get label {
+    assert(debugEntityFieldRead('TaskActivity', 'label'));
+    return _labelStore.value;
+  }
+
   final Observable<String> _sourceOperationIdStore;
   @override
-  String get sourceOperationId => _sourceOperationIdStore.value;
+  String get sourceOperationId {
+    assert(debugEntityFieldRead('TaskActivity', 'sourceOperationId'));
+    return _sourceOperationIdStore.value;
+  }
+
   final Observable<DateTime> _occurredAtStore;
   @override
-  DateTime get occurredAt => _occurredAtStore.value;
+  DateTime get occurredAt {
+    assert(debugEntityFieldRead('TaskActivity', 'occurredAt'));
+    return _occurredAtStore.value;
+  }
+
   final Observable<DateTime?> _deletedAtStore;
   @override
-  DateTime? get deletedAt => _deletedAtStore.value;
+  DateTime? get deletedAt {
+    assert(debugEntityFieldRead('TaskActivity', 'deletedAt'));
+    return _deletedAtStore.value;
+  }
+
   final Observable<ServerVersion> _serverVersionStore;
   @override
-  ServerVersion get serverVersion => _serverVersionStore.value;
+  ServerVersion get serverVersion {
+    assert(debugEntityFieldRead('TaskActivity', 'serverVersion'));
+    return _serverVersionStore.value;
+  }
 
   @override
   Future<void> applyGeneratedDraft({

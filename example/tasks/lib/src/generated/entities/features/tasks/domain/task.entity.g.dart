@@ -421,43 +421,91 @@ final class TaskRecord extends Task
   final LocalId<Task> id;
   final Observable<LocalId<Account>> _ownerIdStore;
   @override
-  LocalId<Account> get ownerId => _ownerIdStore.value;
+  LocalId<Account> get ownerId {
+    assert(debugEntityFieldRead('Task', 'ownerId'));
+    return _ownerIdStore.value;
+  }
+
   final Observable<LocalId<TaskProject>?> _projectIdStore;
   @override
-  LocalId<TaskProject>? get projectId => _projectIdStore.value;
+  LocalId<TaskProject>? get projectId {
+    assert(debugEntityFieldRead('Task', 'projectId'));
+    return _projectIdStore.value;
+  }
+
   final Observable<String> _titleStore;
   @override
-  String get title => _titleStore.value;
+  String get title {
+    assert(debugEntityFieldRead('Task', 'title'));
+    return _titleStore.value;
+  }
+
   final Observable<String?> _descriptionStore;
   @override
-  String? get description => _descriptionStore.value;
+  String? get description {
+    assert(debugEntityFieldRead('Task', 'description'));
+    return _descriptionStore.value;
+  }
+
   final Observable<TaskStatus> _statusStore;
   @override
-  TaskStatus get status => _statusStore.value;
+  TaskStatus get status {
+    assert(debugEntityFieldRead('Task', 'status'));
+    return _statusStore.value;
+  }
+
   final Observable<TaskPriority> _priorityStore;
   @override
-  TaskPriority get priority => _priorityStore.value;
+  TaskPriority get priority {
+    assert(debugEntityFieldRead('Task', 'priority'));
+    return _priorityStore.value;
+  }
+
   final Observable<DateTime?> _dueAtStore;
   @override
-  DateTime? get dueAt => _dueAtStore.value;
+  DateTime? get dueAt {
+    assert(debugEntityFieldRead('Task', 'dueAt'));
+    return _dueAtStore.value;
+  }
+
   final Observable<DateTime?> _completedAtStore;
   @override
-  DateTime? get completedAt => _completedAtStore.value;
+  DateTime? get completedAt {
+    assert(debugEntityFieldRead('Task', 'completedAt'));
+    return _completedAtStore.value;
+  }
+
   final Observable<DateTime?> _archivedAtStore;
   @override
-  DateTime? get archivedAt => _archivedAtStore.value;
+  DateTime? get archivedAt {
+    assert(debugEntityFieldRead('Task', 'archivedAt'));
+    return _archivedAtStore.value;
+  }
+
   final Observable<DateTime> _createdAtStore;
   @override
-  DateTime get createdAt => _createdAtStore.value;
+  DateTime get createdAt {
+    assert(debugEntityFieldRead('Task', 'createdAt'));
+    return _createdAtStore.value;
+  }
+
   final Observable<OrderRank> _orderRankStore;
   @override
   OrderRank get generatedOrderRank => _orderRankStore.value;
   final Observable<DateTime?> _deletedAtStore;
   @override
-  DateTime? get deletedAt => _deletedAtStore.value;
+  DateTime? get deletedAt {
+    assert(debugEntityFieldRead('Task', 'deletedAt'));
+    return _deletedAtStore.value;
+  }
+
   final Observable<ServerVersion> _serverVersionStore;
   @override
-  ServerVersion get serverVersion => _serverVersionStore.value;
+  ServerVersion get serverVersion {
+    assert(debugEntityFieldRead('Task', 'serverVersion'));
+    return _serverVersionStore.value;
+  }
+
   @override
   bool get generatedIsOrderMember => _deletedAtStore.value == null;
 

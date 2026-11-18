@@ -453,12 +453,11 @@ final class _DartOperations {
         buffer.writeln('  }');
       }
       buffer
-        ..writeln('  ) async {')
-        ..writeln('    final rows = await $rowsClass.load(entityGraph, this);')
+        ..writeln('  ) => $rowsClass.use(entityGraph, this, (rows) async {')
         ..writeln('    var member = rows.live($keyName);');
       _sequence(buffer, operation, operation.steps, '    ', atomic: false);
       buffer
-        ..writeln('  }')
+        ..writeln('  });')
         ..writeln();
     }
     buffer
@@ -476,12 +475,14 @@ final class _DartOperations {
 final class $rowsClass {
   $rowsClass(this.all);
 
-  static Future<$rowsClass> load(
+  /// Runs [action] while the rows stay loaded, so it can change them.
+  static Future<R> use<R>(
     $entityGraphName entityGraph,
     ${operations.root.className} root,
+    FutureOr<R> Function($rowsClass rows) action,
   ) => root
       .${operations.collection}(entityGraph, tombstones: TombstoneVisibility.include)
-      .useAll((rows) => $rowsClass(List.unmodifiable(rows)));
+      .useAll((rows) => action($rowsClass(List.unmodifiable(rows))));
 
   final List<$memberType> all;
 
@@ -691,9 +692,8 @@ final class $rowsClass {
     String indent,
   ) {
     buffer
-      ..writeln('$indent{')
       ..writeln(
-        '$indent  final placed = await $rowsClass.load(entityGraph, this);',
+        '${indent}await $rowsClass.use(entityGraph, this, (placed) async {',
       )
       ..writeln('$indent  final anchors = [')
       ..writeln('$indent    for (final row in placed.liveRows)')
@@ -706,7 +706,7 @@ final class $rowsClass {
       ..writeln('$indent  } else {')
       ..writeln('$indent    await $set.moveAfter(member!.id, anchors.last.id);')
       ..writeln('$indent  }')
-      ..writeln('$indent}');
+      ..writeln('$indent});');
   }
 
   String _argument(ActionParameterSpec parameter, String value) =>

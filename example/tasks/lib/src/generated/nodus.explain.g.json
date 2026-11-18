@@ -1,7 +1,7 @@
 {
   "graph": "TasksExample",
   "package": "tasks_example",
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "targets": [
     "supabase"
   ],
@@ -639,6 +639,177 @@
         "list": "TaskProjectList",
         "boundedListConstructors": [],
         "draft": "TaskProjectMutationDraft",
+        "create": true
+      }
+    },
+    {
+      "name": "TaskStep",
+      "source": "package:tasks_example/features/tasks/domain/task_step.dart",
+      "table": "task_steps",
+      "ownership": "separate",
+      "cardinality": "unbounded",
+      "coIdentityWith": [],
+      "sync": {
+        "mode": "replicated",
+        "target": "supabase"
+      },
+      "capabilities": {
+        "archivable": false,
+        "ordered": true,
+        "collaborative": false,
+        "activityTracked": false,
+        "component": false
+      },
+      "fields": [
+        {
+          "name": "id",
+          "type": "LocalId<TaskStep>",
+          "column": "id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "normalization": "none",
+          "reference": null,
+          "inverseCardinality": null,
+          "hierarchy": false,
+          "source": "entity declaration"
+        },
+        {
+          "name": "ownerId",
+          "type": "LocalId<Account>",
+          "column": "owner_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "normalization": "none",
+          "reference": null,
+          "inverseCardinality": null,
+          "hierarchy": false,
+          "source": "entity declaration"
+        },
+        {
+          "name": "taskId",
+          "type": "LocalId<Task>",
+          "column": "task_id",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "normalization": "none",
+          "reference": "Task",
+          "inverseCardinality": "unbounded",
+          "hierarchy": false,
+          "source": "entity declaration"
+        },
+        {
+          "name": "title",
+          "type": "String",
+          "column": "title",
+          "nullable": false,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "normalization": "none",
+          "reference": null,
+          "inverseCardinality": null,
+          "hierarchy": false,
+          "source": "entity declaration"
+        },
+        {
+          "name": "done",
+          "type": "bool",
+          "column": "done",
+          "nullable": false,
+          "default": "false",
+          "generated": false,
+          "mutable": true,
+          "normalization": "none",
+          "reference": null,
+          "inverseCardinality": null,
+          "hierarchy": false,
+          "source": "entity declaration"
+        },
+        {
+          "name": "orderRank",
+          "type": "OrderRank",
+          "column": "order_rank",
+          "nullable": false,
+          "default": "057896044618658097711785492504343953926634992332820282019728792003956564819967",
+          "generated": true,
+          "mutable": false,
+          "normalization": "none",
+          "reference": null,
+          "inverseCardinality": null,
+          "hierarchy": false,
+          "source": "generated convention or capability"
+        },
+        {
+          "name": "deletedAt",
+          "type": "DateTime?",
+          "column": "deleted_at",
+          "nullable": true,
+          "default": null,
+          "generated": false,
+          "mutable": false,
+          "normalization": "none",
+          "reference": null,
+          "inverseCardinality": null,
+          "hierarchy": false,
+          "source": "entity declaration"
+        },
+        {
+          "name": "serverVersion",
+          "type": "ServerVersion",
+          "column": "server_version",
+          "nullable": false,
+          "default": "0",
+          "generated": false,
+          "mutable": false,
+          "normalization": "none",
+          "reference": null,
+          "inverseCardinality": null,
+          "hierarchy": false,
+          "source": "entity declaration"
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "taskId",
+            "title"
+          ],
+          "unique": true,
+          "scope": "field",
+          "keyset": false,
+          "exactLookup": false
+        }
+      ],
+      "actions": [
+        {
+          "name": "check",
+          "bulk": false,
+          "parameters": [],
+          "fields": [
+            "done"
+          ]
+        },
+        {
+          "name": "uncheck",
+          "bulk": false,
+          "parameters": [],
+          "fields": [
+            "done"
+          ]
+        }
+      ],
+      "generatedApi": {
+        "set": "TaskStepSet",
+        "setAccessor": "taskSteps",
+        "list": "TaskStepList",
+        "boundedListConstructors": [],
+        "draft": "TaskStepMutationDraft",
         "create": true
       }
     }

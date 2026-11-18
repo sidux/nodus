@@ -49,6 +49,27 @@ MigrationStrategy nodusMigrationStrategy<D extends GeneratedDatabase>({
         throw StateError('Drift migration introduced foreign-key violations.');
       }
     },
+    from3To4: (migrator, schema) async {
+      final transition = NodusSchemaTransition(from: 3, to: 4);
+      final plan = configuredHooks.plan(transition);
+      if (plan.runsGeneratedSteps) {
+        await migrator.create(schema.taskSteps);
+        await migrator.create(schema.taskStepsTaskIdDeletedAtOrderRankIdIdx);
+        await migrator.create(schema.taskStepsTaskIdIdx);
+        await migrator.create(schema.taskStepsTaskIdTitleActiveIdx);
+      }
+      await applyNodusMigrationPlan<D>(
+        plan: plan,
+        migrator: migrator,
+        transition: transition,
+      );
+      final violations = await migrator.database
+          .customSelect('pragma foreign_key_check')
+          .get();
+      if (violations.isNotEmpty) {
+        throw StateError('Drift migration introduced foreign-key violations.');
+      }
+    },
   );
   Future<void> generatedUpgrade(Migrator migrator, int from, int to) =>
       stepUpgrade(migrator, from, to);

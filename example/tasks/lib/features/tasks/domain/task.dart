@@ -7,6 +7,23 @@ enum TaskStatus { todo, inProgress, done }
 
 enum TaskPriority { low, normal, high }
 
+@MemberOperations(#steps, [
+  MemberOperation(
+    #addStep,
+    description:
+        'Adds a step to the end of the checklist. A removed step comes back '
+        'unchecked; a step already there stays as it is.',
+    steps: [
+      When(MemberLive(), [Stop()]),
+      EnsureMember(reset: #uncheck),
+    ],
+  ),
+  MemberOperation(
+    #checkStep,
+    description: 'Checks a step of the checklist off.',
+    steps: [Require(MemberLive(), 'The task has no such step.'), Act(#check)],
+  ),
+])
 @Entity(
   orderScope: [#projectId],
   indexes: [

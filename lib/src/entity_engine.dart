@@ -4872,6 +4872,7 @@ final class LocalEntityGraphCoordinator
   final Map<String, Timer> _durableRetryTimers = {};
   final Map<String, Future<void>> _activeDurableWork = {};
   final Set<String> _durableRerunRequested = {};
+  final Set<Future<void>> _durableWorkInFlight = {};
   bool _started = false;
   bool _closed = false;
   Future<void>? _closeFuture;
@@ -5471,6 +5472,21 @@ final class LocalEntityGraphCoordinator
 
   Future<void> flushLocal() => _mutationCoordinator.flush();
 
+  /// Resolves once local changes are durable and every process and projection
+  /// they triggered has run, with the reruns and changes those runs made in
+  /// turn. Work waiting to retry after a failure does not hold it, and a
+  /// failed run is reported through diagnostics rather than thrown here.
+  Future<void> settleLocal() async {
+    while (true) {
+      await flushLocal();
+      if (_durableWorkInFlight.isEmpty) return;
+      await Future.wait([
+        for (final work in _durableWorkInFlight.toList(growable: false))
+          work.then((_) {}, onError: (Object _) {}),
+      ]);
+    }
+  }
+
   /// Installs one declaration-generated process or projection lane.
   void registerGeneratedDurableWork(GeneratedDurableWorkBinding binding) {
     if (_closed) throw StateError('The entity graph is closed.');
@@ -5536,10 +5552,22 @@ final class LocalEntityGraphCoordinator
   }
 
   void _requestDurableEnqueue(GeneratedDurableWorkBinding binding) {
-    _runInBackground(
+    _runDurableWorkInBackground(
+      binding,
       _enqueueDurableWork(binding).then((_) => _requestDurableWork(binding)),
-      task: _durableBackgroundTask(binding.kind),
     );
+  }
+
+  /// Runs [work] of [binding] in the background, where [settleLocal] waits
+  /// for it.
+  void _runDurableWorkInBackground(
+    GeneratedDurableWorkBinding binding,
+    Future<void> work,
+  ) {
+    late final Future<void> tracked;
+    tracked = work.whenComplete(() => _durableWorkInFlight.remove(tracked));
+    _durableWorkInFlight.add(tracked);
+    _runInBackground(tracked, task: _durableBackgroundTask(binding.kind));
   }
 
   Future<void> _enqueueDurableWork(GeneratedDurableWorkBinding binding) async {
@@ -5621,10 +5649,7 @@ final class LocalEntityGraphCoordinator
         _activeDurableWork.remove(binding.name);
       }
       if (_durableRerunRequested.remove(binding.name) && !_closed) {
-        _runInBackground(
-          _requestDurableWork(binding),
-          task: _durableBackgroundTask(binding.kind),
-        );
+        _runDurableWorkInBackground(binding, _requestDurableWork(binding));
       }
     });
     _activeDurableWork[binding.name] = work;

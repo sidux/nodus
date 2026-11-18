@@ -277,19 +277,35 @@ final class TaskProjectRecord extends TaskProject
   final LocalId<TaskProject> id;
   final Observable<LocalId<Account>> _ownerIdStore;
   @override
-  LocalId<Account> get ownerId => _ownerIdStore.value;
+  LocalId<Account> get ownerId {
+    assert(debugEntityFieldRead('TaskProject', 'ownerId'));
+    return _ownerIdStore.value;
+  }
+
   final Observable<String> _titleStore;
   @override
-  String get title => _titleStore.value;
+  String get title {
+    assert(debugEntityFieldRead('TaskProject', 'title'));
+    return _titleStore.value;
+  }
+
   final Observable<OrderRank> _orderRankStore;
   @override
   OrderRank get generatedOrderRank => _orderRankStore.value;
   final Observable<DateTime?> _deletedAtStore;
   @override
-  DateTime? get deletedAt => _deletedAtStore.value;
+  DateTime? get deletedAt {
+    assert(debugEntityFieldRead('TaskProject', 'deletedAt'));
+    return _deletedAtStore.value;
+  }
+
   final Observable<ServerVersion> _serverVersionStore;
   @override
-  ServerVersion get serverVersion => _serverVersionStore.value;
+  ServerVersion get serverVersion {
+    assert(debugEntityFieldRead('TaskProject', 'serverVersion'));
+    return _serverVersionStore.value;
+  }
+
   @override
   bool get generatedIsOrderMember => _deletedAtStore.value == null;
 

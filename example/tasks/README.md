@@ -64,6 +64,12 @@ Every task change appends one immutable activity entry in the same local
 transaction. Callers just call `task.complete()` or `task.archive()`; there is
 no activity code to write.
 
+**Checklist steps.** `TaskStep` derives its identity from its task and title,
+and `Task` declares `@MemberOperations` that generate `task.addStep(...)` and
+`task.checkStep(...)`: adding a removed step brings it back unchecked, and
+adding one already there changes nothing. The same rule is generated into the
+Supabase schema.
+
 **One form model.** `TaskMutationDraft` backs both the create and edit forms.
 Its typed fields bind directly to Flutter widgets. When one save changes both
 ordinary fields and the project, the draft applies the edit and the
@@ -120,9 +126,10 @@ flutter test
 
 The tests drive production entity APIs and widgets through the generated
 in-memory harness. They cover the task lifecycle, activity tracking,
-transactions, collaboration queue intent, project ordering, tombstone
-visibility, synchronization, local-store ownership, typed deep links, the
-generated Drift migrations, and compact, medium, and expanded layouts.
+transactions, collaboration queue intent, checklist steps, project ordering,
+tombstone visibility, synchronization, local-store ownership, typed deep
+links, the generated Drift migrations, and compact, medium, and expanded
+layouts.
 
 ## Change the schema
 
@@ -135,6 +142,6 @@ dart run nodus migrate describe_the_change
 `dart run nodus generate` refuses a schema change without a migration name.
 `migrate` updates `nodus.lock`, regenerates the code, and writes the Drift
 migration (when the local schema changed), the canonical Supabase schema, and
-a Supabase SQL migration produced by `supabase db diff`, which needs the
-Supabase CLI and a running Docker daemon. Review them together. Never rewrite a migration that
+a Supabase SQL migration produced by the Supabase CLI's declarative schema
+sync, which runs on the CLI's native local stack. Review them together. Never rewrite a migration that
 has already been deployed.

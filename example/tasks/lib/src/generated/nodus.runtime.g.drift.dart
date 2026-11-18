@@ -2175,6 +2175,626 @@ class TaskProjectRowsCompanion extends UpdateCompanion<TaskProjectRow> {
   }
 }
 
+class $TaskStepRowsTable extends TaskStepRows
+    with TableInfo<$TaskStepRowsTable, TaskStepRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TaskStepRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _taskIdMeta = const VerificationMeta('taskId');
+  @override
+  late final GeneratedColumn<String> taskId = GeneratedColumn<String>(
+    'task_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+    'title',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _doneMeta = const VerificationMeta('done');
+  @override
+  late final GeneratedColumn<bool> done = GeneratedColumn<bool>(
+    'done',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("done" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _orderRankMeta = const VerificationMeta(
+    'orderRank',
+  );
+  @override
+  late final GeneratedColumn<String> orderRank = GeneratedColumn<String>(
+    'order_rank',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(
+      '057896044618658097711785492504343953926634992332820282019728792003956564819967',
+    ),
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<String> deletedAt = GeneratedColumn<String>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _serverVersionMeta = const VerificationMeta(
+    'serverVersion',
+  );
+  @override
+  late final GeneratedColumn<int> serverVersion = GeneratedColumn<int>(
+    'server_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _localRevisionMeta = const VerificationMeta(
+    'localRevision',
+  );
+  @override
+  late final GeneratedColumn<int> localRevision = GeneratedColumn<int>(
+    'local_revision',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _acceptedSnapshotMeta = const VerificationMeta(
+    'acceptedSnapshot',
+  );
+  @override
+  late final GeneratedColumn<String> acceptedSnapshot = GeneratedColumn<String>(
+    'accepted_snapshot',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    ownerId,
+    taskId,
+    title,
+    done,
+    orderRank,
+    deletedAt,
+    serverVersion,
+    localRevision,
+    acceptedSnapshot,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'task_steps';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TaskStepRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_ownerIdMeta);
+    }
+    if (data.containsKey('task_id')) {
+      context.handle(
+        _taskIdMeta,
+        taskId.isAcceptableOrUnknown(data['task_id']!, _taskIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_taskIdMeta);
+    }
+    if (data.containsKey('title')) {
+      context.handle(
+        _titleMeta,
+        title.isAcceptableOrUnknown(data['title']!, _titleMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_titleMeta);
+    }
+    if (data.containsKey('done')) {
+      context.handle(
+        _doneMeta,
+        done.isAcceptableOrUnknown(data['done']!, _doneMeta),
+      );
+    }
+    if (data.containsKey('order_rank')) {
+      context.handle(
+        _orderRankMeta,
+        orderRank.isAcceptableOrUnknown(data['order_rank']!, _orderRankMeta),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    if (data.containsKey('server_version')) {
+      context.handle(
+        _serverVersionMeta,
+        serverVersion.isAcceptableOrUnknown(
+          data['server_version']!,
+          _serverVersionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('local_revision')) {
+      context.handle(
+        _localRevisionMeta,
+        localRevision.isAcceptableOrUnknown(
+          data['local_revision']!,
+          _localRevisionMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_localRevisionMeta);
+    }
+    if (data.containsKey('accepted_snapshot')) {
+      context.handle(
+        _acceptedSnapshotMeta,
+        acceptedSnapshot.isAcceptableOrUnknown(
+          data['accepted_snapshot']!,
+          _acceptedSnapshotMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TaskStepRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TaskStepRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      )!,
+      taskId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}task_id'],
+      )!,
+      title: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}title'],
+      )!,
+      done: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}done'],
+      )!,
+      orderRank: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}order_rank'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}deleted_at'],
+      ),
+      serverVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}server_version'],
+      )!,
+      localRevision: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}local_revision'],
+      )!,
+      acceptedSnapshot: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}accepted_snapshot'],
+      ),
+    );
+  }
+
+  @override
+  $TaskStepRowsTable createAlias(String alias) {
+    return $TaskStepRowsTable(attachedDatabase, alias);
+  }
+}
+
+class TaskStepRow extends DataClass implements Insertable<TaskStepRow> {
+  final String id;
+  final String ownerId;
+  final String taskId;
+  final String title;
+  final bool done;
+  final String orderRank;
+  final String? deletedAt;
+  final int serverVersion;
+  final int localRevision;
+  final String? acceptedSnapshot;
+  const TaskStepRow({
+    required this.id,
+    required this.ownerId,
+    required this.taskId,
+    required this.title,
+    required this.done,
+    required this.orderRank,
+    this.deletedAt,
+    required this.serverVersion,
+    required this.localRevision,
+    this.acceptedSnapshot,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['owner_id'] = Variable<String>(ownerId);
+    map['task_id'] = Variable<String>(taskId);
+    map['title'] = Variable<String>(title);
+    map['done'] = Variable<bool>(done);
+    map['order_rank'] = Variable<String>(orderRank);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<String>(deletedAt);
+    }
+    map['server_version'] = Variable<int>(serverVersion);
+    map['local_revision'] = Variable<int>(localRevision);
+    if (!nullToAbsent || acceptedSnapshot != null) {
+      map['accepted_snapshot'] = Variable<String>(acceptedSnapshot);
+    }
+    return map;
+  }
+
+  TaskStepRowsCompanion toCompanion(bool nullToAbsent) {
+    return TaskStepRowsCompanion(
+      id: Value(id),
+      ownerId: Value(ownerId),
+      taskId: Value(taskId),
+      title: Value(title),
+      done: Value(done),
+      orderRank: Value(orderRank),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+      serverVersion: Value(serverVersion),
+      localRevision: Value(localRevision),
+      acceptedSnapshot: acceptedSnapshot == null && nullToAbsent
+          ? const Value.absent()
+          : Value(acceptedSnapshot),
+    );
+  }
+
+  factory TaskStepRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TaskStepRow(
+      id: serializer.fromJson<String>(json['id']),
+      ownerId: serializer.fromJson<String>(json['ownerId']),
+      taskId: serializer.fromJson<String>(json['taskId']),
+      title: serializer.fromJson<String>(json['title']),
+      done: serializer.fromJson<bool>(json['done']),
+      orderRank: serializer.fromJson<String>(json['orderRank']),
+      deletedAt: serializer.fromJson<String?>(json['deletedAt']),
+      serverVersion: serializer.fromJson<int>(json['serverVersion']),
+      localRevision: serializer.fromJson<int>(json['localRevision']),
+      acceptedSnapshot: serializer.fromJson<String?>(json['acceptedSnapshot']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'ownerId': serializer.toJson<String>(ownerId),
+      'taskId': serializer.toJson<String>(taskId),
+      'title': serializer.toJson<String>(title),
+      'done': serializer.toJson<bool>(done),
+      'orderRank': serializer.toJson<String>(orderRank),
+      'deletedAt': serializer.toJson<String?>(deletedAt),
+      'serverVersion': serializer.toJson<int>(serverVersion),
+      'localRevision': serializer.toJson<int>(localRevision),
+      'acceptedSnapshot': serializer.toJson<String?>(acceptedSnapshot),
+    };
+  }
+
+  TaskStepRow copyWith({
+    String? id,
+    String? ownerId,
+    String? taskId,
+    String? title,
+    bool? done,
+    String? orderRank,
+    Value<String?> deletedAt = const Value.absent(),
+    int? serverVersion,
+    int? localRevision,
+    Value<String?> acceptedSnapshot = const Value.absent(),
+  }) => TaskStepRow(
+    id: id ?? this.id,
+    ownerId: ownerId ?? this.ownerId,
+    taskId: taskId ?? this.taskId,
+    title: title ?? this.title,
+    done: done ?? this.done,
+    orderRank: orderRank ?? this.orderRank,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+    serverVersion: serverVersion ?? this.serverVersion,
+    localRevision: localRevision ?? this.localRevision,
+    acceptedSnapshot: acceptedSnapshot.present
+        ? acceptedSnapshot.value
+        : this.acceptedSnapshot,
+  );
+  TaskStepRow copyWithCompanion(TaskStepRowsCompanion data) {
+    return TaskStepRow(
+      id: data.id.present ? data.id.value : this.id,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      taskId: data.taskId.present ? data.taskId.value : this.taskId,
+      title: data.title.present ? data.title.value : this.title,
+      done: data.done.present ? data.done.value : this.done,
+      orderRank: data.orderRank.present ? data.orderRank.value : this.orderRank,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      serverVersion: data.serverVersion.present
+          ? data.serverVersion.value
+          : this.serverVersion,
+      localRevision: data.localRevision.present
+          ? data.localRevision.value
+          : this.localRevision,
+      acceptedSnapshot: data.acceptedSnapshot.present
+          ? data.acceptedSnapshot.value
+          : this.acceptedSnapshot,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TaskStepRow(')
+          ..write('id: $id, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('taskId: $taskId, ')
+          ..write('title: $title, ')
+          ..write('done: $done, ')
+          ..write('orderRank: $orderRank, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('serverVersion: $serverVersion, ')
+          ..write('localRevision: $localRevision, ')
+          ..write('acceptedSnapshot: $acceptedSnapshot')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    ownerId,
+    taskId,
+    title,
+    done,
+    orderRank,
+    deletedAt,
+    serverVersion,
+    localRevision,
+    acceptedSnapshot,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TaskStepRow &&
+          other.id == this.id &&
+          other.ownerId == this.ownerId &&
+          other.taskId == this.taskId &&
+          other.title == this.title &&
+          other.done == this.done &&
+          other.orderRank == this.orderRank &&
+          other.deletedAt == this.deletedAt &&
+          other.serverVersion == this.serverVersion &&
+          other.localRevision == this.localRevision &&
+          other.acceptedSnapshot == this.acceptedSnapshot);
+}
+
+class TaskStepRowsCompanion extends UpdateCompanion<TaskStepRow> {
+  final Value<String> id;
+  final Value<String> ownerId;
+  final Value<String> taskId;
+  final Value<String> title;
+  final Value<bool> done;
+  final Value<String> orderRank;
+  final Value<String?> deletedAt;
+  final Value<int> serverVersion;
+  final Value<int> localRevision;
+  final Value<String?> acceptedSnapshot;
+  final Value<int> rowid;
+  const TaskStepRowsCompanion({
+    this.id = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    this.taskId = const Value.absent(),
+    this.title = const Value.absent(),
+    this.done = const Value.absent(),
+    this.orderRank = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.serverVersion = const Value.absent(),
+    this.localRevision = const Value.absent(),
+    this.acceptedSnapshot = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TaskStepRowsCompanion.insert({
+    required String id,
+    required String ownerId,
+    required String taskId,
+    required String title,
+    this.done = const Value.absent(),
+    this.orderRank = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.serverVersion = const Value.absent(),
+    required int localRevision,
+    this.acceptedSnapshot = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       ownerId = Value(ownerId),
+       taskId = Value(taskId),
+       title = Value(title),
+       localRevision = Value(localRevision);
+  static Insertable<TaskStepRow> custom({
+    Expression<String>? id,
+    Expression<String>? ownerId,
+    Expression<String>? taskId,
+    Expression<String>? title,
+    Expression<bool>? done,
+    Expression<String>? orderRank,
+    Expression<String>? deletedAt,
+    Expression<int>? serverVersion,
+    Expression<int>? localRevision,
+    Expression<String>? acceptedSnapshot,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (ownerId != null) 'owner_id': ownerId,
+      if (taskId != null) 'task_id': taskId,
+      if (title != null) 'title': title,
+      if (done != null) 'done': done,
+      if (orderRank != null) 'order_rank': orderRank,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (serverVersion != null) 'server_version': serverVersion,
+      if (localRevision != null) 'local_revision': localRevision,
+      if (acceptedSnapshot != null) 'accepted_snapshot': acceptedSnapshot,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TaskStepRowsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? ownerId,
+    Value<String>? taskId,
+    Value<String>? title,
+    Value<bool>? done,
+    Value<String>? orderRank,
+    Value<String?>? deletedAt,
+    Value<int>? serverVersion,
+    Value<int>? localRevision,
+    Value<String?>? acceptedSnapshot,
+    Value<int>? rowid,
+  }) {
+    return TaskStepRowsCompanion(
+      id: id ?? this.id,
+      ownerId: ownerId ?? this.ownerId,
+      taskId: taskId ?? this.taskId,
+      title: title ?? this.title,
+      done: done ?? this.done,
+      orderRank: orderRank ?? this.orderRank,
+      deletedAt: deletedAt ?? this.deletedAt,
+      serverVersion: serverVersion ?? this.serverVersion,
+      localRevision: localRevision ?? this.localRevision,
+      acceptedSnapshot: acceptedSnapshot ?? this.acceptedSnapshot,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
+    if (taskId.present) {
+      map['task_id'] = Variable<String>(taskId.value);
+    }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
+    if (done.present) {
+      map['done'] = Variable<bool>(done.value);
+    }
+    if (orderRank.present) {
+      map['order_rank'] = Variable<String>(orderRank.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<String>(deletedAt.value);
+    }
+    if (serverVersion.present) {
+      map['server_version'] = Variable<int>(serverVersion.value);
+    }
+    if (localRevision.present) {
+      map['local_revision'] = Variable<int>(localRevision.value);
+    }
+    if (acceptedSnapshot.present) {
+      map['accepted_snapshot'] = Variable<String>(acceptedSnapshot.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TaskStepRowsCompanion(')
+          ..write('id: $id, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('taskId: $taskId, ')
+          ..write('title: $title, ')
+          ..write('done: $done, ')
+          ..write('orderRank: $orderRank, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('serverVersion: $serverVersion, ')
+          ..write('localRevision: $localRevision, ')
+          ..write('acceptedSnapshot: $acceptedSnapshot, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $TasksExampleSyncWorkRowsTable extends TasksExampleSyncWorkRows
     with TableInfo<$TasksExampleSyncWorkRowsTable, TasksExampleSyncWorkRow> {
   @override
@@ -3453,6 +4073,7 @@ abstract class _$TasksExampleDatabase extends GeneratedDatabase {
   late final $TaskProjectRowsTable taskProjectRows = $TaskProjectRowsTable(
     this,
   );
+  late final $TaskStepRowsTable taskStepRows = $TaskStepRowsTable(this);
   late final $TasksExampleSyncWorkRowsTable tasksExampleSyncWorkRows =
       $TasksExampleSyncWorkRowsTable(this);
   late final $TasksExampleSyncCursorRowsTable tasksExampleSyncCursorRows =
@@ -3497,6 +4118,18 @@ abstract class _$TasksExampleDatabase extends GeneratedDatabase {
     'task_projects_deleted_at_title_id_idx',
     'CREATE INDEX task_projects_deleted_at_title_id_idx ON task_projects (deleted_at, title, id)',
   );
+  late final Index taskStepsTaskIdDeletedAtOrderRankIdIdx = Index(
+    'task_steps_task_id_deleted_at_order_rank_id_idx',
+    'CREATE INDEX task_steps_task_id_deleted_at_order_rank_id_idx ON task_steps (task_id, deleted_at, order_rank, id)',
+  );
+  late final Index taskStepsTaskIdIdx = Index(
+    'task_steps_task_id_idx',
+    'CREATE INDEX task_steps_task_id_idx ON task_steps (task_id)',
+  );
+  late final Index taskStepsTaskIdTitleActiveIdx = Index(
+    'task_steps_task_id_title_active_idx',
+    'CREATE UNIQUE INDEX task_steps_task_id_title_active_idx ON task_steps (task_id, title) WHERE deleted_at IS NULL',
+  );
   late final Index localEntityPushPatchIdx = Index(
     'local_entity_push_patch_idx',
     'CREATE INDEX local_entity_push_patch_idx ON local_entity_sync_work (sync_target, entity_type, entity_id, id) WHERE direction = \'push\' AND kind = \'statePatch\' AND status = \'pending\'',
@@ -3513,6 +4146,7 @@ abstract class _$TasksExampleDatabase extends GeneratedDatabase {
     taskRows,
     taskActivityRows,
     taskProjectRows,
+    taskStepRows,
     tasksExampleSyncWorkRows,
     tasksExampleSyncCursorRows,
     tasksProjectIdDeletedAtOrderRankIdIdx,
@@ -3525,6 +4159,9 @@ abstract class _$TasksExampleDatabase extends GeneratedDatabase {
     taskActivitiesSourceOperationIdActiveIdx,
     taskProjectsDeletedAtOrderRankIdIdx,
     taskProjectsDeletedAtTitleIdIdx,
+    taskStepsTaskIdDeletedAtOrderRankIdIdx,
+    taskStepsTaskIdIdx,
+    taskStepsTaskIdTitleActiveIdx,
     localEntityPushPatchIdx,
     localEntitySyncReadyIdx,
   ];
@@ -4577,6 +5214,313 @@ typedef $$TaskProjectRowsTableProcessedTableManager =
       TaskProjectRow,
       PrefetchHooks Function()
     >;
+typedef $$TaskStepRowsTableCreateCompanionBuilder =
+    TaskStepRowsCompanion Function({
+      required String id,
+      required String ownerId,
+      required String taskId,
+      required String title,
+      Value<bool> done,
+      Value<String> orderRank,
+      Value<String?> deletedAt,
+      Value<int> serverVersion,
+      required int localRevision,
+      Value<String?> acceptedSnapshot,
+      Value<int> rowid,
+    });
+typedef $$TaskStepRowsTableUpdateCompanionBuilder =
+    TaskStepRowsCompanion Function({
+      Value<String> id,
+      Value<String> ownerId,
+      Value<String> taskId,
+      Value<String> title,
+      Value<bool> done,
+      Value<String> orderRank,
+      Value<String?> deletedAt,
+      Value<int> serverVersion,
+      Value<int> localRevision,
+      Value<String?> acceptedSnapshot,
+      Value<int> rowid,
+    });
+
+class $$TaskStepRowsTableFilterComposer
+    extends Composer<_$TasksExampleDatabase, $TaskStepRowsTable> {
+  $$TaskStepRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get taskId => $composableBuilder(
+    column: $table.taskId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get title => $composableBuilder(
+    column: $table.title,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get done => $composableBuilder(
+    column: $table.done,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get orderRank => $composableBuilder(
+    column: $table.orderRank,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get serverVersion => $composableBuilder(
+    column: $table.serverVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get localRevision => $composableBuilder(
+    column: $table.localRevision,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get acceptedSnapshot => $composableBuilder(
+    column: $table.acceptedSnapshot,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$TaskStepRowsTableOrderingComposer
+    extends Composer<_$TasksExampleDatabase, $TaskStepRowsTable> {
+  $$TaskStepRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get taskId => $composableBuilder(
+    column: $table.taskId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get title => $composableBuilder(
+    column: $table.title,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get done => $composableBuilder(
+    column: $table.done,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get orderRank => $composableBuilder(
+    column: $table.orderRank,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get serverVersion => $composableBuilder(
+    column: $table.serverVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get localRevision => $composableBuilder(
+    column: $table.localRevision,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get acceptedSnapshot => $composableBuilder(
+    column: $table.acceptedSnapshot,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$TaskStepRowsTableAnnotationComposer
+    extends Composer<_$TasksExampleDatabase, $TaskStepRowsTable> {
+  $$TaskStepRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<String> get taskId =>
+      $composableBuilder(column: $table.taskId, builder: (column) => column);
+
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
+  GeneratedColumn<bool> get done =>
+      $composableBuilder(column: $table.done, builder: (column) => column);
+
+  GeneratedColumn<String> get orderRank =>
+      $composableBuilder(column: $table.orderRank, builder: (column) => column);
+
+  GeneratedColumn<String> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get serverVersion => $composableBuilder(
+    column: $table.serverVersion,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get localRevision => $composableBuilder(
+    column: $table.localRevision,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get acceptedSnapshot => $composableBuilder(
+    column: $table.acceptedSnapshot,
+    builder: (column) => column,
+  );
+}
+
+class $$TaskStepRowsTableTableManager
+    extends
+        RootTableManager<
+          _$TasksExampleDatabase,
+          $TaskStepRowsTable,
+          TaskStepRow,
+          $$TaskStepRowsTableFilterComposer,
+          $$TaskStepRowsTableOrderingComposer,
+          $$TaskStepRowsTableAnnotationComposer,
+          $$TaskStepRowsTableCreateCompanionBuilder,
+          $$TaskStepRowsTableUpdateCompanionBuilder,
+          (
+            TaskStepRow,
+            BaseReferences<
+              _$TasksExampleDatabase,
+              $TaskStepRowsTable,
+              TaskStepRow
+            >,
+          ),
+          TaskStepRow,
+          PrefetchHooks Function()
+        > {
+  $$TaskStepRowsTableTableManager(
+    _$TasksExampleDatabase db,
+    $TaskStepRowsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TaskStepRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TaskStepRowsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TaskStepRowsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> ownerId = const Value.absent(),
+                Value<String> taskId = const Value.absent(),
+                Value<String> title = const Value.absent(),
+                Value<bool> done = const Value.absent(),
+                Value<String> orderRank = const Value.absent(),
+                Value<String?> deletedAt = const Value.absent(),
+                Value<int> serverVersion = const Value.absent(),
+                Value<int> localRevision = const Value.absent(),
+                Value<String?> acceptedSnapshot = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TaskStepRowsCompanion(
+                id: id,
+                ownerId: ownerId,
+                taskId: taskId,
+                title: title,
+                done: done,
+                orderRank: orderRank,
+                deletedAt: deletedAt,
+                serverVersion: serverVersion,
+                localRevision: localRevision,
+                acceptedSnapshot: acceptedSnapshot,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String ownerId,
+                required String taskId,
+                required String title,
+                Value<bool> done = const Value.absent(),
+                Value<String> orderRank = const Value.absent(),
+                Value<String?> deletedAt = const Value.absent(),
+                Value<int> serverVersion = const Value.absent(),
+                required int localRevision,
+                Value<String?> acceptedSnapshot = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TaskStepRowsCompanion.insert(
+                id: id,
+                ownerId: ownerId,
+                taskId: taskId,
+                title: title,
+                done: done,
+                orderRank: orderRank,
+                deletedAt: deletedAt,
+                serverVersion: serverVersion,
+                localRevision: localRevision,
+                acceptedSnapshot: acceptedSnapshot,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$TaskStepRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$TasksExampleDatabase,
+      $TaskStepRowsTable,
+      TaskStepRow,
+      $$TaskStepRowsTableFilterComposer,
+      $$TaskStepRowsTableOrderingComposer,
+      $$TaskStepRowsTableAnnotationComposer,
+      $$TaskStepRowsTableCreateCompanionBuilder,
+      $$TaskStepRowsTableUpdateCompanionBuilder,
+      (
+        TaskStepRow,
+        BaseReferences<_$TasksExampleDatabase, $TaskStepRowsTable, TaskStepRow>,
+      ),
+      TaskStepRow,
+      PrefetchHooks Function()
+    >;
 typedef $$TasksExampleSyncWorkRowsTableCreateCompanionBuilder =
     TasksExampleSyncWorkRowsCompanion Function({
       Value<int> id,
@@ -5233,6 +6177,8 @@ class $TasksExampleDatabaseManager {
       $$TaskActivityRowsTableTableManager(_db, _db.taskActivityRows);
   $$TaskProjectRowsTableTableManager get taskProjectRows =>
       $$TaskProjectRowsTableTableManager(_db, _db.taskProjectRows);
+  $$TaskStepRowsTableTableManager get taskStepRows =>
+      $$TaskStepRowsTableTableManager(_db, _db.taskStepRows);
   $$TasksExampleSyncWorkRowsTableTableManager get tasksExampleSyncWorkRows =>
       $$TasksExampleSyncWorkRowsTableTableManager(
         _db,

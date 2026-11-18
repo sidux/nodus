@@ -757,7 +757,13 @@ void main() {
     final entityOutput = emitDart(spec);
 
     expect(emitEntityGraph(graph), output);
-    expect(output, contains('// ignore_for_file: unused_field, type=lint'));
+    expect(
+      output,
+      contains(
+        '// ignore_for_file: unused_field, unnecessary_non_null_assertion, '
+        'type=lint',
+      ),
+    );
     expect(
       output,
       contains("import 'package:example/work_item.entity.g.dart';"),

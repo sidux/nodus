@@ -32,8 +32,13 @@ String emitEntityGraph(
   if (schemaFingerprint != null) {
     buffer.writeln('// Schema fingerprint: $schemaFingerprint');
   }
+  // Member operations read `member!` alike whether or not a step that
+  // reassigns it inside a transaction keeps Dart from narrowing it.
   buffer
-    ..writeln('// ignore_for_file: unused_field, type=lint')
+    ..writeln(
+      '// ignore_for_file: unused_field, unnecessary_non_null_assertion, '
+      'type=lint',
+    )
     ..writeln()
     ..writeln("import 'dart:async';")
     ..writeln()
@@ -2839,6 +2844,12 @@ void _emitEntityGraphRuntime(
     )
     ..writeln('  DateTime nowUtc() => _coordinator.clock.nowUtc();')
     ..writeln('  Future<void> flushLocal() => _coordinator.flushLocal();')
+    ..writeln(
+      '  /// Resolves once local changes are durable and the processes and '
+      'projections',
+    )
+    ..writeln('  /// they triggered have run.')
+    ..writeln('  Future<void> settleLocal() => _coordinator.settleLocal();')
     ..writeln(
       '  Future<R> transaction<R>(FutureOr<R> Function() body) => '
       '_coordinator.transaction(body);',
