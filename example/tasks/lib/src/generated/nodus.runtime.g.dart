@@ -486,6 +486,36 @@ final class TasksExampleEntityGraph {
     );
   }
 
+  void installFinishCheckedTasksProcess({
+    required Future<void> Function(
+      Task source,
+      GeneratedDurableWorkContext context,
+    )
+    run,
+    EntityPredicate<Task> Function()? scope,
+  }) {
+    _coordinator.registerGeneratedDurableWork(
+      GeneratedDurableWorkBinding(
+        name: 'finishCheckedTasks',
+        kind: GeneratedDurableWorkKind.process,
+        triggers: [
+          _taskEngine.projectionChanges
+              .where((change) => change.affectsFields(const {'status'}))
+              .map<Object?>((change) => change),
+          _taskStepEngine.projectionChanges
+              .where(
+                (change) => change.affectsFields(const {'done', 'deletedAt'}),
+              )
+              .map<Object?>((change) => change),
+        ],
+        run: (context) => TaskList.all(
+          this,
+          where: scope?.call(),
+        ).runGeneratedProcess((source) => run(source, context)),
+      ),
+    );
+  }
+
   ReadOnlyObservableList<LocalPersistenceFailure> get persistenceFailures =>
       _coordinator.persistenceFailures;
   DateTime nowUtc() => _coordinator.clock.nowUtc();

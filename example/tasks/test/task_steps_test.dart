@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tasks_example/features/tasks/domain/finish_checked_tasks_process.dart';
 import 'package:tasks_example/nodus.g.dart';
 
 import 'nodus_test_harness.g.dart';
@@ -42,5 +45,43 @@ void main() {
     await task.addStep(graph, 'Outline');
 
     expect(await stepsOf(graph, task), [('Outline', false)]);
+  });
+
+  test('Given a task with two steps, When the last one is checked off, Then '
+      'the task is finished once local work settles', () async {
+    final (graph, task) = await openTask();
+    installFinishCheckedTasks(graph);
+    await task.addStep(graph, 'Outline');
+    await task.addStep(graph, 'Draft');
+    await task.checkStep(graph, 'Outline');
+    await graph.settleLocal();
+    expect(task.isCompleted, isFalse);
+
+    await task.checkStep(graph, 'Draft');
+    await graph.settleLocal();
+
+    expect(task.isCompleted, isTrue);
+  });
+
+  test('Given a process still running, When local work settles, Then it '
+      'waits for the run and the changes it makes', () async {
+    final (graph, task) = await openTask();
+    final release = Completer<void>();
+    graph.installFinishCheckedTasksProcess(
+      run: (source, _) async {
+        await release.future;
+        await source.complete();
+      },
+    );
+    var settled = false;
+    final settling = graph.settleLocal().then((_) => settled = true);
+    await graph.flushLocal();
+    await pumpEventQueue();
+    expect(settled, isFalse);
+
+    release.complete();
+    await settling;
+
+    expect(task.isCompleted, isTrue);
   });
 }

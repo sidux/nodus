@@ -68,7 +68,9 @@ no activity code to write.
 and `Task` declares `@MemberOperations` that generate `task.addStep(...)` and
 `task.checkStep(...)`: adding a removed step brings it back unchecked, and
 adding one already there changes nothing. The same rule is generated into the
-Supabase schema.
+Supabase schema. The declared `finishCheckedTasks` process finishes an open
+task once every step is checked off, and `entityGraph.settleLocal()` lets a
+test wait for its outcome.
 
 **One form model.** `TaskMutationDraft` backs both the create and edit forms.
 Its typed fields bind directly to Flutter widgets. When one save changes both

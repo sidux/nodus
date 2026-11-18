@@ -5,7 +5,29 @@
   "targets": [
     "supabase"
   ],
-  "durableWork": [],
+  "durableWork": [
+    {
+      "name": "finishCheckedTasks",
+      "kind": "process",
+      "sources": [
+        {
+          "entity": "Task",
+          "fields": [
+            "status"
+          ]
+        },
+        {
+          "entity": "TaskStep",
+          "fields": [
+            "done",
+            "deletedAt"
+          ]
+        }
+      ],
+      "generatedInstall": "installFinishCheckedTasksProcess",
+      "generatedTrigger": null
+    }
+  ],
   "entities": [
     {
       "name": "Task",

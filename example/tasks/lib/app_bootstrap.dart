@@ -1,6 +1,8 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:tasks_example/nodus.g.dart';
 
+import 'features/tasks/domain/finish_checked_tasks_process.dart';
+
 final class TasksBootstrap {
   const TasksBootstrap._();
 
@@ -33,16 +35,19 @@ final class TasksBootstrap {
       if (user == null) {
         throw StateError('Supabase authentication did not return a user.');
       }
-      return TasksExampleEntityGraph.openSupabase(
+      final entityGraph = await TasksExampleEntityGraph.openSupabase(
         accountId: parseLocalId<Account>(user.id),
         client: client,
         autoSync: true,
       );
+      installFinishCheckedTasks(entityGraph);
+      return entityGraph;
     }
     final entityGraph = await TasksExampleEntityGraph.openInMemory(
       accountId: LocalId<Account>(_localAccountId),
       autoSync: false,
     );
+    installFinishCheckedTasks(entityGraph);
     await seedTasksDemo(entityGraph);
     return entityGraph;
   }
