@@ -521,9 +521,12 @@ final class TasksExampleEntityGraph {
   DateTime nowUtc() => _coordinator.clock.nowUtc();
   Future<void> flushLocal() => _coordinator.flushLocal();
 
-  /// Resolves once local changes are durable and the processes and projections
-  /// they triggered have run.
+  /// Resolves once local changes are durable, the processes and projections
+  /// they triggered have run, and no query page is loading.
   Future<void> settleLocal() => _coordinator.settleLocal();
+
+  /// Whether local work has settled, as [settleLocal] waits for.
+  bool get isLocalSettled => _coordinator.isLocalSettled;
   Future<R> transaction<R>(FutureOr<R> Function() body) =>
       _coordinator.transaction(body);
   Future<void> sync() => _coordinator.sync();

@@ -6402,6 +6402,9 @@ final class MutationCoordinator {
     });
   }
 
+  /// Whether a scheduled mutation batch has not finished persisting yet.
+  bool get hasPending => _pendingCount != 0;
+
   /// Failures up to now were reported through their own commit results.
   void _markFailuresReported() => _reportedFailureCount = failures.length;
 

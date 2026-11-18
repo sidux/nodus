@@ -4347,6 +4347,7 @@ const _generatedEntityGraphMemberNames = <String>{
   'nowUtc',
   'flushLocal',
   'settleLocal',
+  'isLocalSettled',
   'transaction',
   'sync',
   'close',

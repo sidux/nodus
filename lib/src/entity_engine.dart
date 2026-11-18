@@ -2131,6 +2131,14 @@ final class LocalEntityEngine<E, T extends TypedGeneratedEntityRecord<E>>
     EntityQuerySpec<E> spec, {
     required EntityQueryCursor? after,
     required int limit,
+  }) => graphCoordinator._trackQueryLoad(
+    () => _loadQueryPage(spec, after: after, limit: limit),
+  );
+
+  Future<EntityQueryPage<E>> _loadQueryPage(
+    EntityQuerySpec<E> spec, {
+    required EntityQueryCursor? after,
+    required int limit,
   }) async {
     if (limit <= 0) {
       throw RangeError.value(limit, 'limit', 'Must be greater than zero.');
@@ -4873,6 +4881,8 @@ final class LocalEntityGraphCoordinator
   final Map<String, Future<void>> _activeDurableWork = {};
   final Set<String> _durableRerunRequested = {};
   final Set<Future<void>> _durableWorkInFlight = {};
+  int _queryLoadsInFlight = 0;
+  Completer<void>? _queryLoadsDrained;
   bool _started = false;
   bool _closed = false;
   Future<void>? _closeFuture;
@@ -5472,18 +5482,46 @@ final class LocalEntityGraphCoordinator
 
   Future<void> flushLocal() => _mutationCoordinator.flush();
 
-  /// Resolves once local changes are durable and every process and projection
+  /// Resolves once local changes are durable, every process and projection
   /// they triggered has run, with the reruns and changes those runs made in
-  /// turn. Work waiting to retry after a failure does not hold it, and a
-  /// failed run is reported through diagnostics rather than thrown here.
+  /// turn, and no query page is loading. Work waiting to retry after a
+  /// failure does not hold it, and a failed run or load is reported through
+  /// its own channel rather than thrown here.
   Future<void> settleLocal() async {
     while (true) {
       await flushLocal();
-      if (_durableWorkInFlight.isEmpty) return;
-      await Future.wait([
-        for (final work in _durableWorkInFlight.toList(growable: false))
-          work.then((_) {}, onError: (Object _) {}),
-      ]);
+      if (_durableWorkInFlight.isNotEmpty) {
+        await Future.wait([
+          for (final work in _durableWorkInFlight.toList(growable: false))
+            work.then((_) {}, onError: (Object _) {}),
+        ]);
+        continue;
+      }
+      if (_queryLoadsInFlight != 0) {
+        await (_queryLoadsDrained ??= Completer<void>()).future;
+        continue;
+      }
+      return;
+    }
+  }
+
+  /// Whether local work has settled: no mutation is persisting, no process
+  /// or projection is running, and no query page is loading.
+  bool get isLocalSettled =>
+      !_mutationCoordinator.hasPending &&
+      _durableWorkInFlight.isEmpty &&
+      _queryLoadsInFlight == 0;
+
+  Future<T> _trackQueryLoad<T>(Future<T> Function() load) async {
+    _queryLoadsInFlight++;
+    try {
+      return await load();
+    } finally {
+      _queryLoadsInFlight--;
+      if (_queryLoadsInFlight == 0) {
+        _queryLoadsDrained?.complete();
+        _queryLoadsDrained = null;
+      }
     }
   }
 

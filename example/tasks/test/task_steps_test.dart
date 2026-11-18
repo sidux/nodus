@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tasks_example/features/tasks/domain/finish_checked_tasks_process.dart';
 import 'package:tasks_example/nodus.g.dart';
@@ -84,4 +85,54 @@ void main() {
 
     expect(task.isCompleted, isTrue);
   });
+
+  test('Given a query page still loading, When local work settles, Then it '
+      'waits for the page', () async {
+    final selects = _HeldSelects();
+    final graph = await TasksExampleEntityGraph.open(
+      accountId: accountId,
+      executor: openNodusInMemoryExecutor().interceptWith(selects),
+      syncAdapters: TasksExampleSyncAdapters(
+        supabase: InMemorySyncBackend.graph(
+          definition: TasksExampleMetadata.supabaseSyncDefinition,
+        ),
+      ),
+      autoSync: false,
+    );
+    addTearDown(graph.close);
+    await graph.tasks.create(title: 'Write the report');
+    await graph.settleLocal();
+
+    final release = selects.hold();
+    final tasks = TaskList.all(graph);
+    addTearDown(tasks.dispose);
+    var settled = false;
+    final settling = graph.settleLocal().then((_) => settled = true);
+    await pumpEventQueue();
+    expect(graph.isLocalSettled, isFalse);
+    expect(settled, isFalse);
+
+    release.complete();
+    await settling;
+
+    expect(graph.isLocalSettled, isTrue);
+    expect(tasks.items.map((task) => task.title), ['Write the report']);
+  });
+}
+
+/// Holds every select from [hold] until the returned completer completes.
+final class _HeldSelects extends QueryInterceptor {
+  Completer<void>? _held;
+
+  Completer<void> hold() => _held = Completer<void>();
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    await _held?.future;
+    return executor.runSelect(statement, args);
+  }
 }

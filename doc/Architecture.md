@@ -1829,10 +1829,13 @@ be committed with its outcome when replay could otherwise duplicate behavior.
 Processes and projections run after the local commit that triggers them, so
 `flushLocal()` does not wait for them. `entityGraph.settleLocal()` resolves
 once local changes are durable and every process and projection they
-triggered has run, including the reruns and changes those runs make. Work
+triggered has run, including the reruns and changes those runs make, and
+no query page is loading. `entityGraph.isLocalSettled` reports the same
+condition synchronously. Work
 waiting to retry after a failure does not hold it, a failed run is reported
 through diagnostics rather than thrown, and it never waits for the network.
-A test that asserts a process outcome awaits it rather than depending on how
+A widget test pumps until `isLocalSettled` holds rather than waiting a fixed
+time; running animations do not count against it. A test that asserts a process outcome awaits it rather than depending on how
 background work is scheduled; application code observes outcomes through the
 same identities and never needs it for correctness.
 
