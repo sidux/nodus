@@ -502,6 +502,34 @@ final class EntitySpec {
   List<FieldSpec> get accessTargetFields =>
       fields.where((field) => field.isAccessTarget).toList(growable: false);
 
+  /// The access reference of an activatable link between two rows of one
+  /// entity: the [AcyclicSpec] `from` reference whose `to` reference is an
+  /// access target on the same entity. Its row's own readers read the linked
+  /// row, and that access passes no further.
+  FieldSpec? get sameEntityLinkSource {
+    final rule = acyclic;
+    if (rule == null || activeField == null) return null;
+    final from = accessReferenceFields
+        .where((field) => field.name == rule.fromFieldName)
+        .firstOrNull;
+    final to = accessTargetFields
+        .where((field) => field.name == rule.toFieldName)
+        .firstOrNull;
+    return from != null &&
+            to != null &&
+            to.accessTargetThroughColumnName == null &&
+            to.accessTargetClassName == from.reference!.targetClassName
+        ? from
+        : null;
+  }
+
+  /// The access target [sameEntityLinkSource] links to.
+  FieldSpec? get sameEntityLinkTarget => sameEntityLinkSource == null
+      ? null
+      : accessTargetFields.singleWhere(
+          (field) => field.name == acyclic!.toFieldName,
+        );
+
   FieldSpec? get activeField => fields
       .where(
         (field) =>

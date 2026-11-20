@@ -354,9 +354,12 @@ String _emitPrincipalRetirementSql(EntityGraphSpec graph) {
   }
   for (final link in owned.where((entity) => entity.hasOwnershipReference)) {
     for (final field in link.accessTargetFields) {
+      // A link between two rows of one entity shares reading only, so the
+      // linked row stays its owner's.
       if (field.isOwnerReference ||
           field.isComposition ||
-          field.accessTargetThroughColumnName != null) {
+          field.accessTargetThroughColumnName != null ||
+          field.name == link.sameEntityLinkTarget?.name) {
         continue;
       }
       final target = byClass[field.reference!.targetClassName]!;
@@ -1387,6 +1390,7 @@ String _relationshipAudienceSelect(
         aliasPrefix: _sqlAlias(
           'audience_${relationship.tableName}_${sourceIndex + 1}',
         ),
+        ownReadersOnly: source.name == relationship.sameEntityLinkSource?.name,
       ),
     );
   }
@@ -1470,6 +1474,7 @@ String _relationshipAudienceByUserExpression(
         rowAlias: rowAlias,
         userExpression: userExpression,
         write: write,
+        asTargetAudience: true,
       ),
     );
   }
@@ -1504,6 +1509,7 @@ List<String> _entityAudienceCandidates(
   required String aliasPrefix,
   bool includeReadableStates = false,
   bool followReferences = false,
+  bool ownReadersOnly = false,
 }) {
   final candidates = <String>[];
   final targetAlias = _sqlAlias('${aliasPrefix}_${target.tableName}');
@@ -1559,6 +1565,10 @@ List<String> _entityAudienceCandidates(
       );
     }
   }
+  // The source of a link between two rows of one entity shares the linked
+  // row with its own readers alone, so nobody reaching it through a
+  // relationship or a reference is a candidate.
+  if (ownReadersOnly) return candidates;
   if (!followReferences &&
       (principals.contains(RlsPrincipal.authenticated) ||
           principals.contains(RlsPrincipal.reference))) {
@@ -1692,6 +1702,8 @@ List<String> _relationshipPathCandidates(
               '${relationshipAlias}_source_${sourceIndex + 1}',
             ),
             followReferences: followReferences,
+            ownReadersOnly:
+                source.name == relationship.sameEntityLinkSource?.name,
           );
           for (final upstream in upstreamCandidates) {
             candidates.add(
@@ -1882,13 +1894,19 @@ String _emitWorkflowCollaborationSql(EntityGraphSpec graph) {
       deletedAt.columnName,
       ?editPermission,
     ].join(', ');
+    final linkedRows = _linkedRowsPublicationSql(
+      graph,
+      target,
+      targetId: 'new.${workflow.targetReference.columnName}',
+      userExpression: 'new.${workflow.participant.columnName}',
+    );
     final conditionalReferencePropagation = propagatesReferenceAccess
         ? '''  if was_active is distinct from is_active$editorChanged then
     perform public.publish_${target.tableName}_reference_access(
       new.${workflow.targetReference.columnName},
       new.${workflow.participant.columnName}
     );
-  end if;'''
+${_indented(linkedRows)}  end if;'''
         : '';
     final editorSql = switch (collaboration.editPermissionField) {
       null => '',
@@ -2083,7 +2101,7 @@ ${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression
     not is_active,
     to_jsonb(target_row)
   );
-${propagatesReferenceAccess ? '  perform public.publish_${target.tableName}_reference_access(\n    new.${workflow.targetReference.columnName},\n    new.${workflow.participant.columnName}\n  );' : ''}
+${propagatesReferenceAccess ? '  perform public.publish_${target.tableName}_reference_access(\n    new.${workflow.targetReference.columnName},\n    new.${workflow.participant.columnName}\n  );\n$linkedRows' : ''}
   return new;
 end;
 \$\$;
@@ -2173,6 +2191,7 @@ ${_componentPublicationSql(graph, target, rowAlias: 'target_row', userExpression
             '    p_target_id,\n'
             '    p_user_id\n'
             '  );\n'
+            '${_linkedRowsPublicationSql(graph, target, targetId: 'p_target_id', userExpression: 'p_user_id')}'
       : '';
   final visibility = collaboration.hasAdditionalReadableStates;
   final declarations = [
@@ -2395,6 +2414,11 @@ String _emitReferenceAccessPropagationSql(EntityGraphSpec graph) {
         )
         ..writeln('  where $affected;');
       for (final accessTarget in dependent.accessTargetFields) {
+        // A row linked from [target] follows the user's own access to
+        // [target] alone, which `_linkedRowsPublicationSql` publishes.
+        if (accessTarget.name == dependent.sameEntityLinkTarget?.name) {
+          continue;
+        }
         for (final destination in _accessTargetDestinations(
           graph,
           accessTarget,
@@ -2413,7 +2437,7 @@ String _emitReferenceAccessPropagationSql(EntityGraphSpec graph) {
       }
     }
     final directTrigger = target.security.collaboration?.isDirect == true
-        ? _emitDirectReferenceAccessTrigger(target, functionName)
+        ? _emitDirectReferenceAccessTrigger(graph, target, functionName)
         : '';
     sections.add(
       '''-- Reference-derived access propagation for ${target.className}.
@@ -2471,6 +2495,41 @@ String _componentPublicationSql(
     )
     .join();
 
+/// Publishes the rows that active links between two rows of one entity
+/// share from [target]'s row [targetId] to [userExpression], whose own access
+/// to that row changed. A change of access through a relationship publishes
+/// none of them, so one link never passes access on through the next.
+String _linkedRowsPublicationSql(
+  EntityGraphSpec graph,
+  EntitySpec target, {
+  required String targetId,
+  required String userExpression,
+}) {
+  final buffer = StringBuffer();
+  for (final link in graph.entities) {
+    final source = link.sameEntityLinkSource;
+    if (source?.reference!.targetClassName != target.className) continue;
+    final linked = link.sameEntityLinkTarget!;
+    final active = [
+      'link.${source!.columnName} = $targetId',
+      ..._relationshipActivePredicates(link, linked, rowAlias: 'link'),
+    ].join(' and ');
+    buffer
+      ..writeln(
+        '  perform public.publish_${target.tableName}_relationship_access(',
+      )
+      ..writeln('    link.${linked.columnName}, $userExpression')
+      ..writeln('  )')
+      ..writeln('  from public.${link.tableName} link')
+      ..writeln('  where $active;');
+  }
+  return buffer.toString();
+}
+
+String _indented(String sql) => sql.isEmpty
+    ? sql
+    : sql.split('\n').map((line) => line.isEmpty ? line : '  $line').join('\n');
+
 bool _hasReferenceAccessDependents(EntityGraphSpec graph, EntitySpec target) =>
     graph.entities.any(
       (entity) => entity.accessReferenceFields.any(
@@ -2479,6 +2538,7 @@ bool _hasReferenceAccessDependents(EntityGraphSpec graph, EntitySpec target) =>
     );
 
 String _emitDirectReferenceAccessTrigger(
+  EntityGraphSpec graph,
   EntitySpec target,
   String publicationFunction,
 ) {
@@ -2515,7 +2575,7 @@ begin
     then old.${collaboration.userForeignKey}
     else new.${collaboration.userForeignKey} end;
   perform public.$publicationFunction(target_id, user_id);
-  if tg_op = 'DELETE' then return old; else return new; end if;
+${_linkedRowsPublicationSql(graph, target, targetId: 'target_id', userExpression: 'user_id')}  if tg_op = 'DELETE' then return old; else return new; end if;
 end;
 \$\$;
 
@@ -2588,6 +2648,38 @@ String _readableByUserExpression(
       ),
     );
   }
+  return expressions.isEmpty ? 'false' : expressions.join(' or ');
+}
+
+/// Users reading [entity] as its owner, a participant, or an accepted
+/// collaborator, without anyone a relationship or a reference brings.
+String _ownReadersByUserExpression(
+  EntityGraphSpec graph,
+  EntitySpec entity, {
+  required String rowAlias,
+  required String userExpression,
+}) {
+  const own = {
+    RlsPrincipal.owner,
+    RlsPrincipal.participant,
+    RlsPrincipal.collaborator,
+  };
+  final expressions = entity.security.grants
+      .where(
+        (grant) =>
+            grant.operation == RlsOperation.select &&
+            own.contains(grant.principal),
+      )
+      .map(
+        (grant) => _principalByUserExpression(
+          graph,
+          entity,
+          grant.principal,
+          rowAlias: rowAlias,
+          userExpression: userExpression,
+        ),
+      )
+      .toSet();
   return expressions.isEmpty ? 'false' : expressions.join(' or ');
 }
 
@@ -2719,29 +2811,45 @@ String _workflowStatePredicate(
   );
 }
 
+/// Users reaching [entity] through every access reference. For
+/// [asTargetAudience], the audience of the entity's access targets, the
+/// source of a link between two rows of one entity counts its own readers
+/// alone, so access through one link never passes on through the next.
 String _referencesByUserExpression(
   EntityGraphSpec graph,
   EntitySpec entity, {
   required String rowAlias,
   required String userExpression,
   bool write = false,
+  bool asTargetAudience = false,
 }) {
   final byClass = {
     for (final candidate in graph.entities) candidate.className: candidate,
   };
+  final linkSource = asTargetAudience ? entity.sameEntityLinkSource : null;
   final access = entity.accessReferenceGroups
       .map((group) {
         final expression = group
             .map((field) {
               final target = byClass[field.reference!.targetClassName]!;
-              final targetAlias = 'access_${field.columnName}';
-              final readable = _readableByUserExpression(
-                graph,
-                target,
-                rowAlias: targetAlias,
-                userExpression: userExpression,
-                write: write,
-              );
+              final ownReadersOnly = field.name == linkSource?.name;
+              final targetAlias = ownReadersOnly
+                  ? _sqlAlias('${rowAlias}_${field.columnName}_readers')
+                  : 'access_${field.columnName}';
+              final readable = ownReadersOnly
+                  ? _ownReadersByUserExpression(
+                      graph,
+                      target,
+                      rowAlias: targetAlias,
+                      userExpression: userExpression,
+                    )
+                  : _readableByUserExpression(
+                      graph,
+                      target,
+                      rowAlias: targetAlias,
+                      userExpression: userExpression,
+                      write: write,
+                    );
               return 'exists (select 1 from public.${target.tableName} '
                   '$targetAlias where '
                   '$targetAlias.${target.idField.columnName} = '

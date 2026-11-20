@@ -4295,8 +4295,15 @@ void _validateRelationshipAccessGraph(
           },
         )
         .toSet();
+    // A declared no-cycle link shares a row with the own readers of another
+    // row of its entity. That access passes no further, so the edge closes
+    // no path.
+    final linked = _sameEntityLinkClass(relationship, element);
     for (final source in sources) {
-      edges.putIfAbsent(source, () => <String>{}).addAll(targets);
+      edges.putIfAbsent(source, () => <String>{}).addAll({
+        for (final target in targets)
+          if (target != linked || source != linked) target,
+      });
     }
     // Relationship editors of a referenced entity read the row itself.
     for (final field in relationship.relationshipEditorAccessFields) {
@@ -4338,6 +4345,38 @@ void _validateRelationshipAccessGraph(
   for (final entity in edges.keys) {
     visit(entity);
   }
+}
+
+/// The entity whose rows [relationship] links to each other while sharing
+/// the linked row, checked to be a shape whose access ends after one link.
+String? _sameEntityLinkClass(EntitySpec relationship, Element element) {
+  final source = relationship.sameEntityLinkSource;
+  if (source == null) return null;
+  final target = relationship.sameEntityLinkTarget!;
+  final linked = source.reference!.targetClassName;
+  final link = '`${relationship.className}.${target.name}`';
+  if (relationship.accessTargetFields.length != 1 ||
+      relationship.accessReferenceFields
+              .where((field) => field.reference!.targetClassName == linked)
+              .length !=
+          1) {
+    throw InvalidGenerationSourceError(
+      '$link shares a `$linked` with the readers of another `$linked`, so it '
+      'must be the only @AccessTarget of `${relationship.className}`, and '
+      '`${source.name}` its only @AccessReference to `$linked`.',
+      element: element,
+    );
+  }
+  if (target.accessTargetOperations.length != 1 ||
+      target.accessTargetOperations.single != RlsOperation.select) {
+    throw InvalidGenerationSourceError(
+      '$link shares a `$linked` with the readers of another `$linked`, which '
+      'grants reading only. Declare '
+      '`@AccessTarget(operations: [RlsOperation.select])`.',
+      element: element,
+    );
+  }
+  return linked;
 }
 
 const _generatedEntityGraphMemberNames = <String>{

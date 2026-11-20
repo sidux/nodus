@@ -669,7 +669,9 @@ Generation MUST reject:
 - duplicate entity, table, column, route, operation, or generated type names;
 - unsupported or ambiguous field types;
 - invalid defaults and constraints;
-- unresolved relationships or unsafe access-propagation cycles;
+- unresolved relationships or unsafe access-propagation cycles: every access
+  path from an entity type back to itself, except the one-link read grant of
+  a declared no-cycle link;
 - ownership fields that do not reference the declared account type;
 - nullable uniqueness exposed as a singular lookup without explicit semantics;
 - transitions that target undeclared, immutable, server-owned, or unauthorized
@@ -1961,6 +1963,23 @@ write, reading past row-level security because a cycle may pass through
 links the writer cannot see; the application checks it first through the
 generated `require<Link>`, with the same messages.
 
+Such a link is the only access path that MAY lead from an entity back to
+itself. Its `to` reference MAY declare
+`@AccessTarget(operations: [RlsOperation.select])` when its `from` reference
+is an `@AccessReference`: the `from` row's own readers, meaning its owner,
+participants, and accepted collaborators, including collaboration inherited
+through a hierarchy, then read the `to` row. The grant is one link long.
+Whoever reads the `from` row through a relationship, another such link
+included, gains nothing through it; it never grants update or delete; and a
+retiring owner's linked row is not handed to the link's owner. Rows that
+derive access from the linked row through other references follow its readers
+as for any relationship grant. The `to` reference MUST be the link's only
+access target and `from` its only access reference to that entity. The
+generated predicate names the link once and never calls itself. A link change
+publishes a snapshot or revocation of the linked row to those readers, a
+membership change publishes the rows its target links to, and a change of
+relationship access publishes no linked row.
+
 
 ## 7. Collections, queries, and identity
 
@@ -2848,9 +2867,12 @@ remain executable by application roles.
 
 Ownership, collaboration, and access propagation are declared as typed graph
 relationships. The generator validates access cycles and operation-specific
-capabilities within each target. A relationship must not grant broader access
-than its declared source and target policies and must not assume RLS or foreign
-keys can span independent services.
+capabilities within each target. Access paths form a directed acyclic graph
+over entity types, so authorization and publication terminate; a declared
+no-cycle link between two rows of one entity is the one bounded exception. A
+relationship must not grant broader access than its declared source and target
+policies and must not assume RLS or foreign keys can span independent
+services.
 
 Local mutation checks mirror the generated policies and never deny what the
 remote policy grants. Owner grants are checked locally. Collaborator,

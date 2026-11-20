@@ -5109,6 +5109,226 @@ abstract class ReviewTaskLink implements OwnedBy<ReviewTaskLink, Account> {
         ]),
       );
     });
+
+    test('share a linked goal with the own readers of the goal linking it, '
+        'one link away', () async {
+      final sources = _reviewedTaskSources(blockedTransition: null)
+        ..['nodus|lib/goal.dart'] = _nestedGoalSource()
+        ..['nodus|lib/goal_step.dart'] = _goalStepSource();
+
+      const ownReaders =
+          '_goal_id_readers.owner_id = auth.uid() or exists (select 1 from '
+          'public.goal_members member where member.goal_id in (select '
+          'public.goals_lineage(access_path_0_goal_id_readers.id)) and '
+          "member.member_id = auth.uid() and member.status = 'accepted' and "
+          'member.deleted_at is null)';
+      await expectSql(
+        sources,
+        allOf([
+          // The linking goal's owner and accepted collaborators read the
+          // step; the check names the link once and never calls itself.
+          predicate<String>((sql) {
+            final body = _sqlFunctionBody(
+              sql,
+              'public.is_goals_relationship_select(p_id uuid)',
+            );
+            return body.contains(
+                  'from public.goal_steps access_path_0 where '
+                  'access_path_0.step_id = p_id and access_path_0.active',
+                ) &&
+                body.contains(ownReaders) &&
+                'public.goal_steps'.allMatches(body).length == 1 &&
+                '_relationship_select'.allMatches(body).length == 1;
+          }, 'step access stops at the linking goal\'s own readers'),
+          // A link change publishes the step to those readers alone.
+          predicate<String>((sql) {
+            final body = _sqlFunctionBody(
+              sql,
+              'public.publish_goal_steps_step_id_access()\nreturns trigger',
+            );
+            return body.contains(
+                  'perform public.publish_goals_relationship_access(\n'
+                  '        old.step_id,\n'
+                  '        audience_user_id',
+                ) &&
+                body.contains(
+                  'perform public.publish_goals_relationship_access(\n'
+                  '        new.step_id,\n'
+                  '        audience_user_id',
+                ) &&
+                !body.contains('public.goal_steps');
+          }, 'a link change publishes its step to the own readers'),
+          // A change of access through a relationship republishes the goal's
+          // links, not the steps they lead to.
+          predicate<String>((sql) {
+            final relationship = _sqlFunctionBody(
+              sql,
+              'public.publish_goals_relationship_access(\n  p_target_id uuid',
+            );
+            final reference = _sqlFunctionBody(
+              sql,
+              'public.publish_goals_reference_access(\n  p_target_id uuid',
+            );
+            return relationship.contains(
+                  'perform public.publish_goals_reference_access(',
+                ) &&
+                'publish_goals_relationship_access'
+                        .allMatches(relationship)
+                        .length ==
+                    1 &&
+                reference.contains("'GoalStep'") &&
+                !reference.contains('publish_goals_relationship_access');
+          }, 'relationship access passes through no further link'),
+          // A change of membership publishes the steps of every goal it
+          // reaches.
+          predicate<String>(
+            (sql) =>
+                _sqlFunctionBody(
+                  sql,
+                  'public.publish_goals_collaboration_access(\n'
+                  '  p_target_id uuid',
+                ).contains(
+                  '  perform public.publish_goals_relationship_access(\n'
+                  '    link.step_id, p_user_id\n'
+                  '  )\n'
+                  '  from public.goal_steps link\n'
+                  '  where link.goal_id = p_target_id and link.active',
+                ),
+            'a membership change publishes the linked steps',
+          ),
+          // A step read through a link stays its owner's.
+          isNot(contains('Goal shared through GoalStep')),
+        ]),
+      );
+    });
+
+    test('publish linked goals to a new member under every kind of '
+        'collaboration', () async {
+      // Accepted members alone.
+      await expectSql(
+        _reviewedTaskSources(blockedTransition: null)
+          ..['nodus|lib/goal_step.dart'] = _goalStepSource(),
+        predicate<String>(
+          (sql) =>
+              _sqlFunctionBody(
+                sql,
+                'public.publish_goal_members_access()\nreturns trigger',
+              ).contains(
+                '  perform public.publish_goals_reference_access(\n'
+                '    new.goal_id,\n'
+                '    new.member_id\n'
+                '  );\n'
+                '  perform public.publish_goals_relationship_access(\n'
+                '    link.step_id, new.member_id\n'
+                '  )\n'
+                '  from public.goal_steps link\n'
+                '  where link.goal_id = new.goal_id and link.active',
+              ),
+          'an accepted member is sent the linked goals',
+        ),
+      );
+      // Invited members read the goal they are invited to, and nothing it
+      // links to.
+      await expectSql(
+        _reviewedTaskSources(blockedTransition: null)
+          ..['nodus|lib/goal.dart'] = _invitingGoalSource
+          ..['nodus|lib/goal_step.dart'] = _goalStepSource(),
+        predicate<String>(
+          (sql) =>
+              _sqlFunctionBody(
+                sql,
+                'public.publish_goal_members_access()\nreturns trigger',
+              ).contains(
+                '  if was_active is distinct from is_active or was_editor is '
+                'distinct from is_editor then\n'
+                '    perform public.publish_goals_reference_access(\n'
+                '      new.goal_id,\n'
+                '      new.member_id\n'
+                '    );\n'
+                '    perform public.publish_goals_relationship_access(\n'
+                '      link.step_id, new.member_id\n'
+                '    )\n'
+                '    from public.goal_steps link\n'
+                '    where link.goal_id = new.goal_id and link.active',
+              ),
+          'only a change of accepted membership sends the linked goals',
+        ),
+      );
+      // Collaborators the owner names directly.
+      await expectSql(
+        _sources(_sharedProjectSource, fileName: 'project.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}'
+          ..['nodus|lib/project_step.dart'] = _projectStepSource,
+        predicate<String>(
+          (sql) =>
+              _sqlFunctionBody(
+                sql,
+                'public.publish_project_members_reference_access()\n'
+                'returns trigger',
+              ).contains(
+                '  perform public.publish_projects_reference_access('
+                'target_id, user_id);\n'
+                '  perform public.publish_projects_relationship_access(\n'
+                '    link.step_id, user_id\n'
+                '  )\n'
+                '  from public.project_steps link\n'
+                '  where link.project_id = target_id and link.active',
+              ),
+          'a named collaborator is sent the linked projects',
+        ),
+      );
+    });
+
+    test(
+      'reject a same-entity access target without a no-cycle rule',
+      () async {
+        final errors = await generationErrors(
+          _reviewedTaskSources(blockedTransition: null)
+            ..['nodus|lib/goal.dart'] = _nestedGoalSource()
+            ..['nodus|lib/goal_step.dart'] = _goalStepSource(acyclic: false),
+        );
+
+        expect(
+          errors,
+          contains(
+            'Relationship-derived access graph is cyclic: Goal -> Goal.',
+          ),
+        );
+      },
+    );
+
+    test('reject a same-entity access target on a link that is never '
+        'inactive', () async {
+      final errors = await generationErrors(
+        _reviewedTaskSources(blockedTransition: null)
+          ..['nodus|lib/goal.dart'] = _nestedGoalSource()
+          ..['nodus|lib/goal_step.dart'] = _goalStepSource(activatable: false),
+      );
+
+      expect(
+        errors,
+        contains('Relationship-derived access graph is cyclic: Goal -> Goal.'),
+      );
+    });
+
+    test('reject writing through a same-entity access target', () async {
+      final errors = await generationErrors(
+        _reviewedTaskSources(blockedTransition: null)
+          ..['nodus|lib/goal.dart'] = _nestedGoalSource()
+          ..['nodus|lib/goal_step.dart'] = _goalStepSource(
+            accessTarget: '@AccessTarget()',
+          ),
+      );
+
+      expect(
+        errors,
+        contains(
+          '`GoalStep.stepId` shares a `Goal` with the readers of another '
+          '`Goal`, which grants reading only. Declare '
+          '`@AccessTarget(operations: [RlsOperation.select])`.',
+        ),
+      );
+    });
   });
 
   test(
@@ -9926,6 +10146,75 @@ abstract class TaskDependency
     );
   });
 
+  test('a no-cycle link over a bounded hierarchy reads ancestors from the '
+      'loaded set', () async {
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      _sources('''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Goal implements OwnedBy<Goal, Account>, SoftDeletable {
+  @Reference(
+    inverse: 'subgoals',
+    onDelete: ReferenceDeleteAction.cascade,
+    hierarchy: true,
+  )
+  abstract final LocalId<Goal>? parentGoalId;
+}
+''', fileName: 'goal.dart')
+        ..['nodus|lib/goal_step.dart'] = '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/goal.dart';
+
+@Acyclic(
+  from: #goalId,
+  to: #stepId,
+  cycle: 'That goal already leads to this one.',
+  hierarchy: 'Those goals are already joined.',
+)
+@Entity(
+  cardinality: Cardinality.bounded,
+  indexes: [CompoundIndex([#goalId, #stepId], unique: true)],
+)
+abstract class GoalStep implements OwnedBy<GoalStep, Account>, Activatable {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(inverse: 'stepLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> goalId;
+
+  @Reference(inverse: 'goalLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> stepId;
+}
+'''
+        ..['nodus|lib/account.dart'] = 'final class Account {}',
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          allOf([
+            contains('Future<void> requireGoalStep('),
+            contains('next = goals.byPresentId(next!)?.parentGoalId;'),
+            isNot(contains('goals.loadPresentById(next!)')),
+            contains("message: 'Those goals are already joined.'"),
+          ]),
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            contains('create trigger goal_steps_acyclic'),
+            contains("raise exception 'Those goals are already joined.'"),
+          ]),
+        ),
+      },
+    );
+  });
+
   test('actions require finished linked work and answers match their '
       'questions', () async {
     final sources =
@@ -10305,6 +10594,87 @@ abstract class Goal implements OwnedBy<Goal, Account>, SoftDeletable {
   abstract final LocalId<Goal>? parentGoalId;
 
   abstract final String title;
+}
+''';
+
+/// A goal whose invited members read it before they accept.
+const _invitingGoalSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/membership_status.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  collaboration: CollaborationAccess.workflow(
+    additionalReadableStates: [MembershipStatus.pending],
+    editPermissionField: 'can_edit',
+  ),
+)
+abstract class Goal implements OwnedBy<Goal, Account> {
+  abstract final String title;
+}
+''';
+
+/// A project whose owner names its collaborators directly.
+const _sharedProjectSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(cardinality: Cardinality.bounded)
+abstract class Project
+    implements OwnedBy<Project, Account>, Collaborative<Account> {}
+''';
+
+/// A project that is also a step of another project.
+const _projectStepSource = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/project.dart';
+
+@Acyclic(from: #projectId, to: #stepId, cycle: 'Those projects already join.')
+@Entity(
+  cardinality: Cardinality.bounded,
+  indexes: [CompoundIndex([#projectId, #stepId], unique: true)],
+)
+abstract class ProjectStep
+    implements OwnedBy<ProjectStep, Account>, Activatable {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(inverse: 'stepLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Project> projectId;
+
+  @AccessTarget(operations: [RlsOperation.select])
+  @Reference(inverse: 'projectLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Project> stepId;
+}
+''';
+
+/// A goal that is also a step of another goal, read by that goal's readers.
+String _goalStepSource({
+  bool acyclic = true,
+  bool activatable = true,
+  String accessTarget = '@AccessTarget(operations: [RlsOperation.select])',
+}) =>
+    '''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/goal.dart';
+
+${acyclic ? "@Acyclic(from: #goalId, to: #stepId, cycle: 'That goal already leads to this one.')" : ''}
+@Entity(
+  cardinality: Cardinality.bounded,
+  indexes: [CompoundIndex([#goalId, #stepId], unique: true)],
+)
+abstract class GoalStep
+    implements OwnedBy<GoalStep, Account>${activatable ? ', Activatable' : ''} {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(inverse: 'stepLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> goalId;
+
+  $accessTarget
+  @Reference(inverse: 'goalLinks', onDelete: ReferenceDeleteAction.cascade)
+  abstract final LocalId<Goal> stepId;
 }
 ''';
 

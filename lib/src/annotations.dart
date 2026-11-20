@@ -912,6 +912,13 @@ final class AccessReference {
 /// By default the path mirrors the target's owner operations except insert,
 /// which is never meaningful for an existing referenced row. [operations] is
 /// only needed to narrow that inferred capability.
+///
+/// Access paths lead from one entity to another and never back, with one
+/// exception: the `to` reference of an [Acyclic] link whose `from` reference
+/// is its [AccessReference] may grant `operations: [RlsOperation.select]`.
+/// The `from` row's own readers (its owner, participants, and accepted
+/// collaborators) then read the `to` row; whoever reads the `from` row
+/// through a relationship, another such link included, does not.
 final class AccessTarget {
   const AccessTarget({
     this.operations,
@@ -1744,6 +1751,9 @@ final class UndoneAs {
 ///
 /// Every schema-capable target enforces it on every write, and the
 /// application checks it first through the generated `require<Entity>`.
+///
+/// Only such a link may share the row at [to] with the readers of the row at
+/// [from]; see [AccessTarget].
 final class Acyclic {
   const Acyclic({
     required this.from,

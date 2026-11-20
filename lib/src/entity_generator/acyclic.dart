@@ -78,15 +78,18 @@ String emitAcyclicDart(EntityGraphSpec graph, String entityGraphName) {
       );
     final parent = rule.parent;
     if (parent != null) {
+      // A bounded set holds every row, so its ancestors are read in place.
+      final parentOfNext = rule.target.cardinality == Cardinality.bounded
+          ? '${rule.target.setAccessor}.byPresentId(next!)?.${parent.name};'
+          : 'await ${rule.target.setAccessor}.loadPresentById(next!)'
+                '.use<$idType?>((row) => row.${parent.name}, '
+                'ifAbsent: () => null);';
       buffer
         ..writeln('    Future<Set<$idType>> ancestorsOf($idType id) async {')
         ..writeln('      final found = <$idType>{};')
         ..writeln('      $idType? next = id;')
         ..writeln('      while (true) {')
-        ..writeln(
-          '        next = await ${rule.target.setAccessor}.loadPresentById(next!)'
-          '.use<$idType?>((row) => row.${parent.name}, ifAbsent: () => null);',
-        )
+        ..writeln('        next = $parentOfNext')
         ..writeln('        if (next == null || !found.add(next)) return found;')
         ..writeln('      }')
         ..writeln('    }')

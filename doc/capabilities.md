@@ -469,7 +469,7 @@ reference a target the user cannot see; the generated accessor then returns
 | `@OwnerReference()` | Derive a row's owner from a referenced entity. |
 | `@AccessParticipant()` | A `LocalId<Account>` field whose account may access the row. |
 | `@AccessReference()` | Access the row whenever you can access the referenced entity. |
-| `@AccessTarget()` | A relationship row grants its audience access to the target it points to. |
+| `@AccessTarget()` | A relationship row grants its audience access to the target it points to. On the `to` reference of an `@Acyclic` link between two rows of one entity it takes `operations: [RlsOperation.select]`: the `from` row's owner and collaborators read the linked row, and nobody further along. |
 | `@RelationshipEditorAccess()` | Those who may update the referenced entity through a relationship read the row and act through it for its owner, such as asking its reviewer for a check. `targetField:` names that entity on a referenced bridge; `includeOwner: true` lets its owner act too. |
 | `Collaborative<Principal>` with `CollaborationAccess()` | Owner-managed collaborators. |
 | `CollaborationAccess.workflow()` | Invitation and acceptance through a `WorkflowMembership` entity. |
