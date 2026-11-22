@@ -7887,6 +7887,7 @@ abstract class Grandchild
               ),
               contains('final class ChildAggregateDraft implements'),
               contains('required ChildGrandchildrenDraft grandchildren'),
+              contains('await member._saveMemberTree();'),
             ]),
           ),
           'nodus|supabase/nodus/schema.sql': decodedMatches(anything),

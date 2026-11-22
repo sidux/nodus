@@ -2052,7 +2052,13 @@ void _emitAggregateCollectionDraft(
   }
   buffer
     ..writeln('      }')
-    ..writeln('      for (final member in _removed) {')
+    ..writeln('      for (final member in _removed) {');
+  if (childIsAggregate) {
+    // A removed member's own members are not removed with it, so the
+    // changes drafted for them, such as their removal, still save.
+    buffer.writeln('        await member._saveMemberTree();');
+  }
+  buffer
     ..writeln('        await member.entity!.remove();')
     ..writeln('        member.discard();')
     ..writeln('      }')
