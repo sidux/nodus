@@ -102,10 +102,19 @@ final class AccountEntityGraphReady<G, A>
 /// later account transition has superseded this request.
 final class AccountEntityGraphStoreInUse<G, A>
     extends AccountEntityGraphSessionState<G, A> {
-  const AccountEntityGraphStoreInUse(this.accountId, {this.handedOver = false});
+  const AccountEntityGraphStoreInUse(
+    this.accountId, {
+    this.handedOver = false,
+    this.releaseRequested = false,
+  });
 
   @override
   final LocalId<A> accountId;
+
+  /// Whether this session asked the other owner to let the store go. An
+  /// owner that never answers, such as one running an older build, leaves
+  /// it set, so an application can tell the user after a while.
+  final bool releaseRequested;
 
   /// Whether this session closed its own graph because another owner took
   /// the store over. It then reopens only through
@@ -360,15 +369,19 @@ final class AccountEntityGraphSession<G, A> {
   /// Asks the other owner of the current account's store to close its graph,
   /// so this session opens it instead.
   ///
-  /// Does nothing unless the state is [AccountEntityGraphStoreInUse]. A
-  /// session that [AccountEntityGraphStoreInUse.handedOver] its store claims
-  /// it again first, which finds the new owner to ask.
+  /// Does nothing unless the state is [AccountEntityGraphStoreInUse], which
+  /// it reports with [AccountEntityGraphStoreInUse.releaseRequested] at once.
+  /// A session that [AccountEntityGraphStoreInUse.handedOver] its store
+  /// claims it again first, which finds the new owner to ask.
   Future<void> takeOverStore() {
     if (_disposing || _disposed) {
       throw StateError('The account entity-graph session is disposed.');
     }
     final current = _state;
     if (current is! AccountEntityGraphStoreInUse<G, A>) return Future.value();
+    _emit(
+      AccountEntityGraphStoreInUse(current.accountId, releaseRequested: true),
+    );
     if (!current.handedOver) {
       _storeInUse?.requestRelease();
       return Future.value();
@@ -417,9 +430,11 @@ final class AccountEntityGraphSession<G, A> {
       return;
     }
 
-    // switchAccount may already have reported this open.
-    if (_state is! AccountEntityGraphOpening<G, A> ||
-        _state.accountId != accountId) {
+    // switchAccount may already have reported this open, and a takeover
+    // stays reported as a pending request until the store is free.
+    if (!takeOver &&
+        (_state is! AccountEntityGraphOpening<G, A> ||
+            _state.accountId != accountId)) {
       _emit(AccountEntityGraphOpening(accountId));
     }
     try {
@@ -447,7 +462,9 @@ final class AccountEntityGraphSession<G, A> {
     } on LocalStoreInUseException catch (inUse) {
       if (generation != _requestGeneration) return;
       _storeInUse = inUse;
-      _emit(AccountEntityGraphStoreInUse(accountId));
+      _emit(
+        AccountEntityGraphStoreInUse(accountId, releaseRequested: takeOver),
+      );
       unawaited(_reopenWhenAvailable(inUse.available, accountId, generation));
       if (takeOver) inUse.requestRelease();
       return;

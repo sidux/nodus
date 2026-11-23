@@ -329,17 +329,54 @@ void main() {
     await second.takeOverStore();
     await pumpEventQueue();
 
+    final firstStates = <AccountEntityGraphSessionState>[];
+    first.changes.listen(firstStates.add);
     await first.takeOverStore();
     await pumpEventQueue();
 
-    expect(
-      first.state,
+    expect(firstStates, [
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.handedOver, 'handedOver', isFalse)
+          .having((state) => state.releaseRequested, 'requested', isTrue),
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.releaseRequested, 'requested', isTrue),
+      isA<AccountEntityGraphOpening<_TestEntityGraph, _TestAccount>>(),
       isA<AccountEntityGraphReady<_TestEntityGraph, _TestAccount>>(),
-    );
+    ]);
     expect(
       second.state,
       isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
           .having((state) => state.handedOver, 'handedOver', isTrue),
+    );
+  });
+
+  test('a takeover the owner never answers stays requested', () async {
+    var requests = 0;
+    final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
+      open: (_) async => throw LocalStoreInUseException(
+        'store',
+        available: Completer<void>().future,
+        requestRelease: () => requests++,
+      ),
+      close: (_) async {},
+    );
+    addTearDown(session.dispose);
+    await session.switchAccount(_accountId);
+    expect(
+      session.state,
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.releaseRequested, 'requested', isFalse),
+    );
+
+    await session.takeOverStore();
+    await pumpEventQueue();
+
+    expect(requests, 1);
+    expect(
+      session.state,
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.accountId, 'accountId', _accountId)
+          .having((state) => state.releaseRequested, 'requested', isTrue),
     );
   });
 
