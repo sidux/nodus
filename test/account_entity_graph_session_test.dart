@@ -189,7 +189,11 @@ void main() {
     final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
       open: (accountId) async {
         if (attempts++ == 0) {
-          throw LocalStoreInUseException('store', available: released.future);
+          throw LocalStoreInUseException(
+            'store',
+            available: released.future,
+            requestRelease: () {},
+          );
         }
         return _TestEntityGraph(accountId);
       },
@@ -228,7 +232,11 @@ void main() {
       final session = AccountEntityGraphSession<_TestEntityGraph, _TestAccount>(
         open: (accountId) async {
           attempts++;
-          throw LocalStoreInUseException('store', available: released.future);
+          throw LocalStoreInUseException(
+            'store',
+            available: released.future,
+            requestRelease: () {},
+          );
         },
         close: (_) async {},
       );
@@ -246,6 +254,94 @@ void main() {
       );
     },
   );
+
+  test('taking over asks the owner, which hands its graph over', () async {
+    final store = _ExclusiveStore();
+    final owner = store.session();
+    final waiting = store.session();
+    addTearDown(owner.dispose);
+    addTearDown(waiting.dispose);
+
+    await owner.switchAccount(_accountId);
+    await waiting.switchAccount(_accountId);
+    expect(
+      waiting.state,
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.handedOver, 'handedOver', isFalse),
+    );
+
+    final waitingReady = waiting.states.firstWhere(
+      (state) =>
+          state is AccountEntityGraphReady<_TestEntityGraph, _TestAccount>,
+    );
+    await waiting.takeOverStore();
+    await waitingReady.timeout(const Duration(seconds: 1));
+    await pumpEventQueue();
+
+    expect(
+      owner.state,
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.accountId, 'accountId', _accountId)
+          .having((state) => state.handedOver, 'handedOver', isTrue),
+    );
+    expect(store.closed, 1);
+  });
+
+  test('a handed-over graph stays closed until taken back', () async {
+    final store = _ExclusiveStore();
+    final first = store.session();
+    final second = store.session();
+    addTearDown(first.dispose);
+    addTearDown(second.dispose);
+    await first.switchAccount(_accountId);
+    await second.switchAccount(_accountId);
+    await second.takeOverStore();
+    await pumpEventQueue();
+    expect(
+      second.state,
+      isA<AccountEntityGraphReady<_TestEntityGraph, _TestAccount>>(),
+    );
+
+    await second.dispose();
+    await pumpEventQueue();
+    expect(
+      first.state,
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.handedOver, 'handedOver', isTrue),
+    );
+
+    await first.takeOverStore();
+    await pumpEventQueue();
+    expect(
+      first.state,
+      isA<AccountEntityGraphReady<_TestEntityGraph, _TestAccount>>(),
+    );
+  });
+
+  test('taking a handed-over graph back hands the new owner over', () async {
+    final store = _ExclusiveStore();
+    final first = store.session();
+    final second = store.session();
+    addTearDown(first.dispose);
+    addTearDown(second.dispose);
+    await first.switchAccount(_accountId);
+    await second.switchAccount(_accountId);
+    await second.takeOverStore();
+    await pumpEventQueue();
+
+    await first.takeOverStore();
+    await pumpEventQueue();
+
+    expect(
+      first.state,
+      isA<AccountEntityGraphReady<_TestEntityGraph, _TestAccount>>(),
+    );
+    expect(
+      second.state,
+      isA<AccountEntityGraphStoreInUse<_TestEntityGraph, _TestAccount>>()
+          .having((state) => state.handedOver, 'handedOver', isTrue),
+    );
+  });
 
   test('ready work delays a later account close until it completes', () async {
     final action = Completer<void>();
@@ -417,4 +513,37 @@ final class _TestEntityGraph {
   const _TestEntityGraph(this.accountId);
 
   final LocalId<_TestAccount> accountId;
+}
+
+/// One store that a single session may own at a time, like a browser's
+/// exclusive Web Lock with its release channel.
+final class _ExclusiveStore {
+  void Function()? _ownerReleaseRequest;
+  bool _owned = false;
+  Completer<void> _released = Completer();
+  int closed = 0;
+
+  AccountEntityGraphSession<_TestEntityGraph, _TestAccount> session() =>
+      AccountEntityGraphSession(
+        open: (accountId) async {
+          if (_owned) {
+            throw LocalStoreInUseException(
+              'store',
+              available: _released.future,
+              requestRelease: () => _ownerReleaseRequest?.call(),
+            );
+          }
+          _owned = true;
+          _ownerReleaseRequest = LocalStoreReleaseRequests.current;
+          return _TestEntityGraph(accountId);
+        },
+        close: (_) async {
+          closed++;
+          _owned = false;
+          _ownerReleaseRequest = null;
+          final released = _released;
+          _released = Completer();
+          released.complete();
+        },
+      );
 }

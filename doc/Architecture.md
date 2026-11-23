@@ -309,7 +309,10 @@ the opener fails with the typed `LocalStoreInUseException` before any target
 connector, signal, or worker starts, and the session publishes the
 store-in-use state described in section 9. When that owner releases the store,
 the session reopens the current account automatically; a later sign-out or
-account switch supersedes the pending reopen. On account switch the session rejects new foreground work,
+account switch supersedes the pending reopen. The waiting session may instead
+take the store over: the owner then closes its graph through the ordinary
+close path, publishes a handed-over store-in-use state, and reopens only when
+asked, so two owners never trade the store on their own. On account switch the session rejects new foreground work,
 cancels target signals and claimable background work, waits for in-flight local
 commits, checkpoints durable remote work, and closes the previous graph before
 publishing the next. It MUST NOT wait indefinitely for a network request:
@@ -2312,9 +2315,13 @@ account, and so may several processes sharing a file. The local-store opener
 claims the store before opening it and releases the claim when its executor
 closes; the default browser opener holds an exclusive Web Lock named after the
 store. A second claimant receives `LocalStoreInUseException`, which exposes
-when the current owner releases the store. The application presents that
-store-in-use state, such as "open in another tab", and offers no entity data
-until it owns the store. Keeping several live graphs coherent by broadcasting
+when the current owner releases the store and how to ask it to. The opener
+reads the opening session's `LocalStoreReleaseRequests` handler while it
+claims the store and routes other runtimes' requests to it (in the browser,
+over a `BroadcastChannel` named after the lock); release is always the owner
+closing its own graph, never a claimant stealing the store. The application
+presents that store-in-use state, such as "open in another tab" with an
+action to use it here, and offers no entity data until it owns the store. Keeping several live graphs coherent by broadcasting
 committed changes and reloading projections is forbidden: identity maps,
 query membership, outbound queue ordering, synchronization leases, and pull
 cursors each assume a single owner, and a second graph would replay, reorder,

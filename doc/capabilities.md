@@ -670,7 +670,7 @@ TasksExampleEntityGraphScope(session: session, child: app);
 | `AccountEntityGraphSignedOut` | No account. |
 | `AccountEntityGraphOpening` | Opening the account's graph. |
 | `AccountEntityGraphReady` | Ready; carries `accountId` and `entityGraph`. |
-| `AccountEntityGraphStoreInUse` | Another live graph (for example another browser tab) owns this account's database. The session reopens automatically when it is released. |
+| `AccountEntityGraphStoreInUse` | Another live graph (for example another browser tab) owns this account's database. `session.takeOverStore()` asks that owner to close its graph. The session reopens automatically when the store is released, unless `handedOver`: it closed its own graph for another owner and reopens only on `takeOverStore()`. |
 | `AccountEntityGraphFailure` | Opening failed. |
 
 The scope rebuilds only on these transitions, never on entity changes. Also

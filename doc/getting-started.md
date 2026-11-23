@@ -356,7 +356,7 @@ stale. Add it to CI.
 | A migration test fails with "requires an explicit manual migration plan" | The schema change adds a constraint or needs data changes. Decide how existing rows migrate with a [migration plan](capabilities.md#migrations), and pass the same strategy in `test/drift/<database>/migration_test.dart`. |
 | Typed routes are not generated | Add the root `not_found.dart` page; see [typed routes](capabilities.md#typed-route-generation). |
 | The web build cannot open the database | Serve Drift's `sqlite3.wasm` and `drift_worker.js` from `web/`; see [Web](capabilities.md#web). |
-| A second browser tab shows "store in use" | Expected: one account's database belongs to one tab at a time. Handle `AccountEntityGraphStoreInUse`. |
+| A second browser tab shows "store in use" | Expected: one account's database belongs to one tab at a time. Handle `AccountEntityGraphStoreInUse`, and offer `session.takeOverStore()` to move it to this tab. |
 
 ## Where to go next
 

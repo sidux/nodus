@@ -96,15 +96,22 @@ final class AccountEntityGraphReady<G, A>
 /// The account's local store is owned by another live entity graph, such as
 /// the same application open in another browser tab.
 ///
-/// No graph is open. The session opens one automatically as soon as the
-/// other owner releases the store, unless a later account transition has
-/// superseded this request.
+/// No graph is open. [AccountEntityGraphSession.takeOverStore] asks the other
+/// owner to let the store go. Unless [handedOver], the session also opens one
+/// automatically as soon as the other owner releases the store, unless a
+/// later account transition has superseded this request.
 final class AccountEntityGraphStoreInUse<G, A>
     extends AccountEntityGraphSessionState<G, A> {
-  const AccountEntityGraphStoreInUse(this.accountId);
+  const AccountEntityGraphStoreInUse(this.accountId, {this.handedOver = false});
 
   @override
   final LocalId<A> accountId;
+
+  /// Whether this session closed its own graph because another owner took
+  /// the store over. It then reopens only through
+  /// [AccountEntityGraphSession.takeOverStore] or a new account transition,
+  /// so two owners never hand the store back and forth on their own.
+  final bool handedOver;
 }
 
 /// Thrown by a local-store opener when another live entity graph already owns
@@ -113,16 +120,44 @@ final class AccountEntityGraphStoreInUse<G, A>
 /// Every runtime that can reach one store grants it to exactly one entity
 /// graph at a time. [available] completes when the current owner releases the
 /// store; a new claim then has to be made, because another opener may win it.
+/// [requestRelease] asks the current owner to close its graph, which it does
+/// through the handler its opener read from [LocalStoreReleaseRequests].
 final class LocalStoreInUseException implements Exception {
-  const LocalStoreInUseException(this.storeName, {required this.available});
+  const LocalStoreInUseException(
+    this.storeName, {
+    required this.available,
+    required this.requestRelease,
+  });
 
   final String storeName;
   final Future<void> available;
+  final void Function() requestRelease;
 
   @override
   String toString() =>
       'LocalStoreInUseException: $storeName is owned by another live '
       'entity graph.';
+}
+
+/// Connects a local-store opener to the session that is opening its graph,
+/// so another runtime's [LocalStoreInUseException.requestRelease] reaches the
+/// store's owner.
+///
+/// [AccountEntityGraphSession] opens every graph inside [runWith]. An opener
+/// that claims a store reads [current] once while claiming and calls it when
+/// another runtime asks for the store; the session then closes that graph
+/// and publishes [AccountEntityGraphStoreInUse.handedOver].
+abstract final class LocalStoreReleaseRequests {
+  static final Object _zoneKey = Object();
+
+  /// The handler of the graph being opened in this zone, if any.
+  static void Function()? get current =>
+      Zone.current[_zoneKey] as void Function()?;
+
+  static Future<R> runWith<R>(
+    void Function() onReleaseRequested,
+    Future<R> Function() open,
+  ) => runZoned(open, zoneValues: {_zoneKey: onReleaseRequested});
 }
 
 final class AccountEntityGraphFailure<G, A>
@@ -170,6 +205,11 @@ final class AccountEntityGraphSession<G, A> {
   Future<void> _tail = Future.value();
   G? _currentEntityGraph;
   LocalId<A>? _currentAccountId;
+
+  /// Identifies the open that produced the current graph, so a release
+  /// request from an earlier claim never closes a later graph.
+  Object? _currentClaim;
+  LocalStoreInUseException? _storeInUse;
   int _requestGeneration = 0;
   bool _disposing = false;
   bool _disposed = false;
@@ -317,9 +357,59 @@ final class AccountEntityGraphSession<G, A> {
   Future<R> withReadyGraph<R>(FutureOr<R> Function(G entityGraph) action) =>
       withReadyEntityGraph((_, entityGraph) => action(entityGraph));
 
-  Future<void> _transition(LocalId<A>? accountId, int generation) async {
+  /// Asks the other owner of the current account's store to close its graph,
+  /// so this session opens it instead.
+  ///
+  /// Does nothing unless the state is [AccountEntityGraphStoreInUse]. A
+  /// session that [AccountEntityGraphStoreInUse.handedOver] its store claims
+  /// it again first, which finds the new owner to ask.
+  Future<void> takeOverStore() {
+    if (_disposing || _disposed) {
+      throw StateError('The account entity-graph session is disposed.');
+    }
+    final current = _state;
+    if (current is! AccountEntityGraphStoreInUse<G, A>) return Future.value();
+    if (!current.handedOver) {
+      _storeInUse?.requestRelease();
+      return Future.value();
+    }
+    final generation = ++_requestGeneration;
+    return _enqueue(
+      () => _transition(current.accountId, generation, takeOver: true),
+    );
+  }
+
+  /// Closes the graph another owner asked for, unless a later transition has
+  /// already replaced it.
+  void _releaseRequested(LocalId<A> accountId, Object claim) {
+    if (_disposing || _disposed) return;
+    unawaited(
+      _enqueue(() async {
+        if (_currentClaim != claim) return;
+        _emit(AccountEntityGraphStoreInUse(accountId, handedOver: true));
+        try {
+          await _closeCurrent();
+        } catch (error, stackTrace) {
+          _emit(
+            AccountEntityGraphFailure(
+              accountId: accountId,
+              error: error,
+              stackTrace: stackTrace,
+            ),
+          );
+        }
+      }),
+    );
+  }
+
+  Future<void> _transition(
+    LocalId<A>? accountId,
+    int generation, {
+    bool takeOver = false,
+  }) async {
     if (generation != _requestGeneration) return;
     if (_currentEntityGraph != null && _currentAccountId == accountId) return;
+    _storeInUse = null;
 
     if (accountId == null) {
       _emit(const AccountEntityGraphSignedOut());
@@ -348,12 +438,18 @@ final class AccountEntityGraphSession<G, A> {
     }
     if (generation != _requestGeneration) return;
     late final G opened;
+    final claim = Object();
     try {
-      opened = await _open(accountId);
+      opened = await LocalStoreReleaseRequests.runWith(
+        () => _releaseRequested(accountId, claim),
+        () => _open(accountId),
+      );
     } on LocalStoreInUseException catch (inUse) {
       if (generation != _requestGeneration) return;
+      _storeInUse = inUse;
       _emit(AccountEntityGraphStoreInUse(accountId));
       unawaited(_reopenWhenAvailable(inUse.available, accountId, generation));
+      if (takeOver) inUse.requestRelease();
       return;
     } catch (error, stackTrace) {
       if (generation == _requestGeneration) {
@@ -374,6 +470,7 @@ final class AccountEntityGraphSession<G, A> {
     }
     _currentEntityGraph = opened;
     _currentAccountId = accountId;
+    _currentClaim = claim;
     _emit(AccountEntityGraphReady(accountId: accountId, entityGraph: opened));
   }
 
@@ -405,6 +502,7 @@ final class AccountEntityGraphSession<G, A> {
     final entityGraph = _currentEntityGraph;
     _currentEntityGraph = null;
     _currentAccountId = null;
+    _currentClaim = null;
     if (entityGraph != null) await _close(entityGraph);
   }
 

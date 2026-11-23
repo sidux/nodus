@@ -98,6 +98,7 @@ final class _OwnedElsewhereStore implements NodusLocalStore {
       throw LocalStoreInUseException(
         '${packageName}_$accountId',
         available: _released.future,
+        requestRelease: () {},
       );
     }
     return NativeDatabase.memory();

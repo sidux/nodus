@@ -19,7 +19,9 @@ import '../nodus_sqlite.dart';
 /// Every tab and worker of the origin reaches the same database, so the store
 /// is claimed through an exclusive Web Lock before it opens and released when
 /// the executor closes. A second claimant fails with
-/// [LocalStoreInUseException] instead of opening an incoherent second graph.
+/// [LocalStoreInUseException] instead of opening an incoherent second graph;
+/// its [LocalStoreInUseException.requestRelease] reaches the owner over a
+/// `BroadcastChannel` named after the lock.
 Future<QueryExecutor> openApplicationSupportNodusStore({
   required String packageName,
   required String accountId,
@@ -68,12 +70,15 @@ QueryExecutor openNodusInMemoryExecutor() => throw UnsupportedError(
 
 /// Holds the exclusive lock for [databaseName] and returns its release.
 ///
-/// Web Locks exist only in secure contexts; elsewhere no other tab can be
-/// detected, so the store opens unclaimed.
+/// While held, release requests from other tabs reach the handler the opening
+/// session installed in [LocalStoreReleaseRequests]. Web Locks exist only in
+/// secure contexts; elsewhere no other tab can be detected, so the store opens
+/// unclaimed.
 Future<void Function()> _claimStore(String databaseName) async {
   if (!web.window.navigator.has('locks')) return () {};
   final locks = web.window.navigator.locks;
   final lockName = 'nodus:$databaseName';
+  final onReleaseRequested = LocalStoreReleaseRequests.current;
   final granted = Completer<bool>();
   final released = Completer<void>();
   locks
@@ -91,11 +96,24 @@ Future<void Function()> _claimStore(String databaseName) async {
     throw LocalStoreInUseException(
       databaseName,
       available: _whenReleased(locks, lockName),
+      requestRelease: () => _requestRelease(lockName),
     );
   }
+  final releaseRequests = web.BroadcastChannel(lockName)
+    ..onmessage = ((web.MessageEvent _) => onReleaseRequested?.call()).toJS;
   return () {
+    releaseRequests.close();
     if (!released.isCompleted) released.complete();
   };
+}
+
+/// Asks the tab holding [lockName] to close its graph.
+///
+/// A channel never receives its own messages, and only the holder listens.
+void _requestRelease(String lockName) {
+  web.BroadcastChannel(lockName)
+    ..postMessage('release'.toJS)
+    ..close();
 }
 
 /// Completes once the current holder of [lockName] lets it go.
