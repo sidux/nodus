@@ -4467,7 +4467,15 @@ ReferenceSpec _parseReference(
     target,
     ownership: targetOwnership,
   );
-  final targetHasClientMutation = _hasClientMutationSurface(target);
+  // A component may name relationship update access although it has no
+  // field of its own to change: its members then write through it.
+  final targetHasClientMutation =
+      _hasClientMutationSurface(target) ||
+      targetSecurity.grants.any(
+        (grant) =>
+            grant.principal == RlsPrincipal.relationship &&
+            grant.operation == RlsOperation.update,
+      );
   final targetOwnedByType = target.allSupertypes
       .where((type) => _ownedByChecker.isExactlyType(type))
       .firstOrNull;

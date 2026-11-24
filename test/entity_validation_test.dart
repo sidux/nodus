@@ -3613,6 +3613,97 @@ enum InvitationStatus { pending, accepted, declined }
     expect(result.succeeded, isTrue, reason: result.errors.join('\n'));
   });
 
+  test('a fieldless component that names relationship update lets the '
+      "aggregate's editors write its members", () async {
+    final sources =
+        _sources(r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/document.dart';
+
+@Entity(
+  cardinality: Cardinality.bounded,
+  collaboration: CollaborationAccess(),
+)
+abstract class Page implements OwnedBy<Page, Account> {
+  abstract final String title;
+
+  @Composition(inverse: 'page')
+  abstract final LocalId<Document> documentId;
+}
+''', fileName: 'page.dart')
+          ..['nodus|lib/account.dart'] = 'final class Account {}'
+          ..['nodus|lib/document.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+
+@Entity(
+  grants: [
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.select, RlsPrincipal.relationship),
+    RlsGrant(RlsOperation.update, RlsPrincipal.relationship),
+  ],
+)
+abstract class Document implements OwnedBy<Document, Account>, Component {}
+'''
+          ..['nodus|lib/line.dart'] = r'''
+import 'package:nodus/nodus.dart';
+import 'package:nodus/account.dart';
+import 'package:nodus/document.dart';
+
+@Entity(
+  grants: [
+    RlsGrant(RlsOperation.insert, RlsPrincipal.owner),
+    RlsGrant(RlsOperation.insert, RlsPrincipal.reference),
+    RlsGrant(RlsOperation.select, RlsPrincipal.reference),
+    RlsGrant(RlsOperation.update, RlsPrincipal.reference),
+    RlsGrant(RlsOperation.delete, RlsPrincipal.reference),
+  ],
+)
+abstract class Line implements OwnedBy<Line, Account>, SoftDeletable {
+  @OwnerReference()
+  @AccessReference()
+  @Reference(
+    inverse: 'lines',
+    onDelete: ReferenceDeleteAction.cascade,
+    inverseCardinality: Cardinality.bounded,
+    aggregateMember: true,
+  )
+  abstract final LocalId<Document> documentId;
+
+  abstract final String text;
+}
+''';
+
+    await testBuilder(
+      inferredEntityGraphBuilder(BuilderOptions.empty),
+      sources,
+      rootPackage: 'nodus',
+      outputs: {
+        'nodus|lib/nodus.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.explain.g.json': decodedMatches(
+          anything,
+        ),
+        'nodus|test/nodus_test_harness.g.dart': decodedMatches(anything),
+        'nodus|lib/src/generated/nodus.runtime.g.dart': decodedMatches(
+          anything,
+        ),
+        'nodus|supabase/nodus/schema.sql': decodedMatches(
+          allOf([
+            contains(
+              'create or replace function '
+              'public.is_documents_relationship_update(p_id uuid)',
+            ),
+            contains(
+              "public.is_documents_relationship_update((current_operation "
+              "-> 'patch' ->> 'documentId')::uuid)",
+            ),
+          ]),
+        ),
+      },
+    );
+  });
+
   test(
     'composition derives one aggregate-owned component relationship',
     () async {
