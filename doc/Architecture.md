@@ -312,7 +312,11 @@ the session reopens the current account automatically; a later sign-out or
 account switch supersedes the pending reopen. The waiting session may instead
 take the store over: the owner then closes its graph through the ordinary
 close path, publishes a handed-over store-in-use state, and reopens only when
-asked, so two owners never trade the store on their own. On account switch the session rejects new foreground work,
+asked, so two owners never trade the store on their own. A store whose schema
+version is newer than the opening build's, because a newer build of the
+application already migrated it, is refused with the typed
+`LocalStoreNewerThanAppException` before Drift records the older version over
+it; the application then has the user load the newer build. On account switch the session rejects new foreground work,
 cancels target signals and claimable background work, waits for in-flight local
 commits, checkpoints durable remote work, and closes the previous graph before
 publishing the next. It MUST NOT wait indefinitely for a network request:

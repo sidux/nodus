@@ -148,6 +148,29 @@ final class LocalStoreInUseException implements Exception {
       'entity graph.';
 }
 
+/// Thrown while opening a local store that a newer build of the application
+/// has already migrated past this build's schema, such as a browser tab
+/// still running the previous release.
+///
+/// Drift would otherwise record this build's older version over the newer
+/// schema, and the newer build would then migrate it again and fail. The
+/// generated database refuses before recording anything; the application
+/// asks the user to load the newer build instead.
+final class LocalStoreNewerThanAppException implements Exception {
+  const LocalStoreNewerThanAppException({
+    required this.storeVersion,
+    required this.appVersion,
+  });
+
+  final int storeVersion;
+  final int appVersion;
+
+  @override
+  String toString() =>
+      'LocalStoreNewerThanAppException: the local store has schema version '
+      '$storeVersion, newer than this build\'s $appVersion.';
+}
+
 /// Connects a local-store opener to the session that is opening its graph,
 /// so another runtime's [LocalStoreInUseException.requestRelease] reaches the
 /// store's owner.

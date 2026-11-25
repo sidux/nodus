@@ -3790,6 +3790,7 @@ abstract class Document implements OwnedBy<Document, Account>, Component {
               contains('WHERE NEW.summary_id = NEW.document_id'),
               contains('await configured.onCreate(m);'),
               contains('_installCompositionTriggers(replace: false)'),
+              contains('throw LocalStoreNewerThanAppException('),
               contains('await configured.onUpgrade(m, from, to);'),
               contains('_installCompositionTriggers(replace: true)'),
               contains(

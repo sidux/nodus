@@ -671,7 +671,7 @@ TasksExampleEntityGraphScope(session: session, child: app);
 | `AccountEntityGraphOpening` | Opening the account's graph. |
 | `AccountEntityGraphReady` | Ready; carries `accountId` and `entityGraph`. |
 | `AccountEntityGraphStoreInUse` | Another live graph (for example another browser tab) owns this account's database. `session.takeOverStore()` asks that owner to close its graph. The session reopens automatically when the store is released, unless `handedOver`: it closed its own graph for another owner and reopens only on `takeOverStore()`. `releaseRequested` stays set while the owner has not answered, such as one running an older build. |
-| `AccountEntityGraphFailure` | Opening failed. |
+| `AccountEntityGraphFailure` | Opening failed. Its `error` is `LocalStoreNewerThanAppException` when a newer build already migrated the store, for example from another browser tab: reload into the newer build. |
 
 The scope rebuilds only on these transitions, never on entity changes. Also
 generated: `context.tasksExampleEntityGraphReady` (nullable),

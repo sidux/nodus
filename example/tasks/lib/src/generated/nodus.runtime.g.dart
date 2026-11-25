@@ -160,7 +160,15 @@ final class TasksExampleDatabase extends _$TasksExampleDatabase {
         );
     return MigrationStrategy(
       onCreate: configured.onCreate,
-      onUpgrade: configured.onUpgrade,
+      onUpgrade: (m, from, to) async {
+        if (from > to) {
+          throw LocalStoreNewerThanAppException(
+            storeVersion: from,
+            appVersion: to,
+          );
+        }
+        await configured.onUpgrade(m, from, to);
+      },
       beforeOpen: (details) async {
         await customStatement('PRAGMA foreign_keys = ON');
         await configured.beforeOpen?.call(details);

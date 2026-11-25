@@ -171,16 +171,25 @@ String emitEntityGraph(
       ..writeln('      onCreate: (m) async {')
       ..writeln('        await configured.onCreate(m);')
       ..writeln('        await _installCompositionTriggers(replace: false);')
-      ..writeln('      },')
-      ..writeln('      onUpgrade: (m, from, to) async {')
-      ..writeln('        await configured.onUpgrade(m, from, to);')
-      ..writeln('        await _installCompositionTriggers(replace: true);')
       ..writeln('      },');
   } else {
-    buffer
-      ..writeln('      onCreate: configured.onCreate,')
-      ..writeln('      onUpgrade: configured.onUpgrade,');
+    buffer.writeln('      onCreate: configured.onCreate,');
   }
+  // A store a newer build migrated is refused before Drift records this
+  // build's older version over it.
+  buffer
+    ..writeln('      onUpgrade: (m, from, to) async {')
+    ..writeln('        if (from > to) {')
+    ..writeln('          throw LocalStoreNewerThanAppException(')
+    ..writeln('            storeVersion: from,')
+    ..writeln('            appVersion: to,')
+    ..writeln('          );')
+    ..writeln('        }')
+    ..writeln('        await configured.onUpgrade(m, from, to);');
+  if (hasCompositions) {
+    buffer.writeln('        await _installCompositionTriggers(replace: true);');
+  }
+  buffer.writeln('      },');
   buffer
     ..writeln('      beforeOpen: (details) async {')
     ..writeln("        await customStatement('PRAGMA foreign_keys = ON');")
